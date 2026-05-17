@@ -129,4 +129,98 @@ export async function apiRequest(path, { method = "GET", body, token, empresaId 
 }
 
 
+export function getWarehouses({ token, empresaId, includeInactive = true }) {
+  const query = new URLSearchParams({ include_inactive: String(includeInactive) });
+  return apiRequest(`/inventory/warehouses?${query.toString()}`, { token, empresaId });
+}
+
+
+export function createWarehouse({ token, empresaId, payload }) {
+  return apiRequest("/inventory/warehouses", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateWarehouse({ warehouseId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/warehouses/${warehouseId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getMaterials({ token, empresaId, includeInactive = true }) {
+  const query = new URLSearchParams({ include_inactive: String(includeInactive) });
+  return apiRequest(`/inventory/materials?${query.toString()}`, { token, empresaId });
+}
+
+
+export function createMaterial({ token, empresaId, payload }) {
+  return apiRequest("/inventory/materials", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateMaterial({ materialId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/materials/${materialId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getStock({ token, empresaId, almacenId, materialId }) {
+  const query = new URLSearchParams();
+  if (almacenId) {
+    query.set("almacen_id", almacenId);
+  }
+  if (materialId) {
+    query.set("material_id", materialId);
+  }
+  const suffix = query.toString();
+  return apiRequest(`/inventory/stock${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getInventoryMovements({ token, empresaId, limit = 25 }) {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return apiRequest(`/inventory/movements?${query.toString()}`, { token, empresaId });
+}
+
+
+export function createInventoryMovement({ token, empresaId, payload }) {
+  return apiRequest("/inventory/movements", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getMaterialKardex({ materialId, token, empresaId, almacenId }) {
+  const query = new URLSearchParams();
+  if (almacenId) {
+    query.set("almacen_id", almacenId);
+  }
+  const suffix = query.toString();
+  return apiRequest(`/inventory/materials/${materialId}/kardex${suffix ? `?${suffix}` : ""}`, {
+    token,
+    empresaId,
+  });
+}
+
+
 export { ApiError };

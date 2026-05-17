@@ -2,6 +2,11 @@
 
 Monorepo inicial para un SaaS multiempresa con Azure SQL, FastAPI y React + Vite.
 
+Estado actual:
+- Core multiempresa operativo
+- Registro con reCAPTCHA v3 y Twilio Verify SMS
+- Inventario Fase 1 implementado
+
 ## Stack
 
 - Frontend: React + Vite
@@ -78,6 +83,16 @@ uvicorn app.main:app --reload
 - `POST /auth/login`
 - `GET /me`
 - `GET /modules`
+- `GET /inventory/warehouses`
+- `POST /inventory/warehouses`
+- `PUT /inventory/warehouses/{id}`
+- `GET /inventory/materials`
+- `POST /inventory/materials`
+- `PUT /inventory/materials/{id}`
+- `GET /inventory/stock`
+- `GET /inventory/movements`
+- `GET /inventory/materials/{id}/kardex`
+- `POST /inventory/movements`
 
 ### Flujo de registro
 
@@ -134,6 +149,29 @@ npm run dev
 - Produccion: usar Azure SQL mediante `DATABASE_URL` o variables `AZURE_SQL_*`.
 - Alembic toma la URL resuelta desde `backend/.env`, sin depender del directorio desde donde se ejecute el comando.
 - Si no se configura Azure SQL, el backend cae en SQLite local solo para smoke tests rapidos.
+- Para aplicar cambios de esquema, ejecutar `alembic upgrade head`.
+
+## Inventario Fase 1
+
+- Todo dato de inventario se guarda con `empresa_id`.
+- Todo endpoint de inventario valida autenticacion, contexto de empresa y acceso al modulo `inventory`.
+- La verdad del stock vive en `existencias` + `movimientos_inventario`.
+- `Material` no guarda `stock_actual` como fuente principal.
+- No se permite stock negativo.
+- Cada movimiento crea un registro auditable.
+- Tipos de movimiento soportados:
+  - `entrada`
+  - `salida`
+  - `ajuste`
+
+### Flujo basico esperado
+
+1. Crear un almacen.
+2. Crear un material.
+3. Registrar una `entrada`.
+4. Consultar `GET /inventory/stock`.
+5. Registrar una `salida` o un `ajuste`.
+6. Consultar `GET /inventory/materials/{id}/kardex`.
 
 ## Reglas implementadas
 
