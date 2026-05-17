@@ -16,4 +16,6 @@ __pycache__/
 *.db
 *.sqlite3
 coverage/
-
+*.log
+backend/*.log
+frontend/*.log
