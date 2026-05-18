@@ -77,6 +77,32 @@ python -m app.debug_db
 uvicorn app.main:app --reload
 ```
 
+### Promover usuario a Superadmin
+
+- Solo ejecutar desde `backend`.
+- No exponer este flujo como endpoint.
+- No usarlo desde frontend.
+
+Promover:
+
+```powershell
+cd backend
+python -m app.scripts.manage_superadmin promote --email "correo@dominio.com" --reason "Bootstrap superadmin inicial" --confirm
+```
+
+Retirar privilegios:
+
+```powershell
+cd backend
+python -m app.scripts.manage_superadmin demote --email "correo@dominio.com" --reason "Retiro de privilegios superadmin" --confirm
+```
+
+Notas:
+
+- Si omites `--confirm`, el script solo muestra lo que haria y no escribe cambios.
+- El script solo cambia `usuarios.is_superadmin`.
+- El script no toca `empresa_usuarios`, empresas, planes ni modulos.
+
 ### Endpoints incluidos
 
 - `GET /health`
