@@ -13,6 +13,8 @@ import {
   updateMaterial,
   updateWarehouse,
 } from "../api/client";
+import CountsSection from "../components/inventory/CountsSection";
+import TransfersSection from "../components/inventory/TransfersSection";
 
 
 const DEFAULT_PAGE_SIZE = 25;
@@ -23,6 +25,8 @@ const inventoryTabs = [
   { id: "existencias", label: "Existencias" },
   { id: "movimientos", label: "Movimientos" },
   { id: "kardex", label: "Kardex" },
+  { id: "transferencias", label: "Transferencias" },
+  { id: "conteos", label: "Conteos físicos" },
 ];
 
 const movementTypeOptions = [
@@ -694,11 +698,12 @@ export default function InventoryPage() {
     <section className="inventory-shell">
       <div className="hero-card inventory-hero">
         <div>
-          <p className="eyebrow">Inventario Fase 1.1</p>
-          <h2>Control multiempresa de almacenes, materiales y stock</h2>
+          <p className="eyebrow">Inventario Fase 1.2</p>
+          <h2>Control multiempresa de almacenes, materiales, stock y movimientos internos</h2>
           <p>
             La verdad del stock vive en existencias y movimientos. No se permite stock
-            negativo y cada operación queda auditada en backend.
+            negativo y cada operación queda auditada en backend. Transferencias y conteos
+            físicos ya forman parte del flujo operativo base.
           </p>
         </div>
 
@@ -1803,6 +1808,24 @@ export default function InventoryPage() {
             )}
           </div>
         </div>
+      ) : null}
+
+      {activeTab === "transferencias" ? (
+        <TransfersSection
+          active={activeTab === "transferencias"}
+          empresaId={empresaId}
+          onInventoryChanged={() => refreshInventoryData()}
+          token={token}
+        />
+      ) : null}
+
+      {activeTab === "conteos" ? (
+        <CountsSection
+          active={activeTab === "conteos"}
+          empresaId={empresaId}
+          onInventoryChanged={() => refreshInventoryData()}
+          token={token}
+        />
       ) : null}
     </section>
   );

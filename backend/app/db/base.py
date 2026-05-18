@@ -2,6 +2,8 @@ from app.models import (
     Almacen,
     AuditLog,
     Base,
+    ConteoInventario,
+    ConteoInventarioDetalle,
     Empresa,
     EmpresaModulo,
     EmpresaUsuario,
@@ -10,6 +12,8 @@ from app.models import (
     MovimientoInventario,
     PendingRegistration,
     Plan,
+    TransferenciaInventario,
+    TransferenciaInventarioDetalle,
     Usuario,
 )
 
@@ -17,6 +21,8 @@ __all__ = [
     "Almacen",
     "AuditLog",
     "Base",
+    "ConteoInventario",
+    "ConteoInventarioDetalle",
     "Empresa",
     "EmpresaModulo",
     "EmpresaUsuario",
@@ -25,5 +31,7 @@ __all__ = [
     "MovimientoInventario",
     "PendingRegistration",
     "Plan",
+    "TransferenciaInventario",
+    "TransferenciaInventarioDetalle",
     "Usuario",
 ]

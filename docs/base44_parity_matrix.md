@@ -34,8 +34,8 @@ La regla de esta matriz es simple: no asumir que una funcionalidad existe en V2 
 | Inventario | Kardex | Implementado | Alta | Inventario F1 | Consulta por material ya disponible. | Difícil auditar cambios de inventario. |
 | Inventario | Stock bajo | Implementado | Alta | Inventario F1.1 | Disponible en listados y UI actual. | Quiebres de stock no detectados. |
 | Inventario | Ajustes | Implementado | Alta | Inventario F1 | Ajuste a cantidad nueva ya disponible. | Correcciones manuales imposibles. |
-| Inventario | Transferencias | Pendiente | Alta | Inventario F2 | No existe flujo entre almacenes todavía. | Operación manual y propensa a error. |
-| Inventario | Conteos físicos | Pendiente | Alta | Inventario F2 | No existe módulo de conteo o conciliación. | Diferencias de inventario sin control. |
+| Inventario | Transferencias | Parcial | Alta | Inventario F1.2 | Ya existe flujo de borrador, detalle, confirmación y cancelación de borrador. La reversa de transferencias confirmadas sigue pendiente. | Operación manual y propensa a error si no se completa la reversa futura. |
+| Inventario | Conteos físicos | Parcial | Alta | Inventario F1.2 | Ya existe flujo de borrador, captura física, aplicación y cancelación de borrador. La reversa de conteos aplicados sigue pendiente. | Diferencias de inventario sin control fino si no se completa la reversa futura. |
 | Inventario | Importación masiva | Pendiente | Media | Inventario F2 | No existe importador de catálogo o stock. | Carga inicial lenta y manual. |
 | Inventario | Lotes / series / caducidades | Pendiente | Alta | Inventario F3 | No existe trazabilidad avanzada por lote/serie. | Riesgo operativo y de cumplimiento. |
 | Inventario | Conexión con POS | Pendiente | Crítica | POS F1 | POS aún no se implementa. | Ventas sin salida automática de stock. |

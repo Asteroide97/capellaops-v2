@@ -6,6 +6,7 @@ Estado actual:
 - Core multiempresa operativo
 - Registro con reCAPTCHA v3 y Twilio Verify SMS
 - Inventario Fase 1 implementado
+- Inventario Fase 1.2 implementado
 - Onboarding obligatorio de primer almacén
 - Portal Superadmin operativo
 
@@ -125,6 +126,24 @@ Notas:
 - `GET /inventory/movements`
 - `GET /inventory/materials/{id}/kardex`
 - `POST /inventory/movements`
+- `GET /inventory/transfers`
+- `GET /inventory/transfers/{id}`
+- `POST /inventory/transfers`
+- `PUT /inventory/transfers/{id}`
+- `POST /inventory/transfers/{id}/details`
+- `PUT /inventory/transfers/{id}/details/{detail_id}`
+- `DELETE /inventory/transfers/{id}/details/{detail_id}`
+- `POST /inventory/transfers/{id}/confirm`
+- `POST /inventory/transfers/{id}/cancel`
+- `GET /inventory/counts`
+- `GET /inventory/counts/{id}`
+- `POST /inventory/counts`
+- `PUT /inventory/counts/{id}`
+- `POST /inventory/counts/{id}/details`
+- `PUT /inventory/counts/{id}/details/{detail_id}`
+- `DELETE /inventory/counts/{id}/details/{detail_id}`
+- `POST /inventory/counts/{id}/apply`
+- `POST /inventory/counts/{id}/cancel`
 - `GET /superadmin/overview`
 - `GET /superadmin/companies`
 - `GET /superadmin/companies/{id}`
@@ -199,7 +218,7 @@ npm run dev
 - Si no se configura Azure SQL, el backend cae en SQLite local solo para smoke tests rapidos.
 - Para aplicar cambios de esquema, ejecutar `alembic upgrade head`.
 
-## Inventario Fase 1.1
+## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.
 - Todo endpoint de inventario valida autenticacion, contexto de empresa y acceso al modulo `inventory`.
@@ -209,6 +228,8 @@ npm run dev
 - Cada movimiento crea un registro auditable.
 - Los listados devuelven `items`, `total`, `limit` y `offset`.
 - Se agregaron filtros y paginacion para almacenes, materiales, existencias y movimientos.
+- Se agregaron transferencias entre almacenes con confirmacion transaccional.
+- Se agregaron conteos fisicos con snapshot de sistema y ajustes auditables al aplicar.
 - Tipos de movimiento soportados:
   - `entrada`
   - `salida`
@@ -228,6 +249,32 @@ npm run dev
   Devuelve detalle de un almacén de la empresa actual.
 - `GET /inventory/materials/{id}`
   Devuelve detalle de un material de la empresa actual.
+- `GET /inventory/transfers`
+  Soporta `q`, `almacen_origen_id`, `almacen_destino_id`, `estatus`, `fecha_desde`, `fecha_hasta`, `limit`, `offset`.
+- `GET /inventory/counts`
+  Soporta `q`, `almacen_id`, `estatus`, `fecha_desde`, `fecha_hasta`, `limit`, `offset`.
+
+### Flujo basico de transferencia
+
+1. Crear una transferencia en borrador.
+2. Seleccionar almacen origen y almacen destino.
+3. Agregar materiales y cantidades.
+4. Confirmar la transferencia.
+5. El sistema registra una salida en origen y una entrada en destino dentro de la misma operacion.
+
+### Flujo basico de conteo fisico
+
+1. Crear un conteo en borrador por almacen.
+2. Agregar materiales con cantidad fisica.
+3. El sistema guarda la cantidad actual como snapshot.
+4. Aplicar el conteo.
+5. Si existe diferencia, se crea un movimiento de ajuste para dejar el stock igual a la cantidad fisica.
+
+### Regla de reversa en esta fase
+
+- En Inventario Fase 1.2 no se implementa reversa de transferencias confirmadas.
+- En Inventario Fase 1.2 no se implementa reversa de conteos aplicados.
+- Si se requiere reversa futura, debe documentarse y auditarse como una fase posterior.
 
 ### Flujo basico esperado
 

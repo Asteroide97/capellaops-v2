@@ -272,6 +272,179 @@ export function getMaterialKardex({ materialId, token, empresaId, almacenId }) {
 }
 
 
+export function getTransfers({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "almacen_origen_id", filters.almacen_origen_id);
+  appendQueryValue(query, "almacen_destino_id", filters.almacen_destino_id);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/transfers${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getTransferDetail({ transferId, token, empresaId }) {
+  return apiRequest(`/inventory/transfers/${transferId}`, { token, empresaId });
+}
+
+
+export function createTransfer({ token, empresaId, payload }) {
+  return apiRequest("/inventory/transfers", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateTransfer({ transferId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/transfers/${transferId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function addTransferDetail({ transferId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/transfers/${transferId}/details`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateTransferDetail({ transferId, detailId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/transfers/${transferId}/details/${detailId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deleteTransferDetail({ transferId, detailId, token, empresaId }) {
+  return apiRequest(`/inventory/transfers/${transferId}/details/${detailId}`, {
+    method: "DELETE",
+    token,
+    empresaId,
+  });
+}
+
+
+export function confirmTransfer({ transferId, token, empresaId }) {
+  return apiRequest(`/inventory/transfers/${transferId}/confirm`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelTransfer({ transferId, token, empresaId }) {
+  return apiRequest(`/inventory/transfers/${transferId}/cancel`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function getCounts({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "almacen_id", filters.almacen_id);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/counts${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getCountDetail({ countId, token, empresaId }) {
+  return apiRequest(`/inventory/counts/${countId}`, { token, empresaId });
+}
+
+
+export function createCount({ token, empresaId, payload }) {
+  return apiRequest("/inventory/counts", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateCount({ countId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/counts/${countId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function addCountDetail({ countId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/counts/${countId}/details`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateCountDetail({ countId, detailId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/counts/${countId}/details/${detailId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deleteCountDetail({ countId, detailId, token, empresaId }) {
+  return apiRequest(`/inventory/counts/${countId}/details/${detailId}`, {
+    method: "DELETE",
+    token,
+    empresaId,
+  });
+}
+
+
+export function applyCount({ countId, token, empresaId }) {
+  return apiRequest(`/inventory/counts/${countId}/apply`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelCount({ countId, token, empresaId }) {
+  return apiRequest(`/inventory/counts/${countId}/cancel`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
 export function getSuperadminOverview({ token }) {
   return apiRequest("/superadmin/overview", { token });
 }

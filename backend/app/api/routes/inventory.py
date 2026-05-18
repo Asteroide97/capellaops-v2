@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime
-from typing import Literal
+from typing import Callable, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -12,6 +12,12 @@ from app.db.session import get_db
 from app.models import AuditLog
 from app.models.inventory import Almacen, Material
 from app.schemas.inventory import (
+    CountCreateRequest,
+    CountDetailCreateRequest,
+    CountDetailUpdateRequest,
+    CountListResponse,
+    CountResponse,
+    CountUpdateRequest,
     InventoryMovementCreateRequest,
     InventoryOnboardingStatusResponse,
     KardexResponse,
@@ -22,6 +28,12 @@ from app.schemas.inventory import (
     MovementItem,
     MovementListResponse,
     StockListResponse,
+    TransferCreateRequest,
+    TransferDetailCreateRequest,
+    TransferDetailUpdateRequest,
+    TransferListResponse,
+    TransferResponse,
+    TransferUpdateRequest,
     WarehouseCreateRequest,
     WarehouseItem,
     WarehouseListResponse,
@@ -45,15 +57,70 @@ from app.services.inventory import (
     serialize_warehouse,
     validate_inventory_access,
 )
+from app.services.inventory_documents import (
+    add_count_detail,
+    add_transfer_detail,
+    apply_count,
+    cancel_count,
+    cancel_transfer,
+    confirm_transfer,
+    create_count,
+    create_transfer,
+    delete_count_detail,
+    delete_transfer_detail,
+    get_count_for_company,
+    get_transfer_for_company,
+    list_counts,
+    list_transfers,
+    serialize_count_response,
+    serialize_transfer_response,
+    update_count,
+    update_count_detail,
+    update_transfer,
+    update_transfer_detail,
+)
 
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
 logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 def get_inventory_context(context: TenantContext = Depends(get_tenant_context)) -> TenantContext:
     validate_inventory_access(context.user, context.empresa)
     return context
+
+
+def run_inventory_write(db: Session, action: str, operation: Callable[[], T]) -> T:
+    try:
+        result = operation()
+        db.commit()
+        return result
+    except HTTPException:
+        db.rollback()
+        raise
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Conflicto de integridad en inventario durante %s.", action)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se pudo completar la operacion de inventario.",
+        ) from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Error de base de datos en inventario durante %s.", action)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo completar la operacion de inventario.",
+        ) from exc
+
+
+def validate_date_range(fecha_desde: datetime | None, fecha_hasta: datetime | None) -> None:
+    if fecha_desde and fecha_hasta and fecha_hasta < fecha_desde:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="fecha_hasta no puede ser menor que fecha_desde.",
+        )
 
 
 @router.get("/onboarding-status", response_model=InventoryOnboardingStatusResponse)
@@ -67,7 +134,7 @@ def onboarding_status(
         return InventoryOnboardingStatusResponse(
             requires_first_warehouse=requires_first_warehouse,
             warehouses_count=warehouses_count,
-            message="Crea tu primer almacén para comenzar.",
+            message="Crea tu primer almacen para comenzar.",
         )
     except SQLAlchemyError as exc:
         logger.exception(
@@ -87,7 +154,7 @@ def create_first_warehouse(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> WarehouseItem:
-    try:
+    def operation() -> WarehouseItem:
         warehouse = create_warehouse_record(
             db,
             empresa=context.empresa,
@@ -100,16 +167,11 @@ def create_first_warehouse(
             audit_action="inventory.onboarding.first_warehouse.create",
             fail_if_active_exists=True,
         )
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Código de almacén ya existe en esta empresa.",
-        ) from exc
+        db.flush()
+        db.refresh(warehouse)
+        return serialize_warehouse(warehouse)
 
-    db.refresh(warehouse)
-    return serialize_warehouse(warehouse)
+    return run_inventory_write(db, "create_first_warehouse", operation)
 
 
 @router.get("/warehouses", response_model=WarehouseListResponse)
@@ -149,7 +211,7 @@ def create_warehouse(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> WarehouseItem:
-    try:
+    def operation() -> WarehouseItem:
         warehouse = create_warehouse_record(
             db,
             empresa=context.empresa,
@@ -160,16 +222,11 @@ def create_warehouse(
             activo=payload.activo,
             ip_address=request.client.host if request.client else None,
         )
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Código de almacén ya existe en esta empresa.",
-        ) from exc
+        db.flush()
+        db.refresh(warehouse)
+        return serialize_warehouse(warehouse)
 
-    db.refresh(warehouse)
-    return serialize_warehouse(warehouse)
+    return run_inventory_write(db, "create_warehouse", operation)
 
 
 @router.put("/warehouses/{warehouse_id}", response_model=WarehouseItem)
@@ -180,53 +237,47 @@ def update_warehouse(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> WarehouseItem:
-    warehouse = get_warehouse_for_company(db, context.empresa.id, warehouse_id)
+    def operation() -> WarehouseItem:
+        warehouse = get_warehouse_for_company(db, context.empresa.id, warehouse_id)
 
-    if payload.nombre is not None:
-        warehouse.nombre = normalize_required_text(payload.nombre, "Nombre")
-    if payload.codigo is not None:
-        next_code = normalize_code(payload.codigo, "Código")
-        existing = db.scalar(
-            select(Almacen.id).where(
-                Almacen.empresa_id == context.empresa.id,
-                Almacen.codigo == next_code,
-                Almacen.id != warehouse.id,
+        if payload.nombre is not None:
+            warehouse.nombre = normalize_required_text(payload.nombre, "Nombre")
+        if payload.codigo is not None:
+            next_code = normalize_code(payload.codigo, "Codigo")
+            existing = db.scalar(
+                select(Almacen.id).where(
+                    Almacen.empresa_id == context.empresa.id,
+                    Almacen.codigo == next_code,
+                    Almacen.id != warehouse.id,
+                )
+            )
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Codigo de almacen ya existe en esta empresa.",
+                )
+            warehouse.codigo = next_code
+        if payload.descripcion is not None:
+            warehouse.descripcion = normalize_optional_text(payload.descripcion)
+        if payload.activo is not None:
+            warehouse.activo = payload.activo
+
+        db.add(
+            AuditLog(
+                empresa_id=context.empresa.id,
+                usuario_id=context.user.id,
+                action="inventory.warehouse.update",
+                entity_name="almacen",
+                entity_id=warehouse.id,
+                ip_address=request.client.host if request.client else None,
+                metadata_json={"codigo": warehouse.codigo, "nombre": warehouse.nombre, "activo": warehouse.activo},
             )
         )
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Código de almacén ya existe en esta empresa.",
-            )
-        warehouse.codigo = next_code
-    if payload.descripcion is not None:
-        warehouse.descripcion = normalize_optional_text(payload.descripcion)
-    if payload.activo is not None:
-        warehouse.activo = payload.activo
+        db.flush()
+        db.refresh(warehouse)
+        return serialize_warehouse(warehouse)
 
-    db.add(
-        AuditLog(
-            empresa_id=context.empresa.id,
-            usuario_id=context.user.id,
-            action="inventory.warehouse.update",
-            entity_name="almacen",
-            entity_id=warehouse.id,
-            ip_address=request.client.host if request.client else None,
-            metadata_json={"codigo": warehouse.codigo, "nombre": warehouse.nombre, "activo": warehouse.activo},
-        )
-    )
-
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Código de almacén ya existe en esta empresa.",
-        ) from exc
-
-    db.refresh(warehouse)
-    return serialize_warehouse(warehouse)
+    return run_inventory_write(db, "update_warehouse", operation)
 
 
 @router.get("/materials", response_model=MaterialListResponse)
@@ -270,59 +321,52 @@ def create_material(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> MaterialItem:
-    sku = normalize_code(payload.sku, "SKU")
-    nombre = normalize_required_text(payload.nombre, "Nombre")
-    unidad = normalize_required_text(payload.unidad, "Unidad")
+    def operation() -> MaterialItem:
+        sku = normalize_code(payload.sku, "SKU")
+        nombre = normalize_required_text(payload.nombre, "Nombre")
+        unidad = normalize_required_text(payload.unidad, "Unidad")
 
-    existing = db.scalar(
-        select(Material.id).where(
-            Material.empresa_id == context.empresa.id,
-            Material.sku == sku,
+        existing = db.scalar(
+            select(Material.id).where(
+                Material.empresa_id == context.empresa.id,
+                Material.sku == sku,
+            )
         )
-    )
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="SKU ya existe en esta empresa.",
-        )
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="SKU ya existe en esta empresa.",
+            )
 
-    material = Material(
-        empresa_id=context.empresa.id,
-        sku=sku,
-        nombre=nombre,
-        descripcion=normalize_optional_text(payload.descripcion),
-        categoria=normalize_optional_text(payload.categoria),
-        unidad=unidad,
-        costo_unitario=payload.costo_unitario,
-        precio_venta=payload.precio_venta,
-        stock_minimo=payload.stock_minimo,
-        activo=payload.activo,
-    )
-    db.add(material)
-    db.flush()
-    db.add(
-        AuditLog(
+        material = Material(
             empresa_id=context.empresa.id,
-            usuario_id=context.user.id,
-            action="inventory.material.create",
-            entity_name="material",
-            entity_id=material.id,
-            ip_address=request.client.host if request.client else None,
-            metadata_json={"sku": material.sku, "nombre": material.nombre},
+            sku=sku,
+            nombre=nombre,
+            descripcion=normalize_optional_text(payload.descripcion),
+            categoria=normalize_optional_text(payload.categoria),
+            unidad=unidad,
+            costo_unitario=payload.costo_unitario,
+            precio_venta=payload.precio_venta,
+            stock_minimo=payload.stock_minimo,
+            activo=payload.activo,
         )
-    )
+        db.add(material)
+        db.flush()
+        db.add(
+            AuditLog(
+                empresa_id=context.empresa.id,
+                usuario_id=context.user.id,
+                action="inventory.material.create",
+                entity_name="material",
+                entity_id=material.id,
+                ip_address=request.client.host if request.client else None,
+                metadata_json={"sku": material.sku, "nombre": material.nombre},
+            )
+        )
+        db.refresh(material)
+        return serialize_material(material)
 
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="SKU ya existe en esta empresa.",
-        ) from exc
-
-    db.refresh(material)
-    return serialize_material(material)
+    return run_inventory_write(db, "create_material", operation)
 
 
 @router.get("/materials/{material_id}/kardex", response_model=KardexResponse)
@@ -345,63 +389,57 @@ def update_material(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> MaterialItem:
-    material = get_material_for_company(db, context.empresa.id, material_id)
+    def operation() -> MaterialItem:
+        material = get_material_for_company(db, context.empresa.id, material_id)
 
-    if payload.sku is not None:
-        next_sku = normalize_code(payload.sku, "SKU")
-        existing = db.scalar(
-            select(Material.id).where(
-                Material.empresa_id == context.empresa.id,
-                Material.sku == next_sku,
-                Material.id != material.id,
+        if payload.sku is not None:
+            next_sku = normalize_code(payload.sku, "SKU")
+            existing = db.scalar(
+                select(Material.id).where(
+                    Material.empresa_id == context.empresa.id,
+                    Material.sku == next_sku,
+                    Material.id != material.id,
+                )
+            )
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="SKU ya existe en esta empresa.",
+                )
+            material.sku = next_sku
+        if payload.nombre is not None:
+            material.nombre = normalize_required_text(payload.nombre, "Nombre")
+        if payload.descripcion is not None:
+            material.descripcion = normalize_optional_text(payload.descripcion)
+        if payload.categoria is not None:
+            material.categoria = normalize_optional_text(payload.categoria)
+        if payload.unidad is not None:
+            material.unidad = normalize_required_text(payload.unidad, "Unidad")
+        if payload.costo_unitario is not None:
+            material.costo_unitario = payload.costo_unitario
+        if payload.precio_venta is not None:
+            material.precio_venta = payload.precio_venta
+        if payload.stock_minimo is not None:
+            material.stock_minimo = payload.stock_minimo
+        if payload.activo is not None:
+            material.activo = payload.activo
+
+        db.add(
+            AuditLog(
+                empresa_id=context.empresa.id,
+                usuario_id=context.user.id,
+                action="inventory.material.update",
+                entity_name="material",
+                entity_id=material.id,
+                ip_address=request.client.host if request.client else None,
+                metadata_json={"sku": material.sku, "nombre": material.nombre, "activo": material.activo},
             )
         )
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="SKU ya existe en esta empresa.",
-            )
-        material.sku = next_sku
-    if payload.nombre is not None:
-        material.nombre = normalize_required_text(payload.nombre, "Nombre")
-    if payload.descripcion is not None:
-        material.descripcion = normalize_optional_text(payload.descripcion)
-    if payload.categoria is not None:
-        material.categoria = normalize_optional_text(payload.categoria)
-    if payload.unidad is not None:
-        material.unidad = normalize_required_text(payload.unidad, "Unidad")
-    if payload.costo_unitario is not None:
-        material.costo_unitario = payload.costo_unitario
-    if payload.precio_venta is not None:
-        material.precio_venta = payload.precio_venta
-    if payload.stock_minimo is not None:
-        material.stock_minimo = payload.stock_minimo
-    if payload.activo is not None:
-        material.activo = payload.activo
+        db.flush()
+        db.refresh(material)
+        return serialize_material(material)
 
-    db.add(
-        AuditLog(
-            empresa_id=context.empresa.id,
-            usuario_id=context.user.id,
-            action="inventory.material.update",
-            entity_name="material",
-            entity_id=material.id,
-            ip_address=request.client.host if request.client else None,
-            metadata_json={"sku": material.sku, "nombre": material.nombre, "activo": material.activo},
-        )
-    )
-
-    try:
-        db.commit()
-    except IntegrityError as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="SKU ya existe en esta empresa.",
-        ) from exc
-
-    db.refresh(material)
-    return serialize_material(material)
+    return run_inventory_write(db, "update_material", operation)
 
 
 @router.get("/stock", response_model=StockListResponse)
@@ -445,11 +483,7 @@ def get_movements(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> MovementListResponse:
-    if fecha_desde and fecha_hasta and fecha_hasta < fecha_desde:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="fecha_hasta no puede ser menor que fecha_desde.",
-        )
+    validate_date_range(fecha_desde, fecha_hasta)
     if almacen_id:
         get_warehouse_for_company(db, context.empresa.id, almacen_id)
     if material_id:
@@ -476,19 +510,420 @@ def create_inventory_movement(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> MovementItem:
-    movement = apply_inventory_movement(
+    def operation() -> MovementItem:
+        return apply_inventory_movement(
+            db,
+            user=context.user,
+            empresa=context.empresa,
+            almacen_id=payload.almacen_id,
+            material_id=payload.material_id,
+            tipo=payload.tipo,
+            cantidad=payload.cantidad,
+            cantidad_nueva=payload.cantidad_nueva,
+            referencia_tipo=payload.referencia_tipo,
+            referencia_id=payload.referencia_id,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        )
+
+    return run_inventory_write(db, "create_inventory_movement", operation)
+
+
+@router.get("/transfers", response_model=TransferListResponse)
+def get_transfers(
+    q: str | None = None,
+    almacen_origen_id: str | None = None,
+    almacen_destino_id: str | None = None,
+    estatus: Literal["borrador", "confirmada", "cancelada"] | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferListResponse:
+    validate_date_range(fecha_desde, fecha_hasta)
+    if almacen_origen_id:
+        get_warehouse_for_company(db, context.empresa.id, almacen_origen_id)
+    if almacen_destino_id:
+        get_warehouse_for_company(db, context.empresa.id, almacen_destino_id)
+
+    total, items = list_transfers(
         db,
-        user=context.user,
-        empresa=context.empresa,
-        almacen_id=payload.almacen_id,
-        material_id=payload.material_id,
-        tipo=payload.tipo,
-        cantidad=payload.cantidad,
-        cantidad_nueva=payload.cantidad_nueva,
-        referencia_tipo=payload.referencia_tipo,
-        referencia_id=payload.referencia_id,
-        notas=payload.notas,
-        ip_address=request.client.host if request.client else None,
+        context.empresa.id,
+        q=q,
+        almacen_origen_id=almacen_origen_id,
+        almacen_destino_id=almacen_destino_id,
+        estatus=estatus,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        limit=limit,
+        offset=offset,
     )
-    db.commit()
-    return movement
+    return TransferListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/transfers/{transfer_id}", response_model=TransferResponse)
+def transfer_detail(
+    transfer_id: str,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferResponse:
+    transfer = get_transfer_for_company(db, context.empresa.id, transfer_id)
+    return serialize_transfer_response(db, transfer)
+
+
+@router.post("/transfers", response_model=TransferResponse, status_code=status.HTTP_201_CREATED)
+def create_transfer_endpoint(
+    payload: TransferCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferResponse:
+    return run_inventory_write(
+        db,
+        "create_transfer",
+        lambda: create_transfer(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            folio=payload.folio,
+            almacen_origen_id=payload.almacen_origen_id,
+            almacen_destino_id=payload.almacen_destino_id,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/transfers/{transfer_id}", response_model=TransferResponse)
+def update_transfer_endpoint(
+    transfer_id: str,
+    payload: TransferUpdateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferResponse:
+    return run_inventory_write(
+        db,
+        "update_transfer",
+        lambda: update_transfer(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            transfer_id=transfer_id,
+            folio=payload.folio,
+            almacen_origen_id=payload.almacen_origen_id,
+            almacen_destino_id=payload.almacen_destino_id,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/transfers/{transfer_id}/details", response_model=TransferResponse)
+def add_transfer_detail_endpoint(
+    transfer_id: str,
+    payload: TransferDetailCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferResponse:
+    return run_inventory_write(
+        db,
+        "add_transfer_detail",
+        lambda: add_transfer_detail(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            transfer_id=transfer_id,
+            material_id=payload.material_id,
+            cantidad=payload.cantidad,
+            costo_unitario_snapshot=payload.costo_unitario_snapshot,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/transfers/{transfer_id}/details/{detail_id}", response_model=TransferResponse)
+def update_transfer_detail_endpoint(
+    transfer_id: str,
+    detail_id: str,
+    payload: TransferDetailUpdateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferResponse:
+    return run_inventory_write(
+        db,
+        "update_transfer_detail",
+        lambda: update_transfer_detail(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            transfer_id=transfer_id,
+            detail_id=detail_id,
+            material_id=payload.material_id,
+            cantidad=payload.cantidad,
+            costo_unitario_snapshot=payload.costo_unitario_snapshot,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.delete("/transfers/{transfer_id}/details/{detail_id}", response_model=TransferResponse)
+def delete_transfer_detail_endpoint(
+    transfer_id: str,
+    detail_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferResponse:
+    return run_inventory_write(
+        db,
+        "delete_transfer_detail",
+        lambda: delete_transfer_detail(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            transfer_id=transfer_id,
+            detail_id=detail_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/transfers/{transfer_id}/confirm", response_model=TransferResponse)
+def confirm_transfer_endpoint(
+    transfer_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferResponse:
+    return run_inventory_write(
+        db,
+        "confirm_transfer",
+        lambda: confirm_transfer(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            transfer_id=transfer_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/transfers/{transfer_id}/cancel", response_model=TransferResponse)
+def cancel_transfer_endpoint(
+    transfer_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> TransferResponse:
+    return run_inventory_write(
+        db,
+        "cancel_transfer",
+        lambda: cancel_transfer(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            transfer_id=transfer_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/counts", response_model=CountListResponse)
+def get_counts(
+    q: str | None = None,
+    almacen_id: str | None = None,
+    estatus: Literal["borrador", "aplicado", "cancelado"] | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountListResponse:
+    validate_date_range(fecha_desde, fecha_hasta)
+    if almacen_id:
+        get_warehouse_for_company(db, context.empresa.id, almacen_id)
+
+    total, items = list_counts(
+        db,
+        context.empresa.id,
+        q=q,
+        almacen_id=almacen_id,
+        estatus=estatus,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        limit=limit,
+        offset=offset,
+    )
+    return CountListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/counts/{count_id}", response_model=CountResponse)
+def count_detail(
+    count_id: str,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountResponse:
+    count = get_count_for_company(db, context.empresa.id, count_id)
+    return serialize_count_response(db, count)
+
+
+@router.post("/counts", response_model=CountResponse, status_code=status.HTTP_201_CREATED)
+def create_count_endpoint(
+    payload: CountCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountResponse:
+    return run_inventory_write(
+        db,
+        "create_count",
+        lambda: create_count(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            folio=payload.folio,
+            almacen_id=payload.almacen_id,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/counts/{count_id}", response_model=CountResponse)
+def update_count_endpoint(
+    count_id: str,
+    payload: CountUpdateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountResponse:
+    return run_inventory_write(
+        db,
+        "update_count",
+        lambda: update_count(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            count_id=count_id,
+            folio=payload.folio,
+            almacen_id=payload.almacen_id,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/counts/{count_id}/details", response_model=CountResponse)
+def add_count_detail_endpoint(
+    count_id: str,
+    payload: CountDetailCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountResponse:
+    return run_inventory_write(
+        db,
+        "add_count_detail",
+        lambda: add_count_detail(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            count_id=count_id,
+            material_id=payload.material_id,
+            cantidad_fisica=payload.cantidad_fisica,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/counts/{count_id}/details/{detail_id}", response_model=CountResponse)
+def update_count_detail_endpoint(
+    count_id: str,
+    detail_id: str,
+    payload: CountDetailUpdateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountResponse:
+    return run_inventory_write(
+        db,
+        "update_count_detail",
+        lambda: update_count_detail(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            count_id=count_id,
+            detail_id=detail_id,
+            material_id=payload.material_id,
+            cantidad_fisica=payload.cantidad_fisica,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.delete("/counts/{count_id}/details/{detail_id}", response_model=CountResponse)
+def delete_count_detail_endpoint(
+    count_id: str,
+    detail_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountResponse:
+    return run_inventory_write(
+        db,
+        "delete_count_detail",
+        lambda: delete_count_detail(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            count_id=count_id,
+            detail_id=detail_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/counts/{count_id}/apply", response_model=CountResponse)
+def apply_count_endpoint(
+    count_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountResponse:
+    return run_inventory_write(
+        db,
+        "apply_count",
+        lambda: apply_count(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            count_id=count_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/counts/{count_id}/cancel", response_model=CountResponse)
+def cancel_count_endpoint(
+    count_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> CountResponse:
+    return run_inventory_write(
+        db,
+        "cancel_count",
+        lambda: cancel_count(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            count_id=count_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )

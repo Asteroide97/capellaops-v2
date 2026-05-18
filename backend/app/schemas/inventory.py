@@ -162,3 +162,133 @@ class KardexResponse(BaseModel):
     existencia_total: Decimal
     stock_por_almacen: list[KardexStockItem]
     movements: list[MovementItem]
+
+
+class TransferDetailCreateRequest(BaseModel):
+    material_id: str = Field(min_length=1, max_length=64)
+    cantidad: Decimal = Field(gt=0)
+    costo_unitario_snapshot: Decimal | None = Field(default=None, ge=0)
+
+
+class TransferDetailUpdateRequest(BaseModel):
+    material_id: str | None = Field(default=None, min_length=1, max_length=64)
+    cantidad: Decimal | None = Field(default=None, gt=0)
+    costo_unitario_snapshot: Decimal | None = Field(default=None, ge=0)
+
+
+class TransferCreateRequest(BaseModel):
+    folio: str | None = Field(default=None, max_length=60)
+    almacen_origen_id: str = Field(min_length=1, max_length=64)
+    almacen_destino_id: str = Field(min_length=1, max_length=64)
+    notas: str | None = Field(default=None, max_length=2000)
+
+
+class TransferUpdateRequest(BaseModel):
+    folio: str | None = Field(default=None, min_length=1, max_length=60)
+    almacen_origen_id: str | None = Field(default=None, min_length=1, max_length=64)
+    almacen_destino_id: str | None = Field(default=None, min_length=1, max_length=64)
+    notas: str | None = Field(default=None, max_length=2000)
+
+
+class TransferDetailItem(BaseModel):
+    id: str
+    transferencia_id: str
+    material_id: str
+    material_sku: str
+    material_nombre: str
+    material_unidad: str
+    cantidad: Decimal
+    costo_unitario_snapshot: Decimal | None = None
+
+
+class TransferItem(BaseModel):
+    id: str
+    empresa_id: str
+    folio: str
+    almacen_origen_id: str
+    almacen_origen_nombre: str
+    almacen_destino_id: str
+    almacen_destino_nombre: str
+    estatus: str
+    notas: str | None = None
+    created_by_user_id: str
+    confirmed_by_user_id: str | None = None
+    cancelled_by_user_id: str | None = None
+    created_at: datetime
+    confirmed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    detalles_count: int
+
+
+class TransferResponse(TransferItem):
+    details: list[TransferDetailItem]
+
+
+class TransferListResponse(BaseModel):
+    items: list[TransferItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class CountCreateRequest(BaseModel):
+    folio: str | None = Field(default=None, max_length=60)
+    almacen_id: str = Field(min_length=1, max_length=64)
+    notas: str | None = Field(default=None, max_length=2000)
+
+
+class CountUpdateRequest(BaseModel):
+    folio: str | None = Field(default=None, min_length=1, max_length=60)
+    almacen_id: str | None = Field(default=None, min_length=1, max_length=64)
+    notas: str | None = Field(default=None, max_length=2000)
+
+
+class CountDetailCreateRequest(BaseModel):
+    material_id: str = Field(min_length=1, max_length=64)
+    cantidad_fisica: Decimal = Field(ge=0)
+
+
+class CountDetailUpdateRequest(BaseModel):
+    material_id: str | None = Field(default=None, min_length=1, max_length=64)
+    cantidad_fisica: Decimal | None = Field(default=None, ge=0)
+
+
+class CountDetailItem(BaseModel):
+    id: str
+    conteo_id: str
+    material_id: str
+    material_sku: str
+    material_nombre: str
+    material_unidad: str
+    cantidad_sistema_snapshot: Decimal
+    cantidad_fisica: Decimal
+    diferencia: Decimal
+    ajuste_movimiento_id: str | None = None
+
+
+class CountItem(BaseModel):
+    id: str
+    empresa_id: str
+    almacen_id: str
+    almacen_nombre: str
+    folio: str
+    estatus: str
+    notas: str | None = None
+    created_by_user_id: str
+    applied_by_user_id: str | None = None
+    cancelled_by_user_id: str | None = None
+    created_at: datetime
+    applied_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    detalles_count: int
+
+
+class CountResponse(CountItem):
+    details: list[CountDetailItem]
+
+
+class CountListResponse(BaseModel):
+    items: list[CountItem]
+    total: int
+    limit: int
+    offset: int
