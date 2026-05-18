@@ -129,9 +129,25 @@ export async function apiRequest(path, { method = "GET", body, token, empresaId 
 }
 
 
-export function getWarehouses({ token, empresaId, includeInactive = true }) {
-  const query = new URLSearchParams({ include_inactive: String(includeInactive) });
+function appendQueryValue(query, key, value) {
+  if (value !== undefined && value !== null && value !== "") {
+    query.set(key, String(value));
+  }
+}
+
+
+export function getWarehouses({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "activo", filters.activo);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
   return apiRequest(`/inventory/warehouses?${query.toString()}`, { token, empresaId });
+}
+
+
+export function getWarehouseDetail({ warehouseId, token, empresaId }) {
+  return apiRequest(`/inventory/warehouses/${warehouseId}`, { token, empresaId });
 }
 
 
@@ -170,9 +186,20 @@ export function updateWarehouse({ warehouseId, token, empresaId, payload }) {
 }
 
 
-export function getMaterials({ token, empresaId, includeInactive = true }) {
-  const query = new URLSearchParams({ include_inactive: String(includeInactive) });
+export function getMaterials({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "categoria", filters.categoria);
+  appendQueryValue(query, "activo", filters.activo);
+  appendQueryValue(query, "stock_bajo", filters.stock_bajo);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
   return apiRequest(`/inventory/materials?${query.toString()}`, { token, empresaId });
+}
+
+
+export function getMaterialDetail({ materialId, token, empresaId }) {
+  return apiRequest(`/inventory/materials/${materialId}`, { token, empresaId });
 }
 
 
@@ -196,21 +223,28 @@ export function updateMaterial({ materialId, token, empresaId, payload }) {
 }
 
 
-export function getStock({ token, empresaId, almacenId, materialId }) {
+export function getStock({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
-  if (almacenId) {
-    query.set("almacen_id", almacenId);
-  }
-  if (materialId) {
-    query.set("material_id", materialId);
-  }
+  appendQueryValue(query, "almacen_id", filters.almacen_id);
+  appendQueryValue(query, "material_id", filters.material_id);
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "stock_bajo", filters.stock_bajo);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
   const suffix = query.toString();
   return apiRequest(`/inventory/stock${suffix ? `?${suffix}` : ""}`, { token, empresaId });
 }
 
 
-export function getInventoryMovements({ token, empresaId, limit = 25 }) {
-  const query = new URLSearchParams({ limit: String(limit) });
+export function getInventoryMovements({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "almacen_id", filters.almacen_id);
+  appendQueryValue(query, "material_id", filters.material_id);
+  appendQueryValue(query, "tipo", filters.tipo);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
   return apiRequest(`/inventory/movements?${query.toString()}`, { token, empresaId });
 }
 

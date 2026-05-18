@@ -1,4 +1,6 @@
 import logging
+from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
@@ -30,8 +32,12 @@ from app.services.inventory import (
     count_active_warehouses,
     create_warehouse_record,
     get_kardex,
+    get_material_for_company,
+    get_warehouse_for_company,
+    list_materials,
     list_recent_movements,
     list_stock,
+    list_warehouses,
     normalize_code,
     normalize_optional_text,
     normalize_required_text,
@@ -99,7 +105,7 @@ def create_first_warehouse(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se pudo crear el almacén inicial porque el codigo ya existe.",
+            detail="Código de almacén ya existe en esta empresa.",
         ) from exc
 
     db.refresh(warehouse)
@@ -107,17 +113,33 @@ def create_first_warehouse(
 
 
 @router.get("/warehouses", response_model=WarehouseListResponse)
-def list_warehouses(
-    include_inactive: bool = True,
+def get_warehouses(
+    q: str | None = None,
+    activo: bool | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> WarehouseListResponse:
-    query = select(Almacen).where(Almacen.empresa_id == context.empresa.id).order_by(Almacen.nombre.asc())
-    if not include_inactive:
-        query = query.where(Almacen.activo == True)
+    total, items = list_warehouses(
+        db,
+        context.empresa.id,
+        q=q,
+        activo=activo,
+        limit=limit,
+        offset=offset,
+    )
+    return WarehouseListResponse(items=items, total=total, limit=limit, offset=offset)
 
-    warehouses = db.scalars(query).all()
-    return WarehouseListResponse(items=[serialize_warehouse(warehouse) for warehouse in warehouses])
+
+@router.get("/warehouses/{warehouse_id}", response_model=WarehouseItem)
+def warehouse_detail(
+    warehouse_id: str,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> WarehouseItem:
+    warehouse = get_warehouse_for_company(db, context.empresa.id, warehouse_id)
+    return serialize_warehouse(warehouse)
 
 
 @router.post("/warehouses", response_model=WarehouseItem, status_code=status.HTTP_201_CREATED)
@@ -143,7 +165,7 @@ def create_warehouse(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se pudo crear el almacen porque el codigo ya existe.",
+            detail="Código de almacén ya existe en esta empresa.",
         ) from exc
 
     db.refresh(warehouse)
@@ -158,23 +180,12 @@ def update_warehouse(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> WarehouseItem:
-    warehouse = db.scalar(
-        select(Almacen).where(
-            Almacen.id == warehouse_id,
-            Almacen.empresa_id == context.empresa.id,
-        )
-    )
-    if not warehouse:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Almacen no encontrado.")
+    warehouse = get_warehouse_for_company(db, context.empresa.id, warehouse_id)
 
     if payload.nombre is not None:
-        warehouse.nombre = payload.nombre.strip()
-        if not warehouse.nombre:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nombre obligatorio.")
+        warehouse.nombre = normalize_required_text(payload.nombre, "Nombre")
     if payload.codigo is not None:
-        next_code = payload.codigo.strip().upper().replace(" ", "-")
-        if not next_code:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codigo obligatorio.")
+        next_code = normalize_code(payload.codigo, "Código")
         existing = db.scalar(
             select(Almacen.id).where(
                 Almacen.empresa_id == context.empresa.id,
@@ -185,11 +196,11 @@ def update_warehouse(
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Ya existe un almacen con ese codigo.",
+                detail="Código de almacén ya existe en esta empresa.",
             )
         warehouse.codigo = next_code
     if payload.descripcion is not None:
-        warehouse.descripcion = payload.descripcion.strip() or None
+        warehouse.descripcion = normalize_optional_text(payload.descripcion)
     if payload.activo is not None:
         warehouse.activo = payload.activo
 
@@ -211,7 +222,7 @@ def update_warehouse(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se pudo actualizar el almacen porque el codigo ya existe.",
+            detail="Código de almacén ya existe en esta empresa.",
         ) from exc
 
     db.refresh(warehouse)
@@ -219,17 +230,37 @@ def update_warehouse(
 
 
 @router.get("/materials", response_model=MaterialListResponse)
-def list_materials(
-    include_inactive: bool = True,
+def get_materials(
+    q: str | None = None,
+    categoria: str | None = None,
+    activo: bool | None = None,
+    stock_bajo: bool | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> MaterialListResponse:
-    query = select(Material).where(Material.empresa_id == context.empresa.id).order_by(Material.nombre.asc())
-    if not include_inactive:
-        query = query.where(Material.activo == True)
+    total, items = list_materials(
+        db,
+        context.empresa.id,
+        q=q,
+        categoria=categoria,
+        activo=activo,
+        stock_bajo=stock_bajo,
+        limit=limit,
+        offset=offset,
+    )
+    return MaterialListResponse(items=items, total=total, limit=limit, offset=offset)
 
-    materials = db.scalars(query).all()
-    return MaterialListResponse(items=[serialize_material(material) for material in materials])
+
+@router.get("/materials/{material_id}", response_model=MaterialItem)
+def material_detail(
+    material_id: str,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> MaterialItem:
+    material = get_material_for_company(db, context.empresa.id, material_id)
+    return serialize_material(material)
 
 
 @router.post("/materials", response_model=MaterialItem, status_code=status.HTTP_201_CREATED)
@@ -252,7 +283,7 @@ def create_material(
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Ya existe un material con ese SKU.",
+            detail="SKU ya existe en esta empresa.",
         )
 
     material = Material(
@@ -287,7 +318,7 @@ def create_material(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se pudo crear el material porque el SKU ya existe.",
+            detail="SKU ya existe en esta empresa.",
         ) from exc
 
     db.refresh(material)
@@ -301,6 +332,8 @@ def material_kardex(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> KardexResponse:
+    if almacen_id:
+        get_warehouse_for_company(db, context.empresa.id, almacen_id)
     return get_kardex(db, context.empresa.id, material_id, almacen_id)
 
 
@@ -312,14 +345,7 @@ def update_material(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> MaterialItem:
-    material = db.scalar(
-        select(Material).where(
-            Material.id == material_id,
-            Material.empresa_id == context.empresa.id,
-        )
-    )
-    if not material:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material no encontrado.")
+    material = get_material_for_company(db, context.empresa.id, material_id)
 
     if payload.sku is not None:
         next_sku = normalize_code(payload.sku, "SKU")
@@ -333,7 +359,7 @@ def update_material(
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Ya existe un material con ese SKU.",
+                detail="SKU ya existe en esta empresa.",
             )
         material.sku = next_sku
     if payload.nombre is not None:
@@ -371,7 +397,7 @@ def update_material(
         db.rollback()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="No se pudo actualizar el material porque el SKU ya existe.",
+            detail="SKU ya existe en esta empresa.",
         ) from exc
 
     db.refresh(material)
@@ -379,22 +405,68 @@ def update_material(
 
 
 @router.get("/stock", response_model=StockListResponse)
-def stock(
+def get_stock(
     almacen_id: str | None = None,
     material_id: str | None = None,
+    q: str | None = None,
+    stock_bajo: bool | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> StockListResponse:
-    return StockListResponse(items=list_stock(db, context.empresa.id, almacen_id, material_id))
+    if almacen_id:
+        get_warehouse_for_company(db, context.empresa.id, almacen_id)
+    if material_id:
+        get_material_for_company(db, context.empresa.id, material_id)
+
+    total, items = list_stock(
+        db,
+        context.empresa.id,
+        almacen_id=almacen_id,
+        material_id=material_id,
+        q=q,
+        stock_bajo=stock_bajo,
+        limit=limit,
+        offset=offset,
+    )
+    return StockListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/movements", response_model=MovementListResponse)
-def movements(
+def get_movements(
+    almacen_id: str | None = None,
+    material_id: str | None = None,
+    tipo: Literal["entrada", "salida", "ajuste"] | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
     limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> MovementListResponse:
-    return MovementListResponse(items=list_recent_movements(db, context.empresa.id, limit=limit))
+    if fecha_desde and fecha_hasta and fecha_hasta < fecha_desde:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="fecha_hasta no puede ser menor que fecha_desde.",
+        )
+    if almacen_id:
+        get_warehouse_for_company(db, context.empresa.id, almacen_id)
+    if material_id:
+        get_material_for_company(db, context.empresa.id, material_id)
+
+    total, items = list_recent_movements(
+        db,
+        context.empresa.id,
+        almacen_id=almacen_id,
+        material_id=material_id,
+        tipo=tipo,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        limit=limit,
+        offset=offset,
+    )
+    return MovementListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("/movements", response_model=MovementItem, status_code=status.HTTP_201_CREATED)

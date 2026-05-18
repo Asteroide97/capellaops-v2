@@ -467,7 +467,10 @@ textarea {
 
 .inventory-form-card input,
 .inventory-form-card select,
-.inventory-form-card textarea {
+.inventory-form-card textarea,
+.inventory-table-card input,
+.inventory-table-card select,
+.inventory-table-card textarea {
   width: 100%;
   padding: 0.9rem 1rem;
   border-radius: 1rem;
@@ -475,7 +478,8 @@ textarea {
   background: rgba(255, 255, 255, 0.75);
 }
 
-.inventory-form-card textarea {
+.inventory-form-card textarea,
+.inventory-table-card textarea {
   resize: vertical;
   min-height: 96px;
 }
@@ -488,6 +492,12 @@ textarea {
 
 .inventory-form-span-2 {
   grid-column: span 2;
+}
+
+.inventory-filter-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .checkbox-row {
@@ -505,6 +515,14 @@ textarea {
 .inventory-row-actions {
   display: flex;
   gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.inventory-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   flex-wrap: wrap;
 }
 
@@ -583,6 +601,10 @@ textarea {
   }
 
   .inventory-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .inventory-filter-grid {
     grid-template-columns: 1fr;
   }
 

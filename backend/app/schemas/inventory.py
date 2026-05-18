@@ -32,6 +32,9 @@ class WarehouseItem(BaseModel):
 
 class WarehouseListResponse(BaseModel):
     items: list[WarehouseItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class InventoryOnboardingStatusResponse(BaseModel):
@@ -82,6 +85,9 @@ class MaterialItem(BaseModel):
 
 class MaterialListResponse(BaseModel):
     items: list[MaterialItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class StockItem(BaseModel):
@@ -102,6 +108,9 @@ class StockItem(BaseModel):
 
 class StockListResponse(BaseModel):
     items: list[StockItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class InventoryMovementCreateRequest(BaseModel):
@@ -136,6 +145,9 @@ class MovementItem(BaseModel):
 
 class MovementListResponse(BaseModel):
     items: list[MovementItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class KardexStockItem(BaseModel):

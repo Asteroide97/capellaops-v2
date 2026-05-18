@@ -1,7 +1,8 @@
+from datetime import datetime
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import AuditLog, Empresa, Usuario
@@ -39,12 +40,33 @@ def normalize_optional_text(value: str | None) -> str | None:
     return cleaned or None
 
 
+def normalize_query_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip().lower()
+    return cleaned or None
+
+
 def validate_inventory_access(user: Usuario, empresa: Empresa) -> None:
     if not can_access_module(user, empresa, "inventory"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="La empresa no tiene acceso al modulo Inventario.",
+            detail="La empresa no tiene acceso al módulo Inventario.",
         )
+
+
+def apply_text_search(query, q: str | None, *columns):
+    normalized = normalize_query_text(q)
+    if not normalized:
+        return query
+
+    pattern = f"%{normalized}%"
+    filters = [func.lower(func.coalesce(column, "")).like(pattern) for column in columns]
+    return query.where(or_(*filters))
+
+
+def count_rows(db: Session, query) -> int:
+    return db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
 
 
 def count_active_warehouses(db: Session, empresa_id: str) -> int:
@@ -87,6 +109,24 @@ def serialize_warehouse(warehouse: Almacen) -> WarehouseItem:
     )
 
 
+def serialize_stock_item(stock: Existencia, warehouse: Almacen, material: Material) -> StockItem:
+    return StockItem(
+        id=stock.id,
+        empresa_id=stock.empresa_id,
+        almacen_id=warehouse.id,
+        almacen_nombre=warehouse.nombre,
+        almacen_codigo=warehouse.codigo,
+        material_id=material.id,
+        material_sku=material.sku,
+        material_nombre=material.nombre,
+        material_unidad=material.unidad,
+        stock_minimo=material.stock_minimo,
+        cantidad=stock.cantidad,
+        low_stock=Decimal(stock.cantidad) <= Decimal(material.stock_minimo),
+        updated_at=stock.updated_at,
+    )
+
+
 def create_warehouse_record(
     db: Session,
     *,
@@ -101,12 +141,12 @@ def create_warehouse_record(
     fail_if_active_exists: bool = False,
 ) -> Almacen:
     normalized_name = normalize_required_text(nombre, "Nombre")
-    normalized_code = normalize_code(codigo, "Codigo")
+    normalized_code = normalize_code(codigo, "Código")
 
     if fail_if_active_exists and count_active_warehouses(db, empresa.id) > 0:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="La empresa ya tiene un almacÃ©n configurado.",
+            detail="La empresa ya tiene un almacén configurado.",
         )
 
     existing = db.scalar(
@@ -118,7 +158,7 @@ def create_warehouse_record(
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Ya existe un almacen con ese codigo.",
+            detail="Código de almacén ya existe en esta empresa.",
         )
 
     warehouse = Almacen(
@@ -152,7 +192,7 @@ def get_warehouse_for_company(db: Session, empresa_id: str, warehouse_id: str) -
         )
     )
     if not warehouse:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Almacen no encontrado.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Almacén no encontrado.")
     return warehouse
 
 
@@ -258,7 +298,7 @@ def apply_inventory_movement(
         if previous_quantity < movement_quantity:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="Stock insuficiente para registrar la salida.",
+                detail="Stock insuficiente.",
             )
         next_quantity = previous_quantity - movement_quantity
     elif tipo == "ajuste":
@@ -275,7 +315,7 @@ def apply_inventory_movement(
         next_quantity = Decimal(cantidad_nueva)
         movement_quantity = next_quantity - previous_quantity
     else:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de movimiento invalido.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de movimiento inválido.")
 
     if next_quantity < ZERO:
         raise HTTPException(
@@ -322,62 +362,135 @@ def apply_inventory_movement(
     return build_movement_item(movement, warehouse, material)
 
 
+def list_warehouses(
+    db: Session,
+    empresa_id: str,
+    *,
+    q: str | None = None,
+    activo: bool | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[int, list[WarehouseItem]]:
+    query = select(Almacen).where(Almacen.empresa_id == empresa_id)
+    query = apply_text_search(query, q, Almacen.nombre, Almacen.codigo, Almacen.descripcion)
+
+    if activo is not None:
+        query = query.where(Almacen.activo == activo)
+
+    total = count_rows(db, query)
+    rows = db.scalars(
+        query.order_by(Almacen.nombre.asc(), Almacen.codigo.asc()).offset(offset).limit(limit)
+    ).all()
+    return total, [serialize_warehouse(warehouse) for warehouse in rows]
+
+
+def list_materials(
+    db: Session,
+    empresa_id: str,
+    *,
+    q: str | None = None,
+    categoria: str | None = None,
+    activo: bool | None = None,
+    stock_bajo: bool | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[int, list[MaterialItem]]:
+    query = select(Material).where(Material.empresa_id == empresa_id)
+    query = apply_text_search(query, q, Material.sku, Material.nombre, Material.descripcion, Material.categoria)
+
+    normalized_category = normalize_query_text(categoria)
+    if normalized_category:
+        query = query.where(func.lower(func.coalesce(Material.categoria, "")) == normalized_category)
+    if activo is not None:
+        query = query.where(Material.activo == activo)
+
+    if stock_bajo is not None:
+        stock_totals = (
+            select(
+                Existencia.material_id.label("material_id"),
+                func.coalesce(func.sum(Existencia.cantidad), 0).label("total_stock"),
+            )
+            .where(Existencia.empresa_id == empresa_id)
+            .group_by(Existencia.material_id)
+            .subquery()
+        )
+        total_stock = func.coalesce(stock_totals.c.total_stock, 0)
+        query = query.outerjoin(stock_totals, stock_totals.c.material_id == Material.id)
+        query = query.where(total_stock <= Material.stock_minimo if stock_bajo else total_stock > Material.stock_minimo)
+
+    total = count_rows(db, query)
+    rows = db.scalars(query.order_by(Material.nombre.asc(), Material.sku.asc()).offset(offset).limit(limit)).all()
+    return total, [serialize_material(material) for material in rows]
+
+
 def list_stock(
     db: Session,
     empresa_id: str,
+    *,
     almacen_id: str | None = None,
     material_id: str | None = None,
-) -> list[StockItem]:
+    q: str | None = None,
+    stock_bajo: bool | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[int, list[StockItem]]:
     query = (
         select(Existencia, Almacen, Material)
         .join(Almacen, Existencia.almacen_id == Almacen.id)
         .join(Material, Existencia.material_id == Material.id)
         .where(Existencia.empresa_id == empresa_id)
-        .order_by(Almacen.nombre.asc(), Material.nombre.asc())
     )
+    query = apply_text_search(query, q, Almacen.nombre, Almacen.codigo, Material.sku, Material.nombre, Material.categoria)
 
     if almacen_id:
         query = query.where(Existencia.almacen_id == almacen_id)
     if material_id:
         query = query.where(Existencia.material_id == material_id)
+    if stock_bajo is not None:
+        query = query.where(Existencia.cantidad <= Material.stock_minimo if stock_bajo else Existencia.cantidad > Material.stock_minimo)
 
-    rows = db.execute(query).all()
-    return [
-        StockItem(
-            id=stock.id,
-            empresa_id=stock.empresa_id,
-            almacen_id=warehouse.id,
-            almacen_nombre=warehouse.nombre,
-            almacen_codigo=warehouse.codigo,
-            material_id=material.id,
-            material_sku=material.sku,
-            material_nombre=material.nombre,
-            material_unidad=material.unidad,
-            stock_minimo=material.stock_minimo,
-            cantidad=stock.cantidad,
-            low_stock=Decimal(stock.cantidad) <= Decimal(material.stock_minimo),
-            updated_at=stock.updated_at,
-        )
-        for stock, warehouse, material in rows
-    ]
+    total = count_rows(db, query)
+    rows = db.execute(
+        query.order_by(Almacen.nombre.asc(), Material.nombre.asc(), Material.sku.asc()).offset(offset).limit(limit)
+    ).all()
+    return total, [serialize_stock_item(stock, warehouse, material) for stock, warehouse, material in rows]
 
 
 def list_recent_movements(
     db: Session,
     empresa_id: str,
     *,
+    almacen_id: str | None = None,
+    material_id: str | None = None,
+    tipo: str | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
     limit: int = 25,
-) -> list[MovementItem]:
+    offset: int = 0,
+) -> tuple[int, list[MovementItem]]:
     query = (
         select(MovimientoInventario, Almacen, Material)
         .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
         .join(Material, MovimientoInventario.material_id == Material.id)
         .where(MovimientoInventario.empresa_id == empresa_id)
-        .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
-        .limit(limit)
     )
-    rows = db.execute(query).all()
-    return [build_movement_item(movement, warehouse, material) for movement, warehouse, material in rows]
+
+    if almacen_id:
+        query = query.where(MovimientoInventario.almacen_id == almacen_id)
+    if material_id:
+        query = query.where(MovimientoInventario.material_id == material_id)
+    if tipo:
+        query = query.where(MovimientoInventario.tipo == tipo)
+    if fecha_desde:
+        query = query.where(MovimientoInventario.created_at >= fecha_desde)
+    if fecha_hasta:
+        query = query.where(MovimientoInventario.created_at <= fecha_hasta)
+
+    total = count_rows(db, query)
+    rows = db.execute(
+        query.order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id)).offset(offset).limit(limit)
+    ).all()
+    return total, [build_movement_item(movement, warehouse, material) for movement, warehouse, material in rows]
 
 
 def get_kardex(

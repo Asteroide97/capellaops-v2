@@ -112,11 +112,13 @@ Notas:
 - `GET /me`
 - `GET /modules`
 - `GET /inventory/warehouses`
+- `GET /inventory/warehouses/{id}`
 - `POST /inventory/warehouses`
 - `PUT /inventory/warehouses/{id}`
 - `GET /inventory/onboarding-status`
 - `POST /inventory/first-warehouse`
 - `GET /inventory/materials`
+- `GET /inventory/materials/{id}`
 - `POST /inventory/materials`
 - `PUT /inventory/materials/{id}`
 - `GET /inventory/stock`
@@ -197,7 +199,7 @@ npm run dev
 - Si no se configura Azure SQL, el backend cae en SQLite local solo para smoke tests rapidos.
 - Para aplicar cambios de esquema, ejecutar `alembic upgrade head`.
 
-## Inventario Fase 1
+## Inventario Fase 1.1
 
 - Todo dato de inventario se guarda con `empresa_id`.
 - Todo endpoint de inventario valida autenticacion, contexto de empresa y acceso al modulo `inventory`.
@@ -205,10 +207,27 @@ npm run dev
 - `Material` no guarda `stock_actual` como fuente principal.
 - No se permite stock negativo.
 - Cada movimiento crea un registro auditable.
+- Los listados devuelven `items`, `total`, `limit` y `offset`.
+- Se agregaron filtros y paginacion para almacenes, materiales, existencias y movimientos.
 - Tipos de movimiento soportados:
   - `entrada`
   - `salida`
   - `ajuste`
+
+### Endpoints operativos
+
+- `GET /inventory/warehouses`
+  Soporta `q`, `activo`, `limit`, `offset`.
+- `GET /inventory/materials`
+  Soporta `q`, `categoria`, `activo`, `stock_bajo`, `limit`, `offset`.
+- `GET /inventory/stock`
+  Soporta `almacen_id`, `material_id`, `q`, `stock_bajo`, `limit`, `offset`.
+- `GET /inventory/movements`
+  Soporta `almacen_id`, `material_id`, `tipo`, `fecha_desde`, `fecha_hasta`, `limit`, `offset`.
+- `GET /inventory/warehouses/{id}`
+  Devuelve detalle de un almacén de la empresa actual.
+- `GET /inventory/materials/{id}`
+  Devuelve detalle de un material de la empresa actual.
 
 ### Flujo basico esperado
 
