@@ -28,4 +28,6 @@ class MeResponse(BaseModel):
     empresa: EmpresaSummary
     membership: MembershipSummary
     empresas: list[EmpresaSummary]
-
+    impersonation: bool = False
+    impersonated_by: str | None = None
+    impersonation_ends_at: datetime | None = None

@@ -405,6 +405,7 @@ def login(
     request: Request,
     db: Session = Depends(get_db),
 ) -> TokenResponse:
+    now = datetime.now(timezone.utc)
     user = db.scalar(
         select(Usuario)
         .options(selectinload(Usuario.memberships).selectinload(EmpresaUsuario.empresa))
@@ -442,6 +443,7 @@ def login(
             detail="Debes indicar empresa_id cuando el usuario pertenece a varias empresas.",
         )
 
+    user.last_login_at = now
     db.add(
         AuditLog(
             empresa_id=selected_membership.empresa_id,

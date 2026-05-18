@@ -19,24 +19,39 @@ class TenantContext:
     user: Usuario
     empresa: Empresa
     membership: EmpresaUsuario
+    token_payload: dict
 
 
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
-) -> Usuario:
+@dataclass
+class SuperadminContext:
+    user: Usuario
+    token_payload: dict
+
+
+def get_token_payload(token: str = Depends(oauth2_scheme)) -> dict:
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Credenciales inválidas.",
+        detail="Credenciales invÃ¡lidas.",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
     try:
-        payload = decode_access_token(token)
+        return decode_access_token(token)
     except InvalidTokenError as exc:
         raise credentials_error from exc
 
-    user_id = payload.get("sub")
+
+def get_current_user(
+    token_payload: dict = Depends(get_token_payload),
+    db: Session = Depends(get_db),
+) -> Usuario:
+    credentials_error = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Credenciales invÃ¡lidas.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    user_id = token_payload.get("sub")
     if not user_id:
         raise credentials_error
 
@@ -49,19 +64,11 @@ def get_current_user(
 
 def get_tenant_context(
     x_empresa_id: str | None = Header(default=None),
-    token: str = Depends(oauth2_scheme),
+    token_payload: dict = Depends(get_token_payload),
     current_user: Usuario = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> TenantContext:
-    try:
-        payload = decode_access_token(token)
-    except InvalidTokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido.",
-        ) from exc
-
-    empresa_id = x_empresa_id or payload.get("empresa_id")
+    empresa_id = x_empresa_id or token_payload.get("empresa_id")
     if not empresa_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -87,5 +94,28 @@ def get_tenant_context(
             detail="Empresa no encontrada.",
         )
 
-    return TenantContext(user=current_user, empresa=empresa, membership=membership)
+    return TenantContext(
+        user=current_user,
+        empresa=empresa,
+        membership=membership,
+        token_payload=token_payload,
+    )
 
+
+def get_superadmin_context(
+    current_user: Usuario = Depends(get_current_user),
+    token_payload: dict = Depends(get_token_payload),
+) -> SuperadminContext:
+    if token_payload.get("impersonation"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No puedes acceder a Superadmin mientras estÃ¡s impersonando.",
+        )
+
+    if not current_user.is_superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para acceder al portal Superadmin.",
+        )
+
+    return SuperadminContext(user=current_user, token_payload=token_payload)

@@ -1,17 +1,59 @@
-import { Outlet } from "react-router-dom";
+import { Outlet, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
 import Sidebar from "./Sidebar";
 
 
 export default function AppLayout() {
-  const { empresa, user, logout } = useAuth();
+  const navigate = useNavigate();
+  const {
+    dismissNotice,
+    empresa,
+    exitImpersonation,
+    impersonation,
+    notice,
+    logout,
+    user,
+  } = useAuth();
+
+  async function handleExitImpersonation() {
+    try {
+      await exitImpersonation();
+      navigate("/superadmin");
+    } catch {
+      navigate("/superadmin");
+    }
+  }
 
   return (
     <div className="app-shell">
       <Sidebar />
 
       <div className="app-content">
+        {impersonation ? (
+          <div className="impersonation-banner">
+            <div>
+              <strong>
+                Estás impersonando a {user?.full_name} en {empresa?.name}.
+              </strong>
+            </div>
+            <button className="ghost-button" onClick={handleExitImpersonation} type="button">
+              Salir de impersonación
+            </button>
+          </div>
+        ) : null}
+
+        {notice ? (
+          <div className="feature-card setup-inline-card">
+            <div className="setup-inline-row">
+              <span>{notice}</span>
+              <button className="link-button" onClick={dismissNotice} type="button">
+                Cerrar
+              </button>
+            </div>
+          </div>
+        ) : null}
+
         <header className="topbar">
           <div>
             <p className="eyebrow">Capella Ops V2</p>
@@ -37,4 +79,3 @@ export default function AppLayout() {
     </div>
   );
 }
-

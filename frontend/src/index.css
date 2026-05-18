@@ -54,6 +54,10 @@ textarea {
   padding: 2rem;
 }
 
+.setup-card {
+  width: min(100%, 620px);
+}
+
 .auth-shell {
   min-height: 100vh;
   display: grid;
@@ -104,12 +108,18 @@ textarea {
 }
 
 .auth-card input,
-.auth-card select {
+.auth-card select,
+.auth-card textarea {
   width: 100%;
   padding: 0.95rem 1rem;
   border-radius: 1rem;
   border: 1px solid rgba(38, 28, 17, 0.12);
   background: rgba(255, 255, 255, 0.72);
+}
+
+.auth-card textarea {
+  resize: vertical;
+  min-height: 96px;
 }
 
 .primary-button,
@@ -287,6 +297,19 @@ textarea {
   margin-bottom: 1.5rem;
 }
 
+.impersonation-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-radius: 1.25rem;
+  margin-bottom: 1rem;
+  background: rgba(255, 241, 214, 0.92);
+  border: 1px solid rgba(157, 91, 0, 0.16);
+  color: var(--warning);
+}
+
 .topbar-actions,
 .user-chip {
   display: flex;
@@ -408,10 +431,25 @@ textarea {
   grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
 }
 
+.superadmin-grid {
+  grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+}
+
 .inventory-form-card,
 .inventory-table-card,
 .inventory-kardex-stack {
   display: grid;
+  gap: 1rem;
+}
+
+.setup-inline-card {
+  padding: 1rem 1.2rem;
+}
+
+.setup-inline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 1rem;
 }
 
@@ -556,7 +594,9 @@ textarea {
   .topbar-actions,
   .user-chip,
   .module-card-top,
-  .inventory-actions {
+  .inventory-actions,
+  .impersonation-banner,
+  .setup-inline-row {
     align-items: flex-start;
     flex-direction: column;
   }

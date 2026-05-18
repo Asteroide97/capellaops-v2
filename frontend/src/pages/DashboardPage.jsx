@@ -1,11 +1,26 @@
+import { Link } from "react-router-dom";
+
 import { useAuth } from "../auth/AuthContext";
 
 
 export default function DashboardPage() {
-  const { empresa, membership, modules, user } = useAuth();
+  const { empresa, membership, modules, onboardingMessage, requiresFirstWarehouse, user } = useAuth();
 
   return (
     <section className="dashboard-stack">
+      {requiresFirstWarehouse ? (
+        <div className="feature-card warning">
+          <div className="feature-header">
+            <p className="eyebrow">Setup inicial</p>
+            <h2>Crea tu primer almacén</h2>
+            <p>{onboardingMessage || "Crea tu primer almacén para comenzar."}</p>
+          </div>
+          <Link className="primary-link" to="/configuracion-inicial/almacen">
+            Crear primer almacén
+          </Link>
+        </div>
+      ) : null}
+
       <div className="hero-card">
         <div>
           <p className="eyebrow">Resumen operativo</p>
@@ -52,4 +67,3 @@ export default function DashboardPage() {
     </section>
   );
 }
-

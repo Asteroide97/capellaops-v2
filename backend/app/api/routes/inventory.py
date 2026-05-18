@@ -1,6 +1,8 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import TenantContext, get_tenant_context
@@ -9,6 +11,7 @@ from app.models import AuditLog
 from app.models.inventory import Almacen, Material
 from app.schemas.inventory import (
     InventoryMovementCreateRequest,
+    InventoryOnboardingStatusResponse,
     KardexResponse,
     MaterialCreateRequest,
     MaterialItem,
@@ -24,6 +27,8 @@ from app.schemas.inventory import (
 )
 from app.services.inventory import (
     apply_inventory_movement,
+    count_active_warehouses,
+    create_warehouse_record,
     get_kardex,
     list_recent_movements,
     list_stock,
@@ -37,11 +42,68 @@ from app.services.inventory import (
 
 
 router = APIRouter(prefix="/inventory", tags=["inventory"])
+logger = logging.getLogger(__name__)
 
 
 def get_inventory_context(context: TenantContext = Depends(get_tenant_context)) -> TenantContext:
     validate_inventory_access(context.user, context.empresa)
     return context
+
+
+@router.get("/onboarding-status", response_model=InventoryOnboardingStatusResponse)
+def onboarding_status(
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> InventoryOnboardingStatusResponse:
+    try:
+        warehouses_count = count_active_warehouses(db, context.empresa.id)
+        requires_first_warehouse = warehouses_count == 0
+        return InventoryOnboardingStatusResponse(
+            requires_first_warehouse=requires_first_warehouse,
+            warehouses_count=warehouses_count,
+            message="Crea tu primer almacén para comenzar.",
+        )
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "No se pudo consultar el estado de onboarding de inventario para empresa_id=%s.",
+            context.empresa.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo consultar el estado de onboarding.",
+        ) from exc
+
+
+@router.post("/first-warehouse", response_model=WarehouseItem, status_code=status.HTTP_201_CREATED)
+def create_first_warehouse(
+    payload: WarehouseCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> WarehouseItem:
+    try:
+        warehouse = create_warehouse_record(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            nombre=payload.nombre,
+            codigo=payload.codigo,
+            descripcion=payload.descripcion,
+            activo=True,
+            ip_address=request.client.host if request.client else None,
+            audit_action="inventory.onboarding.first_warehouse.create",
+            fail_if_active_exists=True,
+        )
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se pudo crear el almacén inicial porque el codigo ya existe.",
+        ) from exc
+
+    db.refresh(warehouse)
+    return serialize_warehouse(warehouse)
 
 
 @router.get("/warehouses", response_model=WarehouseListResponse)
@@ -52,7 +114,7 @@ def list_warehouses(
 ) -> WarehouseListResponse:
     query = select(Almacen).where(Almacen.empresa_id == context.empresa.id).order_by(Almacen.nombre.asc())
     if not include_inactive:
-        query = query.where(Almacen.activo.is_(True))
+        query = query.where(Almacen.activo == True)
 
     warehouses = db.scalars(query).all()
     return WarehouseListResponse(items=[serialize_warehouse(warehouse) for warehouse in warehouses])
@@ -65,43 +127,17 @@ def create_warehouse(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> WarehouseItem:
-    nombre = normalize_required_text(payload.nombre, "Nombre")
-    codigo = normalize_code(payload.codigo, "Codigo")
-
-    existing = db.scalar(
-        select(Almacen.id).where(
-            Almacen.empresa_id == context.empresa.id,
-            Almacen.codigo == codigo,
-        )
-    )
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Ya existe un almacen con ese codigo.",
-        )
-
-    warehouse = Almacen(
-        empresa_id=context.empresa.id,
-        nombre=nombre,
-        codigo=codigo,
-        descripcion=normalize_optional_text(payload.descripcion),
-        activo=payload.activo,
-    )
-    db.add(warehouse)
-    db.flush()
-    db.add(
-        AuditLog(
-            empresa_id=context.empresa.id,
-            usuario_id=context.user.id,
-            action="inventory.warehouse.create",
-            entity_name="almacen",
-            entity_id=warehouse.id,
-            ip_address=request.client.host if request.client else None,
-            metadata_json={"codigo": warehouse.codigo, "nombre": warehouse.nombre},
-        )
-    )
-
     try:
+        warehouse = create_warehouse_record(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            nombre=payload.nombre,
+            codigo=payload.codigo,
+            descripcion=payload.descripcion,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -132,9 +168,13 @@ def update_warehouse(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Almacen no encontrado.")
 
     if payload.nombre is not None:
-        warehouse.nombre = normalize_required_text(payload.nombre, "Nombre")
+        warehouse.nombre = payload.nombre.strip()
+        if not warehouse.nombre:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Nombre obligatorio.")
     if payload.codigo is not None:
-        next_code = normalize_code(payload.codigo, "Codigo")
+        next_code = payload.codigo.strip().upper().replace(" ", "-")
+        if not next_code:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Codigo obligatorio.")
         existing = db.scalar(
             select(Almacen.id).where(
                 Almacen.empresa_id == context.empresa.id,
@@ -149,7 +189,7 @@ def update_warehouse(
             )
         warehouse.codigo = next_code
     if payload.descripcion is not None:
-        warehouse.descripcion = normalize_optional_text(payload.descripcion)
+        warehouse.descripcion = payload.descripcion.strip() or None
     if payload.activo is not None:
         warehouse.activo = payload.activo
 
@@ -186,7 +226,7 @@ def list_materials(
 ) -> MaterialListResponse:
     query = select(Material).where(Material.empresa_id == context.empresa.id).order_by(Material.nombre.asc())
     if not include_inactive:
-        query = query.where(Material.activo.is_(True))
+        query = query.where(Material.activo == True)
 
     materials = db.scalars(query).all()
     return MaterialListResponse(items=[serialize_material(material) for material in materials])

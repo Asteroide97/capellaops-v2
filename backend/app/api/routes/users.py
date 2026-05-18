@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -9,6 +11,15 @@ from app.schemas.common import EmpresaSummary, MeResponse, MembershipSummary, Us
 
 
 router = APIRouter(tags=["users"])
+
+
+def parse_impersonation_ends_at(raw_value: str | None) -> datetime | None:
+    if not raw_value:
+        return None
+    try:
+        return datetime.fromisoformat(raw_value)
+    except ValueError:
+        return None
 
 
 @router.get("/me", response_model=MeResponse)
@@ -50,5 +61,7 @@ def me(
             for membership in memberships
             if membership.empresa is not None
         ],
+        impersonation=bool(context.token_payload.get("impersonation")),
+        impersonated_by=context.token_payload.get("impersonated_by"),
+        impersonation_ends_at=parse_impersonation_ends_at(context.token_payload.get("impersonation_ends_at")),
     )
-

@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.models import AuditLog, Empresa, Usuario
@@ -47,6 +47,15 @@ def validate_inventory_access(user: Usuario, empresa: Empresa) -> None:
         )
 
 
+def count_active_warehouses(db: Session, empresa_id: str) -> int:
+    return db.scalar(
+        select(func.count(Almacen.id)).where(
+            Almacen.empresa_id == empresa_id,
+            Almacen.activo == True,
+        )
+    ) or 0
+
+
 def serialize_material(material: Material) -> MaterialItem:
     return MaterialItem(
         id=material.id,
@@ -76,6 +85,63 @@ def serialize_warehouse(warehouse: Almacen) -> WarehouseItem:
         created_at=warehouse.created_at,
         updated_at=warehouse.updated_at,
     )
+
+
+def create_warehouse_record(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    nombre: str,
+    codigo: str,
+    descripcion: str | None,
+    activo: bool,
+    ip_address: str | None,
+    audit_action: str = "inventory.warehouse.create",
+    fail_if_active_exists: bool = False,
+) -> Almacen:
+    normalized_name = normalize_required_text(nombre, "Nombre")
+    normalized_code = normalize_code(codigo, "Codigo")
+
+    if fail_if_active_exists and count_active_warehouses(db, empresa.id) > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La empresa ya tiene un almacÃ©n configurado.",
+        )
+
+    existing = db.scalar(
+        select(Almacen.id).where(
+            Almacen.empresa_id == empresa.id,
+            Almacen.codigo == normalized_code,
+        )
+    )
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe un almacen con ese codigo.",
+        )
+
+    warehouse = Almacen(
+        empresa_id=empresa.id,
+        nombre=normalized_name,
+        codigo=normalized_code,
+        descripcion=normalize_optional_text(descripcion),
+        activo=activo,
+    )
+    db.add(warehouse)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=empresa.id,
+            usuario_id=user.id,
+            action=audit_action,
+            entity_name="almacen",
+            entity_id=warehouse.id,
+            ip_address=ip_address,
+            metadata_json={"codigo": warehouse.codigo, "nombre": warehouse.nombre, "activo": warehouse.activo},
+        )
+    )
+    return warehouse
 
 
 def get_warehouse_for_company(db: Session, empresa_id: str, warehouse_id: str) -> Almacen:

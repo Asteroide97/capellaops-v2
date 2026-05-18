@@ -26,6 +26,7 @@ class Usuario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     phone_number: Mapped[str | None] = mapped_column(String(32), nullable=True)
     phone_e164: Mapped[str | None] = mapped_column(String(20), nullable=True)
     phone_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_superadmin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 

@@ -34,6 +34,12 @@ class WarehouseListResponse(BaseModel):
     items: list[WarehouseItem]
 
 
+class InventoryOnboardingStatusResponse(BaseModel):
+    requires_first_warehouse: bool
+    warehouses_count: int
+    message: str
+
+
 class MaterialCreateRequest(BaseModel):
     sku: str = Field(min_length=1, max_length=80)
     nombre: str = Field(min_length=1, max_length=180)

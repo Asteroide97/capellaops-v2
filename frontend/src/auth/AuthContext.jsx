@@ -1,11 +1,28 @@
 import { createContext, useContext, useEffect, useState } from "react";
 
-import { apiRequest } from "../api/client";
+import { apiRequest, getInventoryOnboardingStatus } from "../api/client";
 
 
 const AuthContext = createContext(null);
 const TOKEN_KEY = "capella_ops_token";
 const EMPRESA_KEY = "capella_ops_empresa_id";
+const ORIGINAL_SUPERADMIN_TOKEN_KEY = "capella_ops_original_superadmin_token";
+const ORIGINAL_SUPERADMIN_EMPRESA_KEY = "capella_ops_original_superadmin_empresa_id";
+
+const DEFAULT_ONBOARDING = {
+  requiresFirstWarehouse: false,
+  warehousesCount: 0,
+  message: "",
+};
+
+
+function buildOnboardingState(payload = DEFAULT_ONBOARDING) {
+  return {
+    requiresFirstWarehouse: Boolean(payload.requires_first_warehouse ?? payload.requiresFirstWarehouse),
+    warehousesCount: payload.warehouses_count ?? payload.warehousesCount ?? 0,
+    message: payload.message ?? "",
+  };
+}
 
 
 export function AuthProvider({ children }) {
@@ -16,6 +33,11 @@ export function AuthProvider({ children }) {
   const [membership, setMembership] = useState(null);
   const [empresas, setEmpresas] = useState([]);
   const [modules, setModules] = useState([]);
+  const [impersonation, setImpersonation] = useState(false);
+  const [impersonatedBy, setImpersonatedBy] = useState(null);
+  const [impersonationEndsAt, setImpersonationEndsAt] = useState(null);
+  const [inventoryOnboarding, setInventoryOnboarding] = useState(DEFAULT_ONBOARDING);
+  const [notice, setNotice] = useState("");
   const [ready, setReady] = useState(false);
 
   function persistSession(nextToken, nextEmpresaId) {
@@ -25,9 +47,20 @@ export function AuthProvider({ children }) {
     setEmpresaId(nextEmpresaId);
   }
 
+  function persistOriginalSuperadminSession(currentToken, currentEmpresaId) {
+    window.localStorage.setItem(ORIGINAL_SUPERADMIN_TOKEN_KEY, currentToken);
+    window.localStorage.setItem(ORIGINAL_SUPERADMIN_EMPRESA_KEY, currentEmpresaId);
+  }
+
+  function clearOriginalSuperadminSession() {
+    window.localStorage.removeItem(ORIGINAL_SUPERADMIN_TOKEN_KEY);
+    window.localStorage.removeItem(ORIGINAL_SUPERADMIN_EMPRESA_KEY);
+  }
+
   function clearSession() {
     window.localStorage.removeItem(TOKEN_KEY);
     window.localStorage.removeItem(EMPRESA_KEY);
+    clearOriginalSuperadminSession();
     setToken(null);
     setEmpresaId(null);
     setUser(null);
@@ -35,23 +68,55 @@ export function AuthProvider({ children }) {
     setMembership(null);
     setEmpresas([]);
     setModules([]);
+    setImpersonation(false);
+    setImpersonatedBy(null);
+    setImpersonationEndsAt(null);
+    setInventoryOnboarding(buildOnboardingState());
+    setNotice("");
   }
 
   async function hydrateSession(activeToken, activeEmpresaId) {
-    const me = await apiRequest("/me", {
-      token: activeToken,
-      empresaId: activeEmpresaId,
-    });
-    const moduleResponse = await apiRequest("/modules", {
-      token: activeToken,
-      empresaId: activeEmpresaId,
-    });
+    const [me, moduleResponse] = await Promise.all([
+      apiRequest("/me", {
+        token: activeToken,
+        empresaId: activeEmpresaId,
+      }),
+      apiRequest("/modules", {
+        token: activeToken,
+        empresaId: activeEmpresaId,
+      }),
+    ]);
 
     setUser(me.user);
     setEmpresa(me.empresa);
     setMembership(me.membership);
     setEmpresas(me.empresas);
     setModules(moduleResponse.modules);
+    setImpersonation(Boolean(me.impersonation));
+    setImpersonatedBy(me.impersonated_by ?? null);
+    setImpersonationEndsAt(me.impersonation_ends_at ?? null);
+    setInventoryOnboarding(buildOnboardingState());
+
+    const inventoryModule = moduleResponse.modules.find(
+      (module) => module.name === "inventory" && module.enabled,
+    );
+    const shouldCheckOnboarding = Boolean(inventoryModule) && !me.user.is_superadmin;
+    if (shouldCheckOnboarding) {
+      try {
+        const nextOnboarding = await getInventoryOnboardingStatus({
+          token: activeToken,
+          empresaId: activeEmpresaId,
+        });
+        setInventoryOnboarding(buildOnboardingState(nextOnboarding));
+      } catch (error) {
+        if (error?.status === 401) {
+          throw error;
+        }
+
+        setInventoryOnboarding(buildOnboardingState());
+        setNotice("No se pudo validar el estado inicial de inventario.");
+      }
+    }
   }
 
   async function login(credentials) {
@@ -60,16 +125,9 @@ export function AuthProvider({ children }) {
       body: credentials,
     });
 
+    setNotice("");
     persistSession(response.access_token, response.empresa.id);
-    setUser(response.user);
-    setEmpresa(response.empresa);
-    setMembership(response.membership);
-    setEmpresas([response.empresa]);
-    const moduleResponse = await apiRequest("/modules", {
-      token: response.access_token,
-      empresaId: response.empresa.id,
-    });
-    setModules(moduleResponse.modules);
+    await hydrateSession(response.access_token, response.empresa.id);
   }
 
   async function registerStart(payload) {
@@ -99,16 +157,9 @@ export function AuthProvider({ children }) {
       },
     });
 
+    setNotice("");
     persistSession(response.access_token, response.empresa.id);
-    setUser(response.user);
-    setEmpresa(response.empresa);
-    setMembership(response.membership);
-    setEmpresas([response.empresa]);
-    const moduleResponse = await apiRequest("/modules", {
-      token: response.access_token,
-      empresaId: response.empresa.id,
-    });
-    setModules(moduleResponse.modules);
+    await hydrateSession(response.access_token, response.empresa.id);
   }
 
   async function refreshSession(nextEmpresaId = empresaId) {
@@ -117,6 +168,38 @@ export function AuthProvider({ children }) {
     }
 
     await hydrateSession(token, nextEmpresaId);
+  }
+
+  async function startImpersonationSession(nextSession) {
+    if (!token || !empresaId) {
+      throw new Error("No hay una sesión base para iniciar la impersonación.");
+    }
+
+    if (!impersonation) {
+      persistOriginalSuperadminSession(token, empresaId);
+    }
+
+    persistSession(nextSession.access_token, nextSession.empresa_id);
+    await hydrateSession(nextSession.access_token, nextSession.empresa_id);
+    setNotice("Impersonación iniciada.");
+  }
+
+  async function exitImpersonation() {
+    const originalToken = window.localStorage.getItem(ORIGINAL_SUPERADMIN_TOKEN_KEY);
+    const originalEmpresaId = window.localStorage.getItem(ORIGINAL_SUPERADMIN_EMPRESA_KEY);
+
+    if (!originalToken || !originalEmpresaId) {
+      throw new Error("No hay una impersonación activa.");
+    }
+
+    clearOriginalSuperadminSession();
+    persistSession(originalToken, originalEmpresaId);
+    await hydrateSession(originalToken, originalEmpresaId);
+    setNotice("Impersonación finalizada.");
+  }
+
+  function dismissNotice() {
+    setNotice("");
   }
 
   function logout() {
@@ -134,9 +217,13 @@ export function AuthProvider({ children }) {
 
       try {
         await hydrateSession(token, empresaId);
-      } catch {
+      } catch (error) {
         if (!cancelled) {
-          clearSession();
+          if (error?.status === 401) {
+            clearSession();
+          } else {
+            setNotice(error?.message ?? "No se pudo actualizar la sesión actual.");
+          }
         }
       } finally {
         if (!cancelled) {
@@ -167,11 +254,21 @@ export function AuthProvider({ children }) {
     empresas,
     modules,
     ready,
+    impersonation,
+    impersonatedBy,
+    impersonationEndsAt,
+    requiresFirstWarehouse: inventoryOnboarding.requiresFirstWarehouse,
+    warehousesCount: inventoryOnboarding.warehousesCount,
+    onboardingMessage: inventoryOnboarding.message,
+    notice,
     login,
     registerStart,
     registerVerify,
-    logout,
     refreshSession,
+    startImpersonationSession,
+    exitImpersonation,
+    dismissNotice,
+    logout,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -6,6 +6,8 @@ Estado actual:
 - Core multiempresa operativo
 - Registro con reCAPTCHA v3 y Twilio Verify SMS
 - Inventario Fase 1 implementado
+- Onboarding obligatorio de primer almacén
+- Portal Superadmin operativo
 
 ## Stack
 
@@ -86,6 +88,8 @@ uvicorn app.main:app --reload
 - `GET /inventory/warehouses`
 - `POST /inventory/warehouses`
 - `PUT /inventory/warehouses/{id}`
+- `GET /inventory/onboarding-status`
+- `POST /inventory/first-warehouse`
 - `GET /inventory/materials`
 - `POST /inventory/materials`
 - `PUT /inventory/materials/{id}`
@@ -93,6 +97,14 @@ uvicorn app.main:app --reload
 - `GET /inventory/movements`
 - `GET /inventory/materials/{id}/kardex`
 - `POST /inventory/movements`
+- `GET /superadmin/overview`
+- `GET /superadmin/companies`
+- `GET /superadmin/companies/{id}`
+- `PATCH /superadmin/companies/{id}/access`
+- `GET /superadmin/users`
+- `GET /superadmin/users/{id}`
+- `POST /superadmin/impersonate`
+- `GET /superadmin/audit-logs`
 
 ### Flujo de registro
 
@@ -100,6 +112,14 @@ uvicorn app.main:app --reload
    Valida reCAPTCHA, verifica que el correo y el telefono no existan todavia, crea o actualiza `PendingRegistration` y envia un codigo por SMS con Twilio Verify.
 2. `POST /auth/register/verify`
    Verifica el codigo de 6 digitos por SMS y solo entonces crea `Empresa`, `Usuario`, `EmpresaUsuario`, `EmpresaModulo` y `AuditLog`.
+
+### Onboarding de Inventario
+
+1. Si la empresa no tiene almacenes activos y el usuario no es superadmin, la app fuerza el setup inicial.
+2. `GET /inventory/onboarding-status`
+   Indica si la empresa debe crear su primer almacén.
+3. `POST /inventory/first-warehouse`
+   Crea el primer almacén y desbloquea el dashboard normal.
 
 ### Variables relevantes
 
@@ -172,6 +192,18 @@ npm run dev
 4. Consultar `GET /inventory/stock`.
 5. Registrar una `salida` o un `ajuste`.
 6. Consultar `GET /inventory/materials/{id}/kardex`.
+
+## Superadmin
+
+- Todos los endpoints `/superadmin` requieren usuario autenticado con `is_superadmin=true`.
+- Un token impersonado no puede acceder al portal Superadmin.
+- El portal permite:
+  - ver overview operativo
+  - listar empresas y usuarios
+  - cambiar plan y `access_status` con razón obligatoria
+  - revisar auditoría reciente
+  - impersonar un usuario por 15 minutos máximo
+- `Usuario.last_login_at` se actualiza en logins exitosos.
 
 ## Reglas implementadas
 

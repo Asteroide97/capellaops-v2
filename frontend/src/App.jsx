@@ -1,11 +1,12 @@
-import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
 import { useAuth } from "./auth/AuthContext";
 import AppLayout from "./components/AppLayout";
 import FeaturePlaceholder from "./components/FeaturePlaceholder";
-import DashboardPage from "./pages/DashboardPage";
 import BillingPendingPage from "./pages/BillingPendingPage";
 import CrmPage from "./pages/CrmPage";
+import DashboardPage from "./pages/DashboardPage";
+import FirstWarehouseSetupPage from "./pages/FirstWarehouseSetupPage";
 import InventoryPage from "./pages/InventoryPage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
@@ -16,7 +17,9 @@ import SuperadminPage from "./pages/SuperadminPage";
 
 
 function ProtectedRoute() {
-  const { token, ready } = useAuth();
+  const location = useLocation();
+  const { token, ready, requiresFirstWarehouse } = useAuth();
+  const setupPath = "/configuracion-inicial/almacen";
 
   if (!ready) {
     return <div className="screen-center">Cargando sesión...</div>;
@@ -24,6 +27,15 @@ function ProtectedRoute() {
 
   if (!token) {
     return <Navigate to="/login" replace />;
+  }
+
+  const isSetupRoute = location.pathname === setupPath;
+  if (requiresFirstWarehouse && !isSetupRoute) {
+    return <Navigate to={setupPath} replace />;
+  }
+
+  if (!requiresFirstWarehouse && isSetupRoute) {
+    return <Navigate to="/" replace />;
   }
 
   return <Outlet />;
@@ -92,6 +104,8 @@ export default function App() {
       />
 
       <Route element={<ProtectedRoute />}>
+        <Route path="/configuracion-inicial/almacen" element={<FirstWarehouseSetupPage />} />
+
         <Route element={<AppLayout />}>
           <Route index element={<DashboardPage />} />
           <Route

@@ -135,6 +135,21 @@ export function getWarehouses({ token, empresaId, includeInactive = true }) {
 }
 
 
+export function getInventoryOnboardingStatus({ token, empresaId }) {
+  return apiRequest("/inventory/onboarding-status", { token, empresaId });
+}
+
+
+export function createFirstWarehouse({ token, empresaId, payload }) {
+  return apiRequest("/inventory/first-warehouse", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function createWarehouse({ token, empresaId, payload }) {
   return apiRequest("/inventory/warehouses", {
     method: "POST",
@@ -220,6 +235,75 @@ export function getMaterialKardex({ materialId, token, empresaId, almacenId }) {
     token,
     empresaId,
   });
+}
+
+
+export function getSuperadminOverview({ token }) {
+  return apiRequest("/superadmin/overview", { token });
+}
+
+
+export function getSuperadminCompanies({ token, filters = {} }) {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+  const suffix = query.toString();
+  return apiRequest(`/superadmin/companies${suffix ? `?${suffix}` : ""}`, { token });
+}
+
+
+export function getSuperadminCompanyDetail({ empresaId, token }) {
+  return apiRequest(`/superadmin/companies/${empresaId}`, { token });
+}
+
+
+export function getSuperadminUsers({ token, filters = {} }) {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+  const suffix = query.toString();
+  return apiRequest(`/superadmin/users${suffix ? `?${suffix}` : ""}`, { token });
+}
+
+
+export function getSuperadminUserDetail({ usuarioId, token }) {
+  return apiRequest(`/superadmin/users/${usuarioId}`, { token });
+}
+
+
+export function updateCompanyAccess({ empresaId, token, payload }) {
+  return apiRequest(`/superadmin/companies/${empresaId}/access`, {
+    method: "PATCH",
+    body: payload,
+    token,
+  });
+}
+
+
+export function impersonateUser({ token, payload }) {
+  return apiRequest("/superadmin/impersonate", {
+    method: "POST",
+    body: payload,
+    token,
+  });
+}
+
+
+export function getSuperadminAuditLogs({ token, filters = {} }) {
+  const query = new URLSearchParams();
+  Object.entries(filters).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      query.set(key, String(value));
+    }
+  });
+  const suffix = query.toString();
+  return apiRequest(`/superadmin/audit-logs${suffix ? `?${suffix}` : ""}`, { token });
 }
 
 

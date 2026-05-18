@@ -17,12 +17,23 @@ def get_password_hash(password: str) -> str:
     return password_hash.hash(password)
 
 
-def create_access_token(subject: str, empresa_id: str, extra_claims: dict | None = None) -> str:
+def build_token_expiration(expires_minutes: int | None = None) -> datetime:
+    settings = get_settings()
+    ttl_minutes = expires_minutes if expires_minutes is not None else settings.access_token_expire_minutes
+    return datetime.now(timezone.utc) + timedelta(minutes=ttl_minutes)
+
+
+def create_access_token(
+    subject: str,
+    empresa_id: str,
+    extra_claims: dict | None = None,
+    expires_minutes: int | None = None,
+) -> str:
     settings = get_settings()
     payload = {
         "sub": subject,
         "empresa_id": empresa_id,
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes),
+        "exp": build_token_expiration(expires_minutes),
     }
     if extra_claims:
         payload.update(extra_claims)
@@ -32,4 +43,3 @@ def create_access_token(subject: str, empresa_id: str, extra_claims: dict | None
 def decode_access_token(token: str) -> dict:
     settings = get_settings()
     return jwt.decode(token, settings.secret_key, algorithms=["HS256"])
-
