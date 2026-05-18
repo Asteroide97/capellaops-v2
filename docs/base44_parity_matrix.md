@@ -41,15 +41,15 @@ La regla de esta matriz es simple: no asumir que una funcionalidad existe en V2 
 | Inventario | Conexión con POS | Pendiente | Crítica | POS F1 | POS aún no se implementa. | Ventas sin salida automática de stock. |
 | Inventario | Conexión con compras | Pendiente | Alta | Compras F1 | Compras aún no existen en V2. | Entradas sin origen documental. |
 | Inventario | Conexión con PM | Pendiente | Media | PM F2 | PM aún no existe en V2. | Materiales de proyecto sin trazabilidad. |
-| POS | Punto de venta | Pendiente | Crítica | POS F1 | No implementado. | No hay operación de venta en mostrador. |
-| POS | Carrito | Pendiente | Alta | POS F1 | No implementado. | Flujo de venta incompleto. |
-| POS | Ventas | Pendiente | Crítica | POS F1 | No implementado. | Sin transacciones comerciales operables. |
-| POS | Métodos de pago | Pendiente | Alta | POS F1 | No implementado. | Cobro no registrable. |
-| POS | Descuentos | Pendiente | Media | POS F2 | No implementado. | Reglas comerciales limitadas. |
-| POS | Tickets | Pendiente | Media | POS F1 | No implementado. | Mala experiencia de cierre de venta. |
+| POS | Punto de venta | Parcial | Crítica | POS F1 | Ya existe venta base conectada a inventario, pero corte de caja y flujo mas rico siguen pendientes. | Operación de mostrador incompleta frente al alcance final. |
+| POS | Carrito | Implementado | Alta | POS F1 | Existe carrito funcional en frontend conectado al backend de ventas. | Flujo de venta incompleto si faltara. |
+| POS | Ventas | Implementado | Crítica | POS F1 | Las ventas se guardan, calculan en backend y descuentan inventario. | Sin transacciones comerciales operables. |
+| POS | Métodos de pago | Parcial | Alta | POS F1 | Existe metodo de pago simple; pagos mixtos formales siguen pendientes. | Cobro limitado para escenarios reales mas complejos. |
+| POS | Descuentos | Parcial | Media | POS F1 | Existe descuento simple por linea, pero faltan promociones y reglas avanzadas. | Reglas comerciales limitadas. |
+| POS | Tickets | Parcial | Media | POS F1 | Ya existe ticket basico de consulta; ticket imprimible formal sigue pendiente. | Mala experiencia de cierre si no evoluciona. |
 | POS | Corte de caja | Pendiente | Alta | POS F2 | No implementado. | Riesgo financiero y operativo. |
-| POS | Salida automática de inventario | Pendiente | Crítica | POS F1 | Depende de POS + movimientos de inventario. | Stock falso después de vender. |
-| POS | Venta pendiente / cancelación | Pendiente | Alta | POS F2 | No implementado. | Operación rígida en caja. |
+| POS | Salida automática de inventario | Implementado | Crítica | POS F1 | Cada venta pagada crea movimientos de salida por línea. | Stock falso después de vender. |
+| POS | Venta pendiente / cancelación | Parcial | Alta | POS F1 | Ya existe cancelacion basica de venta pagada con retorno de stock, pero no venta pendiente ni flujo de anulacion avanzado. | Operación rígida en caja. |
 | POS | Conexión futura con facturación | Pendiente | Alta | POS F3 | Depende de facturación. | Venta desconectada del CFDI. |
 | Facturación | CFDI 4.0 | Congelado | Crítica | Facturación F1 | Explicitamente fuera de alcance actual. | No se puede facturar fiscalmente. |
 | Facturación | Factura.com | Congelado | Alta | Facturación F1 | Explicitamente fuera de alcance actual. | Integración fiscal no disponible. |

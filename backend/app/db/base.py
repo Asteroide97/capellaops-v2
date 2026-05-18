@@ -15,6 +15,8 @@ from app.models import (
     TransferenciaInventario,
     TransferenciaInventarioDetalle,
     Usuario,
+    Venta,
+    VentaDetalle,
 )
 
 __all__ = [
@@ -34,4 +36,6 @@ __all__ = [
     "TransferenciaInventario",
     "TransferenciaInventarioDetalle",
     "Usuario",
+    "Venta",
+    "VentaDetalle",
 ]

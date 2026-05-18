@@ -445,6 +445,62 @@ export function cancelCount({ countId, token, empresaId }) {
 }
 
 
+export function getPosCatalog({ token, empresaId, almacenId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "almacen_id", almacenId);
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pos/catalog${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getPosSales({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "almacen_id", filters.almacen_id);
+  appendQueryValue(query, "metodo_pago", filters.metodo_pago);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pos/sales${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getPosSaleDetail({ saleId, token, empresaId }) {
+  return apiRequest(`/pos/sales/${saleId}`, { token, empresaId });
+}
+
+
+export function createPosSale({ token, empresaId, payload }) {
+  return apiRequest("/pos/sales", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelPosSale({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/cancel`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPosTicket({ saleId, token, empresaId }) {
+  return apiRequest(`/pos/ticket/${saleId}`, { token, empresaId });
+}
+
+
 export function getSuperadminOverview({ token }) {
   return apiRequest("/superadmin/overview", { token });
 }

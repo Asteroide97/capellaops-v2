@@ -7,6 +7,7 @@ Estado actual:
 - Registro con reCAPTCHA v3 y Twilio Verify SMS
 - Inventario Fase 1 implementado
 - Inventario Fase 1.2 implementado
+- POS Fase 1 implementado
 - Onboarding obligatorio de primer almacén
 - Portal Superadmin operativo
 
@@ -144,6 +145,12 @@ Notas:
 - `DELETE /inventory/counts/{id}/details/{detail_id}`
 - `POST /inventory/counts/{id}/apply`
 - `POST /inventory/counts/{id}/cancel`
+- `GET /pos/catalog`
+- `GET /pos/sales`
+- `GET /pos/sales/{id}`
+- `POST /pos/sales`
+- `POST /pos/sales/{id}/cancel`
+- `GET /pos/ticket/{id}`
 - `GET /superadmin/overview`
 - `GET /superadmin/companies`
 - `GET /superadmin/companies/{id}`
@@ -284,6 +291,61 @@ npm run dev
 4. Consultar `GET /inventory/stock`.
 5. Registrar una `salida` o un `ajuste`.
 6. Consultar `GET /inventory/materials/{id}/kardex`.
+
+## POS Fase 1
+
+- Todo endpoint POS valida autenticacion, contexto de empresa y acceso al modulo `pos`.
+- Toda venta se guarda con `empresa_id`, `almacen_id` y `usuario_id`.
+- El total final se calcula en backend; no se confia en totales enviados por frontend.
+- Cada venta pagada descuenta inventario automaticamente con movimientos tipo `salida`.
+- La cancelacion basica devuelve stock con movimientos tipo `entrada`.
+- No se permite vender materiales inactivos.
+- No se permite vender desde almacenes inactivos.
+- No se permite stock negativo.
+
+### Endpoints POS
+
+- `GET /pos/catalog`
+  Soporta `almacen_id`, `q`, `limit`, `offset`.
+- `GET /pos/sales`
+  Soporta `q`, `estatus`, `almacen_id`, `metodo_pago`, `fecha_desde`, `fecha_hasta`, `limit`, `offset`.
+- `GET /pos/sales/{id}`
+  Devuelve venta con detalles.
+- `POST /pos/sales`
+  Crea una venta pagada y descuenta inventario.
+- `POST /pos/sales/{id}/cancel`
+  Cancela una venta pagada y devuelve inventario.
+- `GET /pos/ticket/{id}`
+  Devuelve datos basicos de ticket para mostrar o imprimir despues.
+
+### Flujo basico de venta
+
+1. Seleccionar almacen.
+2. Consultar `GET /pos/catalog`.
+3. Agregar productos al carrito.
+4. Elegir metodo de pago.
+5. Ejecutar `POST /pos/sales`.
+6. El backend crea la venta, sus detalles y los movimientos de salida de inventario.
+7. Consultar `GET /pos/ticket/{id}` para mostrar el ticket basico.
+
+### Regla de salida automatica de inventario
+
+- Cada linea vendida crea un movimiento tipo `salida` en el almacen seleccionado.
+- Si falla cualquier linea, la venta no se confirma y no se descuenta stock parcial.
+
+### Regla de cancelacion en esta fase
+
+- Solo se pueden cancelar ventas con estatus `pagada`.
+- La cancelacion crea movimientos tipo `entrada` para devolver stock.
+- No se permite cancelar dos veces la misma venta.
+
+### Pendientes POS
+
+- Corte de caja.
+- Pagos mixtos formales con desglose por metodo.
+- Descuentos avanzados y reglas promocionales.
+- Factura fiscal / CFDI.
+- Ticket imprimible formal.
 
 ## Superadmin
 

@@ -11,6 +11,7 @@ from app.models.inventory import (
     TransferenciaInventario,
     TransferenciaInventarioDetalle,
 )
+from app.models.pos import Venta, VentaDetalle
 from app.models.user import EmpresaUsuario, PendingRegistration, Usuario
 
 __all__ = [
@@ -30,4 +31,6 @@ __all__ = [
     "TransferenciaInventario",
     "TransferenciaInventarioDetalle",
     "Usuario",
+    "Venta",
+    "VentaDetalle",
 ]
