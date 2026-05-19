@@ -7,13 +7,26 @@ import BillingPendingPage from "./pages/BillingPendingPage";
 import CrmPage from "./pages/CrmPage";
 import DashboardPage from "./pages/DashboardPage";
 import FirstWarehouseSetupPage from "./pages/FirstWarehouseSetupPage";
-import InventoryPage from "./pages/InventoryPage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
 import PmPage from "./pages/PmPage";
 import PosPage from "./pages/PosPage";
 import RegisterPage from "./pages/RegisterPage";
 import SuperadminPage from "./pages/SuperadminPage";
+import AssetsPage from "./pages/inventory/AssetsPage";
+import InventoryLayout from "./pages/inventory/InventoryLayout";
+import InventoryReportsPage from "./pages/inventory/InventoryReportsPage";
+import InventorySummaryPage from "./pages/inventory/InventorySummaryPage";
+import KardexPage from "./pages/inventory/KardexPage";
+import MaterialsPage from "./pages/inventory/MaterialsPage";
+import MovementsPage from "./pages/inventory/MovementsPage";
+import ProjectsInventoryPage from "./pages/inventory/ProjectsInventoryPage";
+import PurchaseOrdersPage from "./pages/inventory/PurchaseOrdersPage";
+import RequisitionsPage from "./pages/inventory/RequisitionsPage";
+import SuppliersPage from "./pages/inventory/SuppliersPage";
+import TransfersPage from "./pages/inventory/TransfersPage";
+import WarehousesPage from "./pages/inventory/WarehousesPage";
+import WorkOrdersPage from "./pages/inventory/WorkOrdersPage";
 
 
 function ProtectedRoute() {
@@ -112,10 +125,25 @@ export default function App() {
             path="/inventario"
             element={
               <ModuleRoute moduleName="inventory">
-                <InventoryPage />
+                <InventoryLayout />
               </ModuleRoute>
             }
-          />
+          >
+            <Route index element={<Navigate replace to="/inventario/resumen" />} />
+            <Route path="resumen" element={<InventorySummaryPage />} />
+            <Route path="almacenes" element={<WarehousesPage />} />
+            <Route path="materiales" element={<MaterialsPage />} />
+            <Route path="movimientos" element={<MovementsPage />} />
+            <Route path="kardex" element={<KardexPage />} />
+            <Route path="traspasos" element={<TransfersPage />} />
+            <Route path="proveedores" element={<SuppliersPage />} />
+            <Route path="ordenes-compra" element={<PurchaseOrdersPage />} />
+            <Route path="requisiciones" element={<RequisitionsPage />} />
+            <Route path="proyectos" element={<ProjectsInventoryPage />} />
+            <Route path="equipos" element={<AssetsPage />} />
+            <Route path="ordenes-trabajo" element={<WorkOrdersPage />} />
+            <Route path="reportes" element={<InventoryReportsPage />} />
+          </Route>
           <Route
             path="/pos"
             element={

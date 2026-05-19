@@ -1,0 +1,80 @@
+export const inventoryNavItems = [
+  {
+    key: "resumen",
+    label: "Resumen",
+    path: "/inventario/resumen",
+    description: "Vista operativa general, stock y alertas.",
+  },
+  {
+    key: "almacenes",
+    label: "Almacenes",
+    path: "/inventario/almacenes",
+    description: "Configuración y consulta de almacenes activos.",
+  },
+  {
+    key: "materiales",
+    label: "Materiales",
+    path: "/inventario/materiales",
+    description: "Catálogo de materiales y precios base.",
+  },
+  {
+    key: "movimientos",
+    label: "Movimientos",
+    path: "/inventario/movimientos",
+    description: "Entradas, salidas y ajustes manuales.",
+  },
+  {
+    key: "kardex",
+    label: "Kardex",
+    path: "/inventario/kardex",
+    description: "Historial detallado por material y almacén.",
+  },
+  {
+    key: "traspasos",
+    label: "Traspasos",
+    path: "/inventario/traspasos",
+    description: "Transferencias entre almacenes y conteos físicos.",
+  },
+  {
+    key: "proveedores",
+    label: "Proveedores",
+    path: "/inventario/proveedores",
+    description: "Directorio base de proveedores.",
+  },
+  {
+    key: "ordenes-compra",
+    label: "Órdenes de compra",
+    path: "/inventario/ordenes-compra",
+    description: "Emisión y recepción de compras.",
+  },
+  {
+    key: "requisiciones",
+    label: "Requisiciones",
+    path: "/inventario/requisiciones",
+    description: "Solicitudes internas de materiales.",
+  },
+  {
+    key: "proyectos",
+    label: "Proyectos",
+    path: "/inventario/proyectos",
+    description: "Relación futura entre inventario y proyectos.",
+  },
+  {
+    key: "equipos",
+    label: "Equipos",
+    path: "/inventario/equipos",
+    description: "Control futuro de equipos y activos.",
+  },
+  {
+    key: "ordenes-trabajo",
+    label: "Órdenes de trabajo",
+    path: "/inventario/ordenes-trabajo",
+    description: "Consumo y seguimiento operativo futuro.",
+  },
+  {
+    key: "reportes",
+    label: "Reportes",
+    path: "/inventario/reportes",
+    description: "Paneles y exportaciones operativas futuras.",
+  },
+];

@@ -1,15 +1,17 @@
 # Capella Ops V2
 
-Monorepo inicial para un SaaS multiempresa con Azure SQL, FastAPI y React + Vite.
+Monorepo para un SaaS multiempresa con Azure SQL, FastAPI y React + Vite.
 
-Estado actual:
+## Estado actual
+
 - Core multiempresa operativo
 - Registro con reCAPTCHA v3 y Twilio Verify SMS
-- Inventario Fase 1 implementado
-- Inventario Fase 1.2 implementado
-- POS Fase 1 implementado
 - Onboarding obligatorio de primer almacén
 - Portal Superadmin operativo
+- Inventario Shell operativo con navegación lateral desplegable
+- Inventario Fase 1.2 operativo
+- Compras Fase 1 operativa dentro del dominio de Inventario
+- POS Fase 1 operativo
 
 ## Stack
 
@@ -19,7 +21,7 @@ Estado actual:
 - ORM: SQLAlchemy
 - Migraciones: Alembic
 - Auth: JWT propio
-- Verificacion de telefono: Twilio Verify SMS
+- Verificación de teléfono: Twilio Verify SMS
 - Antibot: reCAPTCHA validado en backend
 
 ## Estructura
@@ -61,7 +63,7 @@ Copy-Item .env.example .env
 alembic upgrade head
 ```
 
-4. Sembrar planes:
+4. Sembrar datos base:
 
 ```powershell
 python -m app.seed
@@ -101,96 +103,9 @@ python -m app.scripts.manage_superadmin demote --email "correo@dominio.com" --re
 
 Notas:
 
-- Si omites `--confirm`, el script solo muestra lo que haria y no escribe cambios.
+- Si omites `--confirm`, el script solo muestra lo que haría y no escribe cambios.
 - El script solo cambia `usuarios.is_superadmin`.
-- El script no toca `empresa_usuarios`, empresas, planes ni modulos.
-
-### Endpoints incluidos
-
-- `GET /health`
-- `POST /auth/register/start`
-- `POST /auth/register/verify`
-- `POST /auth/login`
-- `GET /me`
-- `GET /modules`
-- `GET /inventory/warehouses`
-- `GET /inventory/warehouses/{id}`
-- `POST /inventory/warehouses`
-- `PUT /inventory/warehouses/{id}`
-- `GET /inventory/onboarding-status`
-- `POST /inventory/first-warehouse`
-- `GET /inventory/materials`
-- `GET /inventory/materials/{id}`
-- `POST /inventory/materials`
-- `PUT /inventory/materials/{id}`
-- `GET /inventory/stock`
-- `GET /inventory/movements`
-- `GET /inventory/materials/{id}/kardex`
-- `POST /inventory/movements`
-- `GET /inventory/transfers`
-- `GET /inventory/transfers/{id}`
-- `POST /inventory/transfers`
-- `PUT /inventory/transfers/{id}`
-- `POST /inventory/transfers/{id}/details`
-- `PUT /inventory/transfers/{id}/details/{detail_id}`
-- `DELETE /inventory/transfers/{id}/details/{detail_id}`
-- `POST /inventory/transfers/{id}/confirm`
-- `POST /inventory/transfers/{id}/cancel`
-- `GET /inventory/counts`
-- `GET /inventory/counts/{id}`
-- `POST /inventory/counts`
-- `PUT /inventory/counts/{id}`
-- `POST /inventory/counts/{id}/details`
-- `PUT /inventory/counts/{id}/details/{detail_id}`
-- `DELETE /inventory/counts/{id}/details/{detail_id}`
-- `POST /inventory/counts/{id}/apply`
-- `POST /inventory/counts/{id}/cancel`
-- `GET /pos/catalog`
-- `GET /pos/sales`
-- `GET /pos/sales/{id}`
-- `POST /pos/sales`
-- `POST /pos/sales/{id}/cancel`
-- `GET /pos/ticket/{id}`
-- `GET /superadmin/overview`
-- `GET /superadmin/companies`
-- `GET /superadmin/companies/{id}`
-- `PATCH /superadmin/companies/{id}/access`
-- `GET /superadmin/users`
-- `GET /superadmin/users/{id}`
-- `POST /superadmin/impersonate`
-- `GET /superadmin/audit-logs`
-
-### Flujo de registro
-
-1. `POST /auth/register/start`
-   Valida reCAPTCHA, verifica que el correo y el telefono no existan todavia, crea o actualiza `PendingRegistration` y envia un codigo por SMS con Twilio Verify.
-2. `POST /auth/register/verify`
-   Verifica el codigo de 6 digitos por SMS y solo entonces crea `Empresa`, `Usuario`, `EmpresaUsuario`, `EmpresaModulo` y `AuditLog`.
-
-### Onboarding de Inventario
-
-1. Si la empresa no tiene almacenes activos y el usuario no es superadmin, la app fuerza el setup inicial.
-2. `GET /inventory/onboarding-status`
-   Indica si la empresa debe crear su primer almacén.
-3. `POST /inventory/first-warehouse`
-   Crea el primer almacén y desbloquea el dashboard normal.
-
-### Variables relevantes
-
-- `DATABASE_URL`
-- `AZURE_SQL_SERVER`
-- `AZURE_SQL_DATABASE`
-- `AZURE_SQL_USERNAME`
-- `AZURE_SQL_PASSWORD`
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_VERIFY_SERVICE_SID`
-- `TWILIO_VERIFY_CHANNEL`
-- `VERIFY_DEV_MODE`
-- `VERIFY_DEV_CODE`
-- `RECAPTCHA_SECRET_KEY`
-- `RECAPTCHA_MIN_SCORE`
-- `RECAPTCHA_ENABLED`
+- El script no toca `empresa_usuarios`, empresas, planes ni módulos.
 
 ## Frontend
 
@@ -213,168 +128,249 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-### Variables relevantes
+## Variables relevantes
+
+### Backend
+
+- `DATABASE_URL`
+- `AZURE_SQL_SERVER`
+- `AZURE_SQL_DATABASE`
+- `AZURE_SQL_USERNAME`
+- `AZURE_SQL_PASSWORD`
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_VERIFY_SERVICE_SID`
+- `TWILIO_VERIFY_CHANNEL`
+- `VERIFY_DEV_MODE`
+- `VERIFY_DEV_CODE`
+- `RECAPTCHA_SECRET_KEY`
+- `RECAPTCHA_MIN_SCORE`
+- `RECAPTCHA_ENABLED`
+
+### Frontend
 
 - `VITE_API_URL`
 - `VITE_RECAPTCHA_SITE_KEY`
 
 ## Base de datos
 
-- Produccion: usar Azure SQL mediante `DATABASE_URL` o variables `AZURE_SQL_*`.
-- Alembic toma la URL resuelta desde `backend/.env`, sin depender del directorio desde donde se ejecute el comando.
-- Si no se configura Azure SQL, el backend cae en SQLite local solo para smoke tests rapidos.
+- Producción: usar Azure SQL mediante `DATABASE_URL` o variables `AZURE_SQL_*`.
+- Alembic toma la URL resuelta desde `backend/.env`.
+- Si no se configura Azure SQL, el backend puede caer en SQLite local solo para smoke tests rápidos.
 - Para aplicar cambios de esquema, ejecutar `alembic upgrade head`.
+
+## Endpoints incluidos
+
+### Core
+
+- `GET /health`
+- `POST /auth/register/start`
+- `POST /auth/register/verify`
+- `POST /auth/login`
+- `GET /me`
+- `GET /modules`
+
+### Onboarding de inventario
+
+- `GET /inventory/onboarding-status`
+- `POST /inventory/first-warehouse`
+
+### Inventario base
+
+- `GET /inventory/warehouses`
+- `GET /inventory/warehouses/{id}`
+- `POST /inventory/warehouses`
+- `PUT /inventory/warehouses/{id}`
+- `GET /inventory/materials`
+- `GET /inventory/materials/{id}`
+- `POST /inventory/materials`
+- `PUT /inventory/materials/{id}`
+- `GET /inventory/stock`
+- `GET /inventory/movements`
+- `POST /inventory/movements`
+- `GET /inventory/materials/{id}/kardex`
+
+### Traspasos y conteos
+
+- `GET /inventory/transfers`
+- `GET /inventory/transfers/{id}`
+- `POST /inventory/transfers`
+- `PUT /inventory/transfers/{id}`
+- `POST /inventory/transfers/{id}/details`
+- `PUT /inventory/transfers/{id}/details/{detail_id}`
+- `DELETE /inventory/transfers/{id}/details/{detail_id}`
+- `POST /inventory/transfers/{id}/confirm`
+- `POST /inventory/transfers/{id}/cancel`
+- `GET /inventory/counts`
+- `GET /inventory/counts/{id}`
+- `POST /inventory/counts`
+- `PUT /inventory/counts/{id}`
+- `POST /inventory/counts/{id}/details`
+- `PUT /inventory/counts/{id}/details/{detail_id}`
+- `DELETE /inventory/counts/{id}/details/{detail_id}`
+- `POST /inventory/counts/{id}/apply`
+- `POST /inventory/counts/{id}/cancel`
+
+### Compras Fase 1
+
+- `GET /inventory/suppliers`
+- `POST /inventory/suppliers`
+- `GET /inventory/suppliers/{id}`
+- `PUT /inventory/suppliers/{id}`
+- `GET /inventory/requisitions`
+- `POST /inventory/requisitions`
+- `GET /inventory/requisitions/{id}`
+- `PUT /inventory/requisitions/{id}`
+- `POST /inventory/requisitions/{id}/details`
+- `PUT /inventory/requisitions/{id}/details/{detail_id}`
+- `DELETE /inventory/requisitions/{id}/details/{detail_id}`
+- `POST /inventory/requisitions/{id}/submit`
+- `POST /inventory/requisitions/{id}/approve`
+- `POST /inventory/requisitions/{id}/reject`
+- `POST /inventory/requisitions/{id}/cancel`
+- `GET /inventory/purchase-orders`
+- `POST /inventory/purchase-orders`
+- `GET /inventory/purchase-orders/{id}`
+- `PUT /inventory/purchase-orders/{id}`
+- `POST /inventory/purchase-orders/{id}/details`
+- `PUT /inventory/purchase-orders/{id}/details/{detail_id}`
+- `DELETE /inventory/purchase-orders/{id}/details/{detail_id}`
+- `POST /inventory/purchase-orders/{id}/issue`
+- `POST /inventory/purchase-orders/{id}/receive`
+
+### POS Fase 1
+
+- `GET /pos/catalog`
+- `GET /pos/sales`
+- `GET /pos/sales/{id}`
+- `POST /pos/sales`
+- `POST /pos/sales/{id}/cancel`
+- `GET /pos/ticket/{id}`
+
+### Superadmin
+
+- `GET /superadmin/overview`
+- `GET /superadmin/companies`
+- `GET /superadmin/companies/{id}`
+- `PATCH /superadmin/companies/{id}/access`
+- `GET /superadmin/users`
+- `GET /superadmin/users/{id}`
+- `POST /superadmin/impersonate`
+- `GET /superadmin/audit-logs`
+
+## Flujo de registro
+
+1. `POST /auth/register/start`
+   Valida reCAPTCHA, verifica que correo y teléfono no existan, crea o actualiza `PendingRegistration` y envía un código por SMS con Twilio Verify.
+2. `POST /auth/register/verify`
+   Verifica el código de 6 dígitos por SMS y solo entonces crea `Empresa`, `Usuario`, `EmpresaUsuario`, `EmpresaModulo` y `AuditLog`.
+
+## Onboarding obligatorio de inventario
+
+1. Si la empresa no tiene almacenes activos y el usuario no es superadmin, la app fuerza el setup inicial.
+2. `GET /inventory/onboarding-status`
+   Indica si la empresa debe crear su primer almacén.
+3. `POST /inventory/first-warehouse`
+   Crea el primer almacén y desbloquea el dashboard normal.
+
+## Inventario Shell
+
+La navegación lateral de Inventario ya es desplegable y expone estas subrutas:
+
+- `Resumen`
+- `Almacenes`
+- `Materiales`
+- `Movimientos`
+- `Kardex`
+- `Traspasos`
+- `Proveedores`
+- `Órdenes de compra`
+- `Requisiciones`
+- `Proyectos`
+- `Equipos`
+- `Órdenes de trabajo`
+- `Reportes`
+
+Las primeras nueve secciones ya están conectadas a datos reales o a flujos operativos de esta fase. Las últimas cuatro quedan como placeholder documentado para fases posteriores.
 
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.
-- Todo endpoint de inventario valida autenticacion, contexto de empresa y acceso al modulo `inventory`.
+- Todo endpoint de inventario valida autenticación, contexto de empresa y acceso al módulo `inventory`.
 - La verdad del stock vive en `existencias` + `movimientos_inventario`.
 - `Material` no guarda `stock_actual` como fuente principal.
 - No se permite stock negativo.
 - Cada movimiento crea un registro auditable.
 - Los listados devuelven `items`, `total`, `limit` y `offset`.
-- Se agregaron filtros y paginacion para almacenes, materiales, existencias y movimientos.
-- Se agregaron transferencias entre almacenes con confirmacion transaccional.
-- Se agregaron conteos fisicos con snapshot de sistema y ajustes auditables al aplicar.
-- Tipos de movimiento soportados:
-  - `entrada`
-  - `salida`
-  - `ajuste`
+- Se agregaron filtros y paginación para almacenes, materiales, existencias y movimientos.
+- Se agregaron transferencias entre almacenes con confirmación transaccional.
+- Se agregaron conteos físicos con snapshot de sistema y ajustes auditables al aplicar.
 
-### Endpoints operativos
+### Reglas operativas
 
-- `GET /inventory/warehouses`
-  Soporta `q`, `activo`, `limit`, `offset`.
-- `GET /inventory/materials`
-  Soporta `q`, `categoria`, `activo`, `stock_bajo`, `limit`, `offset`.
-- `GET /inventory/stock`
-  Soporta `almacen_id`, `material_id`, `q`, `stock_bajo`, `limit`, `offset`.
-- `GET /inventory/movements`
-  Soporta `almacen_id`, `material_id`, `tipo`, `fecha_desde`, `fecha_hasta`, `limit`, `offset`.
-- `GET /inventory/warehouses/{id}`
-  Devuelve detalle de un almacén de la empresa actual.
-- `GET /inventory/materials/{id}`
-  Devuelve detalle de un material de la empresa actual.
-- `GET /inventory/transfers`
-  Soporta `q`, `almacen_origen_id`, `almacen_destino_id`, `estatus`, `fecha_desde`, `fecha_hasta`, `limit`, `offset`.
-- `GET /inventory/counts`
-  Soporta `q`, `almacen_id`, `estatus`, `fecha_desde`, `fecha_hasta`, `limit`, `offset`.
+- Tipos de movimiento: `entrada`, `salida`, `ajuste`
+- No se implementa reversa de transferencias confirmadas en esta fase.
+- No se implementa reversa de conteos aplicados en esta fase.
 
-### Flujo basico de transferencia
+## Compras Fase 1
 
-1. Crear una transferencia en borrador.
-2. Seleccionar almacen origen y almacen destino.
-3. Agregar materiales y cantidades.
-4. Confirmar la transferencia.
-5. El sistema registra una salida en origen y una entrada en destino dentro de la misma operacion.
+- Todo endpoint de compras corre dentro del dominio `/inventory`.
+- Todo endpoint valida autenticación, empresa actual y acceso al módulo `inventory`.
+- Proveedores, requisiciones y órdenes de compra quedan aislados por `empresa_id`.
+- La recepción de órdenes de compra crea movimientos `entrada` y aumenta existencias en el almacén destino.
 
-### Flujo basico de conteo fisico
+### Flujo básico
 
-1. Crear un conteo en borrador por almacen.
-2. Agregar materiales con cantidad fisica.
-3. El sistema guarda la cantidad actual como snapshot.
-4. Aplicar el conteo.
-5. Si existe diferencia, se crea un movimiento de ajuste para dejar el stock igual a la cantidad fisica.
+1. Crear proveedor.
+2. Crear requisición en borrador.
+3. Agregar detalles a la requisición.
+4. Enviar y aprobar la requisición.
+5. Crear orden de compra en borrador.
+6. Agregar materiales y costos.
+7. Emitir la orden.
+8. Recibir parcial o total.
+9. Confirmar que el inventario aumentó en el almacén destino.
 
-### Regla de reversa en esta fase
+### Alcance actual
 
-- En Inventario Fase 1.2 no se implementa reversa de transferencias confirmadas.
-- En Inventario Fase 1.2 no se implementa reversa de conteos aplicados.
-- Si se requiere reversa futura, debe documentarse y auditarse como una fase posterior.
+- Proveedores: CRUD básico con filtros y paginación.
+- Requisiciones: borrador, detalles, envío, aprobación, rechazo y cancelación.
+- Órdenes de compra: borrador, detalles, emisión y recepción parcial o total.
+- Recepción conectada a inventario: implementada.
 
-### Flujo basico esperado
+### Pendientes de Compras
 
-1. Crear un almacen.
-2. Crear un material.
-3. Registrar una `entrada`.
-4. Consultar `GET /inventory/stock`.
-5. Registrar una `salida` o un `ajuste`.
-6. Consultar `GET /inventory/materials/{id}/kardex`.
+- Relación automática requisición → orden de compra.
+- Cancelación avanzada de órdenes emitidas.
+- Historial formal de recepciones por documento.
+- Cuentas por pagar.
+- Integración fiscal.
 
 ## POS Fase 1
 
-- Todo endpoint POS valida autenticacion, contexto de empresa y acceso al modulo `pos`.
-- Toda venta se guarda con `empresa_id`, `almacen_id` y `usuario_id`.
-- El total final se calcula en backend; no se confia en totales enviados por frontend.
-- Cada venta pagada descuenta inventario automaticamente con movimientos tipo `salida`.
-- La cancelacion basica devuelve stock con movimientos tipo `entrada`.
-- No se permite vender materiales inactivos.
-- No se permite vender desde almacenes inactivos.
-- No se permite stock negativo.
-
-### Endpoints POS
-
-- `GET /pos/catalog`
-  Soporta `almacen_id`, `q`, `limit`, `offset`.
-- `GET /pos/sales`
-  Soporta `q`, `estatus`, `almacen_id`, `metodo_pago`, `fecha_desde`, `fecha_hasta`, `limit`, `offset`.
-- `GET /pos/sales/{id}`
-  Devuelve venta con detalles.
-- `POST /pos/sales`
-  Crea una venta pagada y descuenta inventario.
-- `POST /pos/sales/{id}/cancel`
-  Cancela una venta pagada y devuelve inventario.
-- `GET /pos/ticket/{id}`
-  Devuelve datos basicos de ticket para mostrar o imprimir despues.
-
-### Flujo basico de venta
-
-1. Seleccionar almacen.
-2. Consultar `GET /pos/catalog`.
-3. Agregar productos al carrito.
-4. Elegir metodo de pago.
-5. Ejecutar `POST /pos/sales`.
-6. El backend crea la venta, sus detalles y los movimientos de salida de inventario.
-7. Consultar `GET /pos/ticket/{id}` para mostrar el ticket basico.
-
-### Regla de salida automatica de inventario
-
-- Cada linea vendida crea un movimiento tipo `salida` en el almacen seleccionado.
-- Si falla cualquier linea, la venta no se confirma y no se descuenta stock parcial.
-
-### Regla de cancelacion en esta fase
-
-- Solo se pueden cancelar ventas con estatus `pagada`.
-- La cancelacion crea movimientos tipo `entrada` para devolver stock.
-- No se permite cancelar dos veces la misma venta.
+- Todo endpoint POS valida autenticación, contexto de empresa y acceso al módulo `pos`.
+- Toda venta se calcula en backend.
+- Toda venta pagada descuenta inventario automáticamente.
+- Existe ticket básico y cancelación básica con retorno de stock.
 
 ### Pendientes POS
 
-- Corte de caja.
-- Pagos mixtos formales con desglose por metodo.
-- Descuentos avanzados y reglas promocionales.
-- Factura fiscal / CFDI.
-- Ticket imprimible formal.
+- Corte de caja
+- Pagos mixtos formales
+- Descuentos avanzados
+- Ticket imprimible formal
+- Conexión con facturación fiscal
 
-## Superadmin
+## Placeholders actuales
 
-- Todos los endpoints `/superadmin` requieren usuario autenticado con `is_superadmin=true`.
-- Un token impersonado no puede acceder al portal Superadmin.
-- El portal permite:
-  - ver overview operativo
-  - listar empresas y usuarios
-  - cambiar plan y `access_status` con razón obligatoria
-  - revisar auditoría reciente
-  - impersonar un usuario por 15 minutos máximo
-- `Usuario.last_login_at` se actualiza en logins exitosos.
+Estas vistas ya aparecen en el shell de Inventario, pero siguen reservadas para fases posteriores:
 
-## Reglas implementadas
-
-- Cada empresa tiene `plan_code`: `basico`, `pro` o `total`.
-- Cada empresa tiene `access_status`: `trial`, `active`, `past_due`, `suspended`, `cancelled`.
-- Toda empresa nueva inicia con trial de 15 dias.
-- El contexto de empresa se valida desde backend mediante token y/o `X-Empresa-Id`.
-- La funcion central `can_access_module(user, empresa, module_name)` gobierna acceso por plan, estado y rol.
-- Facturacion existe solo como modulo pendiente y bloqueado para clientes.
-- No se crea empresa hasta verificar el SMS.
-- No se permiten mas de 5 intentos por codigo.
-- No se permite reenviar codigo antes de 60 segundos.
+- `Proyectos`
+- `Equipos`
+- `Órdenes de trabajo`
+- `Reportes`
 
 ## Notas
 
 - No se usa Base44 ni SDKs relacionados.
-- No se implementa `factura.com`.
-- No se implementa timbrado CFDI.
-- No se implementa CSD.
-- Twilio Verify SMS requiere un Verify Service con canal `sms` habilitado y una cuenta/configuracion valida para envio de SMS.
+- No se implementa factura.com, CFDI, timbrado, CSD ni Stripe en este estado del proyecto.

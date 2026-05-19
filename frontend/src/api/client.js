@@ -501,6 +501,229 @@ export function getPosTicket({ saleId, token, empresaId }) {
 }
 
 
+export function getSuppliers({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "activo", filters.activo);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/suppliers${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getSupplierDetail({ supplierId, token, empresaId }) {
+  return apiRequest(`/inventory/suppliers/${supplierId}`, { token, empresaId });
+}
+
+
+export function createSupplier({ token, empresaId, payload }) {
+  return apiRequest("/inventory/suppliers", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateSupplier({ supplierId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/suppliers/${supplierId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getRequisitions({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/requisitions${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getRequisitionDetail({ requisitionId, token, empresaId }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}`, { token, empresaId });
+}
+
+
+export function createRequisition({ token, empresaId, payload }) {
+  return apiRequest("/inventory/requisitions", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateRequisition({ requisitionId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function addRequisitionDetail({ requisitionId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/details`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateRequisitionDetail({ requisitionId, detailId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/details/${detailId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deleteRequisitionDetail({ requisitionId, detailId, token, empresaId }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/details/${detailId}`, {
+    method: "DELETE",
+    token,
+    empresaId,
+  });
+}
+
+
+export function submitRequisition({ requisitionId, token, empresaId }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/submit`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function approveRequisition({ requisitionId, token, empresaId }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/approve`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function rejectRequisition({ requisitionId, token, empresaId }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/reject`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelRequisition({ requisitionId, token, empresaId }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/cancel`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPurchaseOrders({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "proveedor_id", filters.proveedor_id);
+  appendQueryValue(query, "almacen_destino_id", filters.almacen_destino_id);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/purchase-orders${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getPurchaseOrderDetail({ orderId, token, empresaId }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}`, { token, empresaId });
+}
+
+
+export function createPurchaseOrder({ token, empresaId, payload }) {
+  return apiRequest("/inventory/purchase-orders", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePurchaseOrder({ orderId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function addPurchaseOrderDetail({ orderId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}/details`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePurchaseOrderDetail({ orderId, detailId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}/details/${detailId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deletePurchaseOrderDetail({ orderId, detailId, token, empresaId }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}/details/${detailId}`, {
+    method: "DELETE",
+    token,
+    empresaId,
+  });
+}
+
+
+export function issuePurchaseOrder({ orderId, token, empresaId }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}/issue`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function receivePurchaseOrder({ orderId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}/receive`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function getSuperadminOverview({ token }) {
   return apiRequest("/superadmin/overview", { token });
 }

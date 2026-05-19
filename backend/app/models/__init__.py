@@ -12,6 +12,13 @@ from app.models.inventory import (
     TransferenciaInventarioDetalle,
 )
 from app.models.pos import Venta, VentaDetalle
+from app.models.procurement import (
+    OrdenCompra,
+    OrdenCompraDetalle,
+    Proveedor,
+    Requisicion,
+    RequisicionDetalle,
+)
 from app.models.user import EmpresaUsuario, PendingRegistration, Usuario
 
 __all__ = [
@@ -28,6 +35,11 @@ __all__ = [
     "MovimientoInventario",
     "PendingRegistration",
     "Plan",
+    "Proveedor",
+    "Requisicion",
+    "RequisicionDetalle",
+    "OrdenCompra",
+    "OrdenCompraDetalle",
     "TransferenciaInventario",
     "TransferenciaInventarioDetalle",
     "Usuario",

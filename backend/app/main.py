@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect
 
-from app.api.routes import auth, health, inventory, modules, pos, superadmin, users
+from app.api.routes import auth, health, inventory, modules, pos, procurement, superadmin, users
 from app.core.config import get_settings
 from app.db.session import SessionLocal, engine
 from app.services.seed import seed_default_plans
@@ -37,5 +37,6 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(modules.router)
 app.include_router(inventory.router)
+app.include_router(procurement.router)
 app.include_router(pos.router)
 app.include_router(superadmin.router)
