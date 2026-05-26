@@ -2,9 +2,9 @@
 
 ## Introducción
 
-Base44 se usa como referencia funcional e histórica para evitar regresiones de alcance, pero CapellaOpsV2 se está reconstruyendo limpio sobre un stack nuevo: FastAPI, React, Azure SQL, SQLAlchemy y Alembic.
+Base44 se usará como referencia funcional e histórica, pero CapellaOpsV2 se reconstruye limpio con FastAPI, React, Azure SQL, SQLAlchemy y Alembic. La intención no es copiar implementación, sino asegurar paridad real de capacidades o documentar con claridad qué queda fuera de cada fase.
 
-La regla de esta matriz es simple: no asumir que una funcionalidad existe en V2 si no está claramente implementada hoy. Cuando exista duda, el estado se marca como `Parcial` o `Pendiente`.
+Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se marca algo como `Implementado` si no existe claramente hoy en V2.
 
 ## Estados válidos
 
@@ -18,86 +18,111 @@ La regla de esta matriz es simple: no asumir que una funcionalidad existe en V2 
 
 | Área | Funcionalidad Base44 | Estado en V2 | Prioridad | Fase objetivo | Notas | Riesgo si falta |
 | --- | --- | --- | --- | --- | --- | --- |
-| Core | Multiempresa por tenant | Implementado | Crítica | Core actual | Existe separación por `empresa_id` y contexto de empresa. | Fuga de datos entre clientes. |
-| Core | Auth de usuarios | Implementado | Crítica | Core actual | Login, registro, JWT propio y `/me` ya existen. | Acceso no controlado a la plataforma. |
-| Core | Roles | Parcial | Alta | Core hardening | Existen roles por empresa, pero la matriz de permisos futura aún no está expandida a todos los módulos. | Permisos inconsistentes o sobreacceso. |
-| Core | Planes comerciales | Implementado | Crítica | Core actual | `basico`, `pro`, `total`. | Venta y activación incorrectas por cliente. |
-| Core | Trial | Implementado | Alta | Core actual | Trial de 15 días activo en flujo actual. | Onboarding comercial incompleto. |
-| Core | Módulos por plan | Implementado | Crítica | Core actual | `/modules` y `can_access_module` gobiernan acceso. | Clientes viendo módulos no contratados. |
-| Core | Superadmin | Implementado | Alta | Core actual | Portal, protección backend e impersonación controlada ya existen. | Falta de control operativo central. |
-| Core | Auditoría | Parcial | Alta | Core hardening | Ya hay `AuditLog` en acciones clave, pero no toda la plataforma futura está cubierta. | Trazabilidad insuficiente. |
-| Core | Impersonación | Implementado | Alta | Core actual | Ya existe con bloqueo de `/superadmin` para tokens impersonados. | Soporte operativo limitado. |
-| Inventario | Navegación estructurada del módulo | Implementado | Alta | Inventario Shell | Existe sidebar desplegable y subrutas operativas por sección. | Crecimiento desordenado del módulo. |
-| Inventario | Almacenes | Implementado | Crítica | Inventario F1 | CRUD base y onboarding del primer almacén ya existen. | No se puede operar stock por ubicación. |
-| Inventario | Materiales / productos | Parcial | Crítica | Inventario F1.1 | Existen materiales base; catálogo comercial más rico sigue pendiente. | Catálogo insuficiente para POS y compras. |
-| Inventario | Existencias | Implementado | Crítica | Inventario F1 | La verdad del stock vive en existencias + movimientos. | Stock inconsistente. |
-| Inventario | Movimientos | Implementado | Crítica | Inventario F1 | Entradas, salidas y ajustes ya existen. | No hay trazabilidad de stock. |
-| Inventario | Kardex | Implementado | Alta | Inventario F1 | Consulta por material ya disponible. | Difícil auditar cambios de inventario. |
-| Inventario | Stock bajo | Implementado | Alta | Inventario F1.1 | Disponible en backend y UI operativa. | Quiebres de stock no detectados. |
-| Inventario | Ajustes | Implementado | Alta | Inventario F1 | Ajuste a cantidad nueva ya disponible. | Correcciones manuales imposibles. |
-| Inventario | Transferencias | Parcial | Alta | Inventario F1.2 | Flujo de borrador, detalle, confirmación y cancelación de borrador ya existe. La reversa de confirmadas sigue pendiente. | Operación manual y propensa a error si no se completa la reversa futura. |
-| Inventario | Conteos físicos | Parcial | Alta | Inventario F1.2 | Flujo de borrador, captura física, aplicación y cancelación de borrador ya existe. La reversa de aplicados sigue pendiente. | Diferencias sin control fino si no se completa la reversa futura. |
-| Inventario | Proveedores | Implementado | Alta | Compras F1 | CRUD básico, filtros y paginación ya existen dentro de Inventario. | Compras sin directorio base. |
-| Inventario | Requisiciones | Parcial | Alta | Compras F1 | Ya existen borrador, detalle, envío, aprobación, rechazo y cancelación. `surtida` aún no tiene flujo completo. | Solicitudes internas incompletas. |
-| Inventario | Órdenes de compra | Parcial | Alta | Compras F1 | Ya existen borrador, detalle, emisión y recepción. Cancelación avanzada e historial formal de recepciones siguen pendientes. | Compras operables pero aún limitadas. |
-| Inventario | Recepción de compras | Implementado | Alta | Compras F1 | Recibir una orden crea movimientos `entrada` y aumenta existencias en el almacén destino. | Stock no conectado al origen documental. |
-| Inventario | Importación masiva | Pendiente | Media | Inventario F2 | No existe importador de catálogo o stock. | Carga inicial lenta y manual. |
-| Inventario | Lotes / series / caducidades | Pendiente | Alta | Inventario F3 | No existe trazabilidad avanzada por lote o serie. | Riesgo operativo y de cumplimiento. |
-| Inventario | Conexión con POS | Implementado | Crítica | POS F1 | POS ya descuenta inventario automáticamente al vender. | Ventas sin salida automática de stock. |
-| Inventario | Conexión con compras | Parcial | Alta | Compras F1 | Ya existe recepción conectada a inventario, pero faltan automatismos y cierre financiero. | Entradas parciales sin flujo completo. |
-| Inventario | Conexión con PM | Pendiente | Media | PM F2 | PM aún no existe en V2. | Materiales de proyecto sin trazabilidad. |
-| Inventario | Proyectos | Pendiente | Media | Inventario / PM F2 | Existe placeholder de UI, sin lógica operativa todavía. | El módulo no cubre consumo por proyecto. |
-| Inventario | Equipos | Pendiente | Media | Inventario F2 | Existe placeholder de UI, sin control real de activos. | Herramientas y activos sin seguimiento. |
-| Inventario | Órdenes de trabajo | Pendiente | Media | Inventario F2 | Existe placeholder de UI, sin flujo operativo. | Consumo y ejecución de campo sin trazabilidad. |
-| Inventario | Reportes | Pendiente | Media | Inventario F2 | Existe placeholder de UI, sin reportes reales. | Operación sin visibilidad consolidada. |
-| POS | Punto de venta | Parcial | Crítica | POS F1 | Ya existe venta base conectada a inventario, pero corte de caja y flujo más rico siguen pendientes. | Operación de mostrador incompleta frente al alcance final. |
-| POS | Carrito | Implementado | Alta | POS F1 | Existe carrito funcional en frontend conectado al backend de ventas. | Flujo de venta incompleto si faltara. |
-| POS | Ventas | Implementado | Crítica | POS F1 | Las ventas se guardan, calculan en backend y descuentan inventario. | Sin transacciones comerciales operables. |
-| POS | Métodos de pago | Parcial | Alta | POS F1 | Existe método de pago simple; pagos mixtos formales siguen pendientes. | Cobro limitado para escenarios reales más complejos. |
-| POS | Descuentos | Parcial | Media | POS F1 | Existe descuento simple por línea, pero faltan promociones y reglas avanzadas. | Reglas comerciales limitadas. |
-| POS | Tickets | Parcial | Media | POS F1 | Ya existe ticket básico de consulta; ticket imprimible formal sigue pendiente. | Mala experiencia de cierre si no evoluciona. |
-| POS | Corte de caja | Pendiente | Alta | POS F2 | No implementado. | Riesgo financiero y operativo. |
-| POS | Salida automática de inventario | Implementado | Crítica | POS F1 | Cada venta pagada crea movimientos de salida por línea. | Stock falso después de vender. |
-| POS | Venta pendiente / cancelación | Parcial | Alta | POS F1 | Ya existe cancelación básica de venta pagada con retorno de stock, pero no venta pendiente ni flujo de anulación avanzado. | Operación rígida en caja. |
-| POS | Conexión futura con facturación | Pendiente | Alta | POS F3 | Depende de facturación. | Venta desconectada del CFDI. |
-| Facturación | CFDI 4.0 | Congelado | Crítica | Facturación F1 | Explícitamente fuera de alcance actual. | No se puede facturar fiscalmente. |
-| Facturación | Factura.com | Congelado | Alta | Facturación F1 | Explícitamente fuera de alcance actual. | Integración fiscal no disponible. |
-| Facturación | CSD | Congelado | Alta | Facturación F1 | Explícitamente fuera de alcance actual. | No se puede timbrar. |
-| Facturación | Timbrado | Congelado | Crítica | Facturación F1 | No implementado por decisión actual. | Sin emisión fiscal válida. |
-| Facturación | Cancelación | Congelado | Alta | Facturación F2 | No implementado. | Gestión fiscal incompleta. |
-| Facturación | Logs | Congelado | Media | Facturación F1 | No existen logs específicos de CFDI todavía. | Difícil soporte fiscal. |
-| Facturación | Sandbox | Congelado | Media | Facturación F1 | No implementado. | Riesgo al probar futuras integraciones. |
-| Facturación | Facturación pendiente / bloqueada en V2 | Implementado | Alta | Core actual | El módulo existe solo como placeholder bloqueado para clientes. | Usuarios esperando una función no disponible. |
+| Core | Multiempresa por tenant | Implementado | Crítica | Core actual | Aislamiento por `empresa_id` y contexto activo. | Fuga de datos entre clientes. |
+| Core | Auth de usuarios | Implementado | Crítica | Core actual | JWT propio, `/me`, login y registro. | Accesos no controlados. |
+| Core | Roles por empresa | Parcial | Alta | Core hardening | Existe `EmpresaUsuario`, pero la matriz fina de permisos todavía no cubre todos los dominios futuros. | Sobreacceso o permisos inconsistentes. |
+| Core | Planes comerciales | Implementado | Crítica | Core actual | `basico`, `pro`, `total`. | Acceso comercial incorrecto. |
+| Core | Trial | Implementado | Alta | Core actual | Trial de 15 días. | Onboarding comercial incompleto. |
+| Core | Módulos por plan | Implementado | Crítica | Core actual | Acceso centralizado con `/modules` y `can_access_module`. | Clientes viendo módulos no contratados. |
+| Core | Superadmin | Implementado | Alta | Core actual | Portal, cambio de acceso, overview e impersonación. | Falta de control operativo central. |
+| Core | Auditoría | Parcial | Alta | Core hardening | `AuditLog` ya cubre acciones importantes, pero no toda la plataforma futura. | Trazabilidad insuficiente. |
+| Core | Impersonación | Implementado | Alta | Core actual | Soporta token corto y bloqueo de `/superadmin` cuando hay impersonación. | Soporte operativo limitado. |
+| Inventario | Navegación estructurada del módulo | Implementado | Alta | Inventario Shell | Sidebar lateral desplegable con subrutas. La barra horizontal interna se elimina en esta fase. | Crecimiento desordenado del módulo. |
+| Inventario | Resumen / Dashboard de inventario | Implementado | Alta | Inventario Resumen | Dashboard operativo con KPIs, indicadores, alertas y listas calculadas. | Operación sin visibilidad ejecutiva. |
+| Inventario | Smart SKU Search | Pendiente | Media | Inventario F2 | En Resumen queda placeholder; la búsqueda inteligente real no está conectada todavía. | Localización lenta de materiales. |
+| Inventario | Materiales / productos | Parcial | Crítica | Inventario F1.1 | Existe catálogo base con SKU, categoría, unidad, costo, precio y stock mínimo. | Catálogo insuficiente para operación avanzada. |
+| Inventario | Materiales con campos avanzados | Parcial | Alta | Inventario F2 | Faltan atributos más ricos de clasificación, logística y abastecimiento. | Escalabilidad limitada del catálogo. |
+| Inventario | SKU único por empresa | Implementado | Alta | Inventario F1 | Constraint y validación backend existentes. | Duplicidad de catálogo. |
+| Inventario | Límites de SKU por plan | Pendiente | Media | Comercial / Inventario F3 | No existe política de cupos por plan. | Comercialización y control de uso incompletos. |
+| Inventario | Existencias por almacén | Implementado | Crítica | Inventario F1 | `existencias` es fuente primaria por almacén y material. | Stock por ubicación inconsistente. |
+| Inventario | Fuente de verdad de stock en movimientos + existencias | Implementado | Crítica | Inventario actual | No se usa `Material.stock_actual` como verdad. El stock global se calcula por suma. | Desincronización de stock. |
+| Inventario | Movimientos de inventario | Implementado | Crítica | Inventario F1 | Entradas, salidas y ajustes auditables. | No hay trazabilidad de stock. |
+| Inventario | Movimientos multi-artículo / carrito | Pendiente | Alta | Inventario F2 | Los movimientos manuales siguen siendo unitarios; documentos como transferencias y compras sí manejan múltiples renglones. | Operación lenta para recepciones amplias. |
+| Inventario | Movimientos con estatus borrador / confirmado / cancelado | Pendiente | Media | Inventario F2 | Los movimientos base son inmediatos; los documentos relacionados sí tienen estatus. | Menor control documental antes de impactar stock. |
+| Inventario | Evidencia fotográfica en entradas | Pendiente | Baja | Inventario F3 | No existe carga de evidencias. | Soporte débil de recepciones sensibles. |
+| Inventario | Responsables en salidas | Parcial | Media | Inventario F2 | Se registra `created_by`, pero no un responsable operativo explícito por salida. | Ambigüedad en consumos o mermas. |
+| Inventario | Vinculación de salidas a proyectos | Pendiente | Media | Inventario / PM F2 | Falta conexión con Proyectos/PM. | Consumo sin centro de costo operativo. |
+| Inventario | Kardex | Implementado | Alta | Inventario F1 | Consulta por material y almacén ya existe. | Difícil auditar cambios. |
+| Inventario | Kardex inmutable con snapshots | Parcial | Alta | Inventario F2 | Los movimientos no se editan, pero no existe snapshot formal de costo/estado por evento. | Auditoría histórica incompleta. |
+| Inventario | Costo promedio ponderado | Pendiente | Alta | Inventario Costos F2 | Hoy se usa `costo_unitario` del material. | Costeo inexacto para análisis avanzado. |
+| Inventario | Stock bajo | Implementado | Alta | Inventario F1.1 | Disponible en backend y frontend. | Quiebres de stock no detectados. |
+| Inventario | Alertas automáticas | Parcial | Alta | Inventario Resumen | El dashboard calcula alertas, pero no existen procesos persistentes ni envío automático. | Reacción tardía a riesgos operativos. |
+| Inventario | Requisiciones automáticas por bajo stock | Pendiente | Alta | Compras / Inventario F2 | No existe generación automática. | Reposición manual y tardía. |
+| Inventario | Reportes avanzados | Pendiente | Media | Inventario F3 | Solo existe placeholder y resumen operativo básico. | Operación sin analítica profunda. |
+| Inventario | FIFO / lotes | Pendiente | Alta | Inventario F3 | No existen lotes ni reglas FIFO. | Riesgo operativo y de trazabilidad. |
+| Inventario | Series / caducidades | Pendiente | Alta | Inventario F3 | No existe control por serie o fecha. | Trazabilidad limitada. |
+| Inventario | Clasificación ABC | Pendiente | Media | Inventario F3 | No implementado. | Priorización operativa deficiente. |
+| Inventario | Conteos físicos | Implementado | Alta | Inventario F1.2 | Borrador, detalle, aplicación y cancelación de borrador. | Diferencias no controladas. |
+| Inventario | Conteos cíclicos | Pendiente | Media | Inventario F3 | Existe conteo manual, pero no política cíclica programada. | Conteo reactivo en vez de preventivo. |
+| Inventario | Transferencias / traspasos | Parcial | Alta | Inventario F1.2 | Flujo borrador-confirmación-cancelación de borrador. La reversa de confirmadas sigue pendiente. | Reubicación incompleta en incidentes. |
+| Inventario | Safety stock | Pendiente | Media | Inventario F3 | No existe campo o regla dedicada. | Política de abastecimiento incompleta. |
+| Inventario | Reorder point | Pendiente | Media | Inventario F3 | No existe umbral formal de reorden. | Reposición tardía. |
+| Inventario | Min / max | Parcial | Media | Inventario F3 | Solo existe `stock_minimo`; no hay máximo ni política completa. | Reposición parcial y poco precisa. |
+| Inventario | Políticas por producto | Pendiente | Media | Inventario F3 | No implementado. | Gestión homogénea donde debería ser diferenciada. |
+| Inventario | Configuración avanzada de inventario | Pendiente | Media | Inventario F3 | No existe módulo/configuración dedicada. | Menor adaptabilidad operativa. |
+| Inventario | Notificaciones | Pendiente | Media | Inventario F3 | No hay notificaciones persistentes. | Alertas no salen del dashboard. |
+| Inventario | Importación CSV / Excel | Pendiente | Alta | Inventario F2 | No implementado. | Altas masivas lentas. |
+| Inventario | Exportación CSV | Pendiente | Media | Inventario F2 | No implementado. | Difícil explotar datos fuera del sistema. |
+| Inventario | Edición masiva | Pendiente | Media | Inventario F2 | No implementado. | Mantenimiento lento del catálogo. |
+| Inventario | Escaneo QR / código de barras | Pendiente | Media | Inventario F2 | En Resumen queda placeholder visual. | Operación lenta en piso. |
+| Inventario | Proveedores | Implementado | Alta | Compras F1 | CRUD básico operativo. | Compras sin directorio base. |
+| Inventario | Requisiciones | Parcial | Alta | Compras F1 | Borrador, envío, aprobación, rechazo y cancelación. `surtida` aún no tiene flujo completo. | Solicitudes internas incompletas. |
+| Inventario | Órdenes de compra | Parcial | Alta | Compras F1 | Borrador, detalle, emisión y recepción. Faltan cancelaciones avanzadas e historial formal de recepciones. | Compras operables pero aún limitadas. |
+| Inventario | Recepción de compras conectada a inventario | Implementado | Alta | Compras F1 | La recepción crea entradas y aumenta existencias. | Stock no conectado al documento fuente. |
+| Inventario | Conexión con POS | Implementado | Crítica | POS F1 | POS ya descuenta inventario automáticamente. | Ventas sin salida automática. |
+| Inventario | Conexión con compras | Parcial | Alta | Compras F1 | La recepción ya impacta stock; faltan automatismos y mayor cierre operativo. | Flujo compra-inventario incompleto. |
+| Inventario | Conexión con PM / proyectos | Pendiente | Media | PM F2 | No implementado. | Consumo sin trazabilidad por proyecto. |
+| Inventario | Proyectos | Pendiente | Media | Inventario / PM F2 | Placeholder de UI solamente. | Ruta vacía frente a alcance esperado. |
+| Inventario | Equipos | Pendiente | Media | Inventario F2 | Placeholder de UI solamente. | Activos sin control. |
+| Inventario | Órdenes de trabajo | Pendiente | Media | Inventario F2 | Placeholder de UI solamente. | Operación de campo sin trazabilidad. |
+| Inventario | Reportes | Pendiente | Media | Inventario F2 | Placeholder de UI solamente. | Falta de visibilidad consolidada. |
+| Integraciones | Acavike B2B | Pendiente | Alta | Integraciones F2 | No implementado. | Catálogo y stock desconectados del canal externo. |
+| Integraciones | Tiendanube | Pendiente | Media | Integraciones F2 | No implementado. | Canal e-commerce aislado. |
+| Integraciones | Sincronización de catálogo | Pendiente | Alta | Integraciones F2 | No implementado. | Datos duplicados o desactualizados. |
+| Integraciones | Sincronización de stock | Pendiente | Alta | Integraciones F2 | No implementado. | Sobreventa o stock incorrecto fuera del sistema. |
+| Integraciones | Canales externos | Pendiente | Media | Integraciones F3 | No implementado. | Escalabilidad comercial limitada. |
+| Integraciones | Webhooks futuros | Pendiente | Media | Integraciones F2 | No implementado. | Integraciones manuales o frágiles. |
+| POS | Punto de venta | Parcial | Crítica | POS F1 | Venta base, catálogo, ticket básico y cancelación básica ya existen. | Operación de mostrador incompleta frente al alcance final. |
+| POS | Carrito | Implementado | Alta | POS F1 | Carrito funcional en frontend. | Flujo de cobro incompleto. |
+| POS | Ventas | Implementado | Crítica | POS F1 | Venta persistida y calculada en backend. | Sin transacciones comerciales reales. |
+| POS | Métodos de pago | Parcial | Alta | POS F2 | Existe método simple; pagos mixtos completos siguen pendientes. | Cobro limitado en escenarios reales. |
+| POS | Tickets | Parcial | Media | POS F2 | Ticket básico disponible; versión imprimible formal pendiente. | Cierre comercial débil. |
+| POS | Corte de caja | Pendiente | Alta | POS F2 | No implementado. | Riesgo operativo y financiero. |
+| POS | Salida automática de inventario | Implementado | Crítica | POS F1 | Cada venta paga genera salida de inventario. | Stock falso después de vender. |
+| POS | Venta pendiente / cancelación | Parcial | Alta | POS F2 | Existe cancelación básica; venta pendiente formal sigue pendiente. | Caja rígida para escenarios reales. |
+| POS | Conexión futura con facturación | Pendiente | Alta | Facturación F2 | No implementado. | Venta desconectada del CFDI. |
+| Facturación | CFDI 4.0 | Congelado | Crítica | Facturación futura | Fuera de esta etapa. | No se puede facturar fiscalmente. |
+| Facturación | Factura.com | Congelado | Alta | Facturación futura | Fuera de esta etapa. | Sin integración fiscal. |
+| Facturación | CSD | Congelado | Alta | Facturación futura | Fuera de esta etapa. | No se puede timbrar. |
+| Facturación | Timbrado | Congelado | Crítica | Facturación futura | Fuera de esta etapa. | Sin emisión fiscal válida. |
+| Facturación | Cancelación fiscal | Congelado | Alta | Facturación futura | No implementado. | Flujo fiscal incompleto. |
+| Facturación | Logs fiscales | Congelado | Media | Facturación futura | No implementado. | Soporte fiscal difícil. |
+| Facturación | Sandbox | Congelado | Media | Facturación futura | No implementado. | Riesgo al probar integraciones futuras. |
+| Facturación | Facturación pendiente / bloqueada en V2 | Implementado | Alta | Core actual | Existe solo como módulo bloqueado para clientes. | Expectativa errónea si no se comunica bien. |
 | Facturación | Factura global futura | Pendiente | Media | Facturación F3 | No implementado. | Alcance fiscal incompleto. |
-| Facturación | Nota de crédito futura | Pendiente | Media | Facturación F3 | No implementado. | Flujo postventa incompleto. |
-| CRM | Clientes | Pendiente | Alta | CRM F1 | No implementado. | No hay base comercial centralizada. |
-| CRM | Oportunidades | Pendiente | Media | CRM F1 | No implementado. | Embudo comercial inexistente. |
+| Facturación | Nota de crédito futura | Pendiente | Media | Facturación F3 | No implementado. | Postventa incompleta. |
+| CRM | Clientes | Pendiente | Alta | CRM F1 | No implementado. | Base comercial central inexistente. |
+| CRM | Oportunidades | Pendiente | Media | CRM F1 | No implementado. | Embudo comercial vacío. |
 | CRM | Actividades | Pendiente | Media | CRM F1 | No implementado. | Seguimiento comercial débil. |
 | CRM | Seguimiento | Pendiente | Media | CRM F1 | No implementado. | Oportunidades sin continuidad. |
-| CRM | Cobranza | Pendiente | Alta | CRM / Finanzas F2 | No implementado. | Recuperación deficiente de pagos. |
+| CRM | Cobranza | Pendiente | Alta | CRM / Finanzas F2 | No implementado. | Recuperación de pagos deficiente. |
 | CRM | Cuentas por pagar / cobrar | Pendiente | Alta | CRM / Finanzas F2 | No implementado. | Control financiero parcial. |
 | CRM | Automatizaciones | Pendiente | Media | CRM F3 | No implementado. | Trabajo manual repetitivo. |
 | CRM | Logs de automatización | Pendiente | Media | CRM F3 | No implementado. | Automatizaciones sin trazabilidad. |
 | PM | Proyectos | Pendiente | Alta | PM F1 | No implementado. | Sin gestión formal de ejecución. |
 | PM | Tareas | Pendiente | Alta | PM F1 | No implementado. | Seguimiento operativo incompleto. |
-| PM | Tiempos | Pendiente | Media | PM F2 | No implementado. | Costeo y productividad opacos. |
+| PM | Tiempos | Pendiente | Media | PM F2 | No implementado. | Productividad opaca. |
 | PM | Costos por usuario / rol | Pendiente | Media | PM F2 | No implementado. | Rentabilidad difícil de medir. |
-| PM | Materiales usados en proyecto | Pendiente | Alta | PM F2 | Depende de inventario + PM. | Consumo no rastreado por proyecto. |
+| PM | Materiales usados en proyecto | Pendiente | Alta | PM F2 | No implementado. | Consumo sin centro de costo. |
 | PM | Documentos | Pendiente | Media | PM F2 | No implementado. | Información dispersa. |
 | PM | Portal externo | Pendiente | Baja | PM F3 | No implementado. | Experiencia limitada para clientes externos. |
-| PM | Snapshots comerciales | Pendiente | Media | PM F3 | No implementado. | Pérdida de contexto comercial en ejecución. |
+| PM | Snapshots comerciales | Pendiente | Media | PM F3 | No implementado. | Se pierde contexto comercial en ejecución. |
 | PM | Relación con ventas / facturas / cobranza | Pendiente | Alta | PM F3 | No implementado. | Flujo comercial-operativo desconectado. |
-| Integraciones | Acavike B2B | Pendiente | Alta | Integraciones F1 | No implementado. | Catálogo y operación externa desconectados. |
-| Integraciones | Sincronización de catálogo | Pendiente | Alta | Integraciones F1 | No implementado. | Datos duplicados o desactualizados. |
-| Integraciones | Sincronización de stock | Pendiente | Alta | Integraciones F1 | No implementado. | Sobreventa o stock inconsistente. |
-| Integraciones | Tiendanube | Pendiente | Media | Integraciones F2 | No implementado. | Canal e-commerce aislado. |
-| Integraciones | Canales externos | Pendiente | Media | Integraciones F2 | No implementado. | Escalabilidad comercial limitada. |
-| Integraciones | Webhooks futuros | Pendiente | Media | Integraciones F1 | No implementado. | Integraciones frágiles o manuales. |
-| QA / Admin | Páginas QA | Pendiente | Media | Admin F2 | No existen páginas QA dedicadas hoy. | Validación operativa más lenta. |
-| QA / Admin | Diagnósticos | Parcial | Media | Admin F1 | Existen utilidades como `debug_db`, pero no un portal formal de diagnóstico. | Soporte técnico más manual. |
-| QA / Admin | Logs | Parcial | Alta | Admin F1 | Hay audit logs y logs técnicos, pero no una observabilidad integral. | Incidencias difíciles de investigar. |
+| QA / Admin | Páginas QA | Pendiente | Media | Admin F2 | No implementado. | Validación más lenta. |
+| QA / Admin | Diagnósticos | Parcial | Media | Admin F1 | Ya existen utilidades como `debug_db`, pero no portal formal. | Soporte técnico más manual. |
+| QA / Admin | Logs | Parcial | Alta | Admin F1 | Hay audit logs y logs técnicos, sin observabilidad integral todavía. | Investigación lenta de incidentes. |
 | QA / Admin | Health checks | Implementado | Alta | Core actual | `/health` ya existe. | Menor visibilidad de disponibilidad. |
-| QA / Admin | Herramientas de superadmin | Implementado | Alta | Core actual | Overview, empresas, usuarios, cambios de acceso e impersonación ya existen. | Operación central limitada. |
+| QA / Admin | Herramientas de superadmin | Implementado | Alta | Core actual | Empresas, usuarios, overview, cambios de acceso e impersonación ya existen. | Operación central limitada. |
 
 ## Regla de desarrollo futuro
 

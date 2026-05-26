@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Outlet, useLocation } from "react-router-dom";
 
 import { inventoryNavItems } from "./navigation";
 
@@ -20,20 +20,6 @@ export default function InventoryLayout() {
               "Control multiempresa de existencias, movimientos, traspasos y compras conectadas al stock real."}
           </p>
         </div>
-      </div>
-
-      <div className="inventory-subnav">
-        {inventoryNavItems.map((item) => (
-          <NavLink
-            className={({ isActive }) =>
-              isActive ? "inventory-tab-button active" : "inventory-tab-button"
-            }
-            key={item.key}
-            to={item.path}
-          >
-            {item.label}
-          </NavLink>
-        ))}
       </div>
 
       <Outlet />

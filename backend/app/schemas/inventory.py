@@ -43,6 +43,68 @@ class InventoryOnboardingStatusResponse(BaseModel):
     message: str
 
 
+class InventorySummaryKpis(BaseModel):
+    materiales_bajo_stock: int
+    ordenes_compra_pendientes: int
+    requisiciones_pendientes: int
+    total_materiales: int
+
+
+class InventorySummaryIndicators(BaseModel):
+    valor_inventario: Decimal
+    costo_reposicion: Decimal
+    ajustes_mes: int
+    merma_mes: Decimal
+
+
+class InventorySummaryCoreProductItem(BaseModel):
+    material_id: str
+    sku: str
+    nombre: str
+    categoria: str | None = None
+    stock_total: Decimal
+    valor_total: Decimal
+    dias_sin_movimiento: int
+
+
+class InventorySummaryLowRotationItem(BaseModel):
+    material_id: str
+    sku: str
+    nombre: str
+    categoria: str | None = None
+    stock_total: Decimal
+    valor_retenido: Decimal
+    dias_sin_movimiento: int
+
+
+class InventorySummaryLowStockItem(BaseModel):
+    material_id: str
+    sku: str
+    nombre: str
+    categoria: str | None = None
+    stock_total: Decimal
+    stock_minimo: Decimal
+    faltante: Decimal
+    estado: str
+
+
+class InventorySummaryAlertItem(BaseModel):
+    nivel: str
+    tipo: str
+    titulo: str
+    mensaje: str
+    route: str | None = None
+
+
+class InventorySummaryResponse(BaseModel):
+    kpis: InventorySummaryKpis
+    indicadores: InventorySummaryIndicators
+    productos_core: list[InventorySummaryCoreProductItem]
+    baja_rotacion: list[InventorySummaryLowRotationItem]
+    materiales_bajo_stock: list[InventorySummaryLowStockItem]
+    alertas: list[InventorySummaryAlertItem]
+
+
 class MaterialCreateRequest(BaseModel):
     sku: str = Field(min_length=1, max_length=80)
     nombre: str = Field(min_length=1, max_length=180)

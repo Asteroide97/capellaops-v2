@@ -6,12 +6,13 @@ Monorepo para un SaaS multiempresa con Azure SQL, FastAPI y React + Vite.
 
 - Core multiempresa operativo
 - Registro con reCAPTCHA v3 y Twilio Verify SMS
-- Onboarding obligatorio de primer almacén
+- Onboarding obligatorio del primer almacén
 - Portal Superadmin operativo
 - Inventario Shell operativo con navegación lateral desplegable
 - Inventario Fase 1.2 operativo
 - Compras Fase 1 operativa dentro del dominio de Inventario
 - POS Fase 1 operativo
+- Dashboard operativo en `Inventario > Resumen`
 
 ## Stack
 
@@ -177,6 +178,7 @@ npm run dev
 
 ### Inventario base
 
+- `GET /inventory/summary`
 - `GET /inventory/warehouses`
 - `GET /inventory/warehouses/{id}`
 - `POST /inventory/warehouses`
@@ -275,7 +277,9 @@ npm run dev
 
 ## Inventario Shell
 
-La navegación lateral de Inventario ya es desplegable y expone estas subrutas:
+La navegación de Inventario vive en el sidebar lateral desplegable. El layout interno ya no muestra una barra horizontal duplicada.
+
+Subrutas visibles:
 
 - `Resumen`
 - `Almacenes`
@@ -291,14 +295,51 @@ La navegación lateral de Inventario ya es desplegable y expone estas subrutas:
 - `Órdenes de trabajo`
 - `Reportes`
 
-Las primeras nueve secciones ya están conectadas a datos reales o a flujos operativos de esta fase. Las últimas cuatro quedan como placeholder documentado para fases posteriores.
+Las primeras nueve secciones ya están conectadas a datos reales o flujos operativos. Las últimas cuatro siguen como placeholder documentado para fases posteriores.
+
+## Dashboard de Resumen
+
+`GET /inventory/summary` construye un dashboard operativo calculado desde `existencias` y `movimientos_inventario`, sin duplicar la verdad del stock en `Material`.
+
+### Métricas incluidas
+
+- KPIs:
+  - `materiales_bajo_stock`
+  - `ordenes_compra_pendientes`
+  - `requisiciones_pendientes`
+  - `total_materiales`
+- Indicadores:
+  - `valor_inventario`
+  - `costo_reposicion`
+  - `ajustes_mes`
+  - `merma_mes`
+- Listas:
+  - `productos_core`
+  - `baja_rotacion`
+  - `materiales_bajo_stock`
+  - `alertas`
+
+### Reglas del resumen
+
+- El stock global se calcula como la suma de `existencias` por material.
+- `Material.stock_actual` no existe como fuente de verdad.
+- `valor_inventario` usa `stock_total * costo_unitario`.
+- `costo_reposicion` estima el faltante contra `stock_minimo`.
+- `merma_mes` queda en `0` hasta implementar clasificación formal de merma.
+
+### Pendientes del dashboard
+
+- Escaneo QR o código de barras real
+- Notificaciones persistentes
+- Envío automático de alertas por email
+- Merma formal
+- Reportes avanzados
 
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.
 - Todo endpoint de inventario valida autenticación, contexto de empresa y acceso al módulo `inventory`.
 - La verdad del stock vive en `existencias` + `movimientos_inventario`.
-- `Material` no guarda `stock_actual` como fuente principal.
 - No se permite stock negativo.
 - Cada movimiento crea un registro auditable.
 - Los listados devuelven `items`, `total`, `limit` y `offset`.
@@ -329,7 +370,7 @@ Las primeras nueve secciones ya están conectadas a datos reales o a flujos oper
 6. Agregar materiales y costos.
 7. Emitir la orden.
 8. Recibir parcial o total.
-9. Confirmar que el inventario aumentó en el almacén destino.
+9. Confirmar que el inventario aumenta en el almacén destino.
 
 ### Alcance actual
 
@@ -340,11 +381,11 @@ Las primeras nueve secciones ya están conectadas a datos reales o a flujos oper
 
 ### Pendientes de Compras
 
-- Relación automática requisición → orden de compra.
-- Cancelación avanzada de órdenes emitidas.
-- Historial formal de recepciones por documento.
-- Cuentas por pagar.
-- Integración fiscal.
+- Relación automática requisición → orden de compra
+- Cancelación avanzada de órdenes emitidas
+- Historial formal de recepciones por documento
+- Cuentas por pagar
+- Integración fiscal
 
 ## POS Fase 1
 

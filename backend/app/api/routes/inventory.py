@@ -17,6 +17,7 @@ from app.schemas.inventory import (
     CountDetailUpdateRequest,
     CountListResponse,
     CountResponse,
+    InventorySummaryResponse,
     CountUpdateRequest,
     InventoryMovementCreateRequest,
     InventoryOnboardingStatusResponse,
@@ -41,6 +42,7 @@ from app.schemas.inventory import (
 )
 from app.services.inventory import (
     apply_inventory_movement,
+    build_inventory_summary,
     count_active_warehouses,
     create_warehouse_record,
     get_kardex,
@@ -144,6 +146,24 @@ def onboarding_status(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="No se pudo consultar el estado de onboarding.",
+        ) from exc
+
+
+@router.get("/summary", response_model=InventorySummaryResponse)
+def inventory_summary(
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> InventorySummaryResponse:
+    try:
+        return build_inventory_summary(db, context.empresa.id)
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "No se pudo construir el resumen de inventario para empresa_id=%s.",
+            context.empresa.id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo cargar el resumen de inventario.",
         ) from exc
 
 

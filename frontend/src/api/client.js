@@ -156,6 +156,11 @@ export function getInventoryOnboardingStatus({ token, empresaId }) {
 }
 
 
+export function getInventorySummary({ token, empresaId }) {
+  return apiRequest("/inventory/summary", { token, empresaId });
+}
+
+
 export function createFirstWarehouse({ token, empresaId, payload }) {
   return apiRequest("/inventory/first-warehouse", {
     method: "POST",

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -7,7 +7,15 @@ from sqlalchemy.orm import Session
 
 from app.models import AuditLog, Empresa, Usuario
 from app.models.inventory import Almacen, Existencia, Material, MovimientoInventario
+from app.models.procurement import OrdenCompra, Requisicion
 from app.schemas.inventory import (
+    InventorySummaryAlertItem,
+    InventorySummaryCoreProductItem,
+    InventorySummaryIndicators,
+    InventorySummaryKpis,
+    InventorySummaryLowRotationItem,
+    InventorySummaryLowStockItem,
+    InventorySummaryResponse,
     KardexResponse,
     KardexStockItem,
     MaterialItem,
@@ -19,6 +27,20 @@ from app.services.access import can_access_module
 
 
 ZERO = Decimal("0")
+
+
+def ensure_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def days_since(value: datetime | None, *, fallback: datetime | None, now: datetime) -> int:
+    reference = ensure_utc_datetime(value) or ensure_utc_datetime(fallback) or now
+    delta = now - reference
+    return max(delta.days, 0)
 
 
 def normalize_required_text(value: str, field_name: str) -> str:
@@ -76,6 +98,220 @@ def count_active_warehouses(db: Session, empresa_id: str) -> int:
             Almacen.activo == True,
         )
     ) or 0
+
+
+def build_inventory_summary(db: Session, empresa_id: str) -> InventorySummaryResponse:
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if month_start.month == 12:
+        next_month_start = month_start.replace(year=month_start.year + 1, month=1)
+    else:
+        next_month_start = month_start.replace(month=month_start.month + 1)
+    low_rotation_cutoff = now - timedelta(days=30)
+
+    stock_totals = (
+        select(
+            Existencia.material_id.label("material_id"),
+            func.coalesce(func.sum(Existencia.cantidad), 0).label("stock_total"),
+        )
+        .where(Existencia.empresa_id == empresa_id)
+        .group_by(Existencia.material_id)
+        .subquery()
+    )
+    last_movements = (
+        select(
+            MovimientoInventario.material_id.label("material_id"),
+            func.max(MovimientoInventario.created_at).label("last_movement_at"),
+        )
+        .where(MovimientoInventario.empresa_id == empresa_id)
+        .group_by(MovimientoInventario.material_id)
+        .subquery()
+    )
+
+    material_rows = db.execute(
+        select(
+            Material,
+            func.coalesce(stock_totals.c.stock_total, 0).label("stock_total"),
+            last_movements.c.last_movement_at.label("last_movement_at"),
+        )
+        .outerjoin(stock_totals, stock_totals.c.material_id == Material.id)
+        .outerjoin(last_movements, last_movements.c.material_id == Material.id)
+        .where(
+            Material.empresa_id == empresa_id,
+            Material.activo == True,
+        )
+        .order_by(Material.nombre.asc(), Material.sku.asc())
+    ).all()
+
+    total_materiales = len(material_rows)
+    ordenes_compra_pendientes = db.scalar(
+        select(func.count(OrdenCompra.id)).where(
+            OrdenCompra.empresa_id == empresa_id,
+            OrdenCompra.estatus.in_(["borrador", "emitida", "recibida_parcial"]),
+        )
+    ) or 0
+    requisiciones_pendientes = db.scalar(
+        select(func.count(Requisicion.id)).where(
+            Requisicion.empresa_id == empresa_id,
+            Requisicion.estatus.in_(["enviada", "aprobada"]),
+        )
+    ) or 0
+    ajustes_mes = db.scalar(
+        select(func.count(MovimientoInventario.id)).where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.tipo == "ajuste",
+            MovimientoInventario.created_at >= month_start,
+            MovimientoInventario.created_at < next_month_start,
+        )
+    ) or 0
+
+    valor_inventario = ZERO
+    costo_reposicion = ZERO
+    materiales_bajo_stock: list[InventorySummaryLowStockItem] = []
+    productos_core_candidates: list[tuple[Decimal, Decimal, str, InventorySummaryCoreProductItem]] = []
+    baja_rotacion_candidates: list[tuple[Decimal, int, str, InventorySummaryLowRotationItem]] = []
+    alertas: list[InventorySummaryAlertItem] = []
+
+    for material, stock_total_raw, last_movement_at in material_rows:
+        stock_total = Decimal(stock_total_raw or ZERO)
+        stock_minimo = Decimal(material.stock_minimo or ZERO)
+        costo_unitario = Decimal(material.costo_unitario or ZERO)
+        valor_total = stock_total * costo_unitario
+        dias_sin_movimiento = days_since(last_movement_at, fallback=material.created_at, now=now)
+
+        valor_inventario += valor_total
+
+        is_low_stock = stock_total <= stock_minimo if stock_minimo > ZERO else stock_total <= ZERO
+        faltante = max(stock_minimo - stock_total, ZERO)
+        if is_low_stock:
+            costo_reposicion += faltante * costo_unitario
+            estado = "Agotado" if stock_total <= ZERO else "Bajo mínimo"
+            materiales_bajo_stock.append(
+                InventorySummaryLowStockItem(
+                    material_id=material.id,
+                    sku=material.sku,
+                    nombre=material.nombre,
+                    categoria=material.categoria,
+                    stock_total=stock_total,
+                    stock_minimo=stock_minimo,
+                    faltante=faltante,
+                    estado=estado,
+                )
+            )
+            alertas.append(
+                InventorySummaryAlertItem(
+                    nivel="critical" if stock_total <= ZERO else "warning",
+                    tipo="stock",
+                    titulo=f"{material.sku} en alerta de stock",
+                    mensaje=(
+                        f"{material.nombre} está agotado."
+                        if stock_total <= ZERO
+                        else f"{material.nombre} está por debajo de su stock mínimo."
+                    ),
+                    route="/inventario/materiales",
+                )
+            )
+
+        if stock_total > ZERO or valor_total > ZERO:
+            productos_core_candidates.append(
+                (
+                    valor_total,
+                    stock_total,
+                    material.nombre.lower(),
+                    InventorySummaryCoreProductItem(
+                        material_id=material.id,
+                        sku=material.sku,
+                        nombre=material.nombre,
+                        categoria=material.categoria,
+                        stock_total=stock_total,
+                        valor_total=valor_total,
+                        dias_sin_movimiento=dias_sin_movimiento,
+                    ),
+                )
+            )
+
+        if stock_total > ZERO and (
+            last_movement_at is None or ensure_utc_datetime(last_movement_at) < low_rotation_cutoff
+        ):
+            baja_rotacion_candidates.append(
+                (
+                    valor_total,
+                    dias_sin_movimiento,
+                    material.nombre.lower(),
+                    InventorySummaryLowRotationItem(
+                        material_id=material.id,
+                        sku=material.sku,
+                        nombre=material.nombre,
+                        categoria=material.categoria,
+                        stock_total=stock_total,
+                        valor_retenido=valor_total,
+                        dias_sin_movimiento=dias_sin_movimiento,
+                    ),
+                )
+            )
+
+    if ordenes_compra_pendientes:
+        alertas.append(
+            InventorySummaryAlertItem(
+                nivel="warning",
+                tipo="compras",
+                titulo="Órdenes de compra pendientes",
+                mensaje=f"Hay {ordenes_compra_pendientes} órdenes de compra abiertas por recibir.",
+                route="/inventario/ordenes-compra",
+            )
+        )
+
+    if requisiciones_pendientes:
+        alertas.append(
+            InventorySummaryAlertItem(
+                nivel="info",
+                tipo="requisiciones",
+                titulo="Requisiciones pendientes",
+                mensaje=f"Hay {requisiciones_pendientes} requisiciones enviadas o aprobadas pendientes de atención.",
+                route="/inventario/requisiciones",
+            )
+        )
+
+    materiales_bajo_stock.sort(
+        key=lambda item: (
+            -Decimal(item.faltante),
+            Decimal(item.stock_total),
+            item.nombre.lower(),
+        )
+    )
+    productos_core_candidates.sort(
+        key=lambda item: (
+            -item[0],
+            -item[1],
+            item[2],
+        )
+    )
+    baja_rotacion_candidates.sort(
+        key=lambda item: (
+            -item[0],
+            -item[1],
+            item[2],
+        )
+    )
+
+    return InventorySummaryResponse(
+        kpis=InventorySummaryKpis(
+            materiales_bajo_stock=len(materiales_bajo_stock),
+            ordenes_compra_pendientes=ordenes_compra_pendientes,
+            requisiciones_pendientes=requisiciones_pendientes,
+            total_materiales=total_materiales,
+        ),
+        indicadores=InventorySummaryIndicators(
+            valor_inventario=valor_inventario,
+            costo_reposicion=costo_reposicion,
+            ajustes_mes=ajustes_mes,
+            merma_mes=ZERO,
+        ),
+        productos_core=[item[3] for item in productos_core_candidates[:5]],
+        baja_rotacion=[item[3] for item in baja_rotacion_candidates[:5]],
+        materiales_bajo_stock=materiales_bajo_stock[:10],
+        alertas=alertas[:12],
+    )
 
 
 def serialize_material(material: Material) -> MaterialItem:
