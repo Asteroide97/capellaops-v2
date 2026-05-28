@@ -1,8 +1,50 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
+import {
+  BarChart3,
+  ChevronDown,
+  FolderKanban,
+  LayoutDashboard,
+  MonitorSmartphone,
+  ReceiptText,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
 
 import { useAuth } from "../auth/AuthContext";
-import { inventoryNavItems } from "../pages/inventory/navigation";
+import { inventoryModuleIcon, inventoryNavItems } from "../pages/inventory/navigation";
+
+
+const ICON_SIZE = 16;
+const ICON_STROKE = 1.9;
+
+const moduleIconMap = {
+  billing_pending: ReceiptText,
+  crm: Users,
+  inventory: inventoryModuleIcon,
+  pm: FolderKanban,
+  pos: MonitorSmartphone,
+  superadmin: ShieldCheck,
+};
+
+
+function NavIcon({ icon: Icon, className = "nav-icon" }) {
+  if (!Icon) {
+    return null;
+  }
+
+  return <Icon className={className} size={ICON_SIZE} strokeWidth={ICON_STROKE} />;
+}
+
+
+function NavLabel({ icon, label, child = false }) {
+  return (
+    <span className={`nav-item-content ${child ? "nav-item-content-child" : ""}`}>
+      <NavIcon className={child ? "nav-icon nav-icon-child" : "nav-icon"} icon={icon} />
+      <span className={child ? "nav-text nav-text-child" : "nav-text"}>{label}</span>
+    </span>
+  );
+}
 
 
 export default function Sidebar() {
@@ -17,6 +59,11 @@ export default function Sidebar() {
     }
   }, [location.pathname]);
 
+  const visibleModules = useMemo(
+    () => modules.filter((module) => module.visible_in_sidebar),
+    [modules],
+  );
+
   return (
     <aside className="sidebar">
       <div className="brand-card">
@@ -29,56 +76,63 @@ export default function Sidebar() {
 
       <nav className="nav-stack">
         <NavLink className={getNavClass} to="/">
-          Dashboard
+          <NavLabel icon={LayoutDashboard} label="Dashboard" />
         </NavLink>
 
-        {modules
-          .filter((module) => module.visible_in_sidebar)
-          .map((module) => {
-            if (module.name === "inventory" && module.enabled && module.route) {
-              const isInventoryActive = location.pathname.startsWith("/inventario");
-              return (
-                <div className="nav-group" key={module.name}>
-                  <button
-                    className={`nav-item nav-toggle ${isInventoryActive ? "active" : ""}`}
-                    onClick={() => setInventoryExpanded((current) => !current)}
-                    type="button"
-                  >
-                    <span>{module.label}</span>
-                    <span
-                      aria-hidden="true"
-                      className={`nav-toggle-icon ${inventoryExpanded ? "expanded" : ""}`}
-                    />
-                  </button>
+        {visibleModules.map((module) => {
+          const moduleIcon = moduleIconMap[module.name];
 
-                  {inventoryExpanded ? (
-                    <div className="nav-children">
-                      {inventoryNavItems.map((item) => (
-                        <NavLink
-                          className={({ isActive }) => (isActive ? "nav-child nav-child-active" : "nav-child")}
-                          key={item.key}
-                          to={item.path}
-                        >
-                          {item.label}
-                        </NavLink>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            }
+          if (module.name === "inventory" && module.enabled && module.route) {
+            const isInventoryActive = location.pathname.startsWith("/inventario");
 
-            return module.enabled && module.route ? (
-              <NavLink className={getNavClass} key={module.name} to={module.route}>
-                <span>{module.label}</span>
-              </NavLink>
-            ) : (
-              <div className="nav-item disabled" key={module.name}>
-                <span>{module.label}</span>
-                {module.pending ? <span className="pill">Pendiente</span> : null}
+            return (
+              <div className="nav-group" key={module.name}>
+                <button
+                  className={`nav-item nav-toggle ${isInventoryActive ? "active" : ""}`}
+                  onClick={() => setInventoryExpanded((current) => !current)}
+                  type="button"
+                >
+                  <NavLabel icon={moduleIcon} label={module.label} />
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`nav-toggle-icon ${inventoryExpanded ? "expanded" : ""}`}
+                    size={16}
+                    strokeWidth={ICON_STROKE}
+                  />
+                </button>
+
+                {inventoryExpanded ? (
+                  <div className="nav-children">
+                    {inventoryNavItems.map((item) => (
+                      <NavLink
+                        className={({ isActive }) => (isActive ? "nav-child nav-child-active" : "nav-child")}
+                        key={item.key}
+                        to={item.path}
+                      >
+                        <NavLabel child icon={item.icon} label={item.label} />
+                      </NavLink>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             );
-          })}
+          }
+
+          if (module.enabled && module.route) {
+            return (
+              <NavLink className={getNavClass} key={module.name} to={module.route}>
+                <NavLabel icon={moduleIcon} label={module.label} />
+              </NavLink>
+            );
+          }
+
+          return (
+            <div className="nav-item disabled" key={module.name}>
+              <NavLabel icon={moduleIcon} label={module.label} />
+              {module.pending ? <span className="pill">Pendiente</span> : null}
+            </div>
+          );
+        })}
       </nav>
     </aside>
   );

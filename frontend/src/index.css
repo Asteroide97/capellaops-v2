@@ -1,3 +1,5 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+
 :root {
   color-scheme: light;
   --app-bg: #ffffff;
@@ -19,6 +21,7 @@
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.04);
   --shadow-md: 0 8px 24px rgba(16, 24, 40, 0.06);
   --shadow-lg: 0 16px 40px rgba(16, 24, 40, 0.08);
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --bg: var(--page-bg);
   --bg-accent: var(--surface-muted);
   --panel: var(--surface);
@@ -29,13 +32,26 @@
   --brand-strong: var(--brand-hover);
   --warning-bg: #fff7ed;
   --shadow: var(--shadow-lg);
-  font-family: "Aptos", "Trebuchet MS", "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
   line-height: 1.5;
   font-weight: 400;
 }
 
 * {
   box-sizing: border-box;
+}
+
+html,
+body,
+button,
+input,
+select,
+textarea {
+  font-family: var(--font-sans);
+}
+
+html {
+  font-size: 16px;
 }
 
 body {
@@ -150,6 +166,7 @@ textarea {
   border-radius: 0.95rem;
   border: 1px solid transparent;
   cursor: pointer;
+  font-weight: 600;
   transition:
     transform 120ms ease,
     opacity 120ms ease,
@@ -232,7 +249,7 @@ textarea {
   padding: 1.25rem 1rem 1.5rem;
   border-radius: 0;
   border-right: 1px solid var(--border);
-  box-shadow: none;
+  box-shadow: var(--shadow-sm);
 }
 
 .brand-card {
@@ -252,6 +269,19 @@ textarea {
 .feature-header h2,
 .module-card h3 {
   margin: 0;
+}
+
+.brand-card h2 {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.brand-card p {
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 500;
 }
 
 .brand-mark {
@@ -277,11 +307,15 @@ textarea {
 
 .nav-item {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   padding: 0.95rem 1rem;
   border-radius: 0.95rem;
   border: 1px solid transparent;
   background: transparent;
   color: var(--text);
+  font-size: 0.9rem;
   font-weight: 500;
   transition:
     background 120ms ease,
@@ -304,17 +338,51 @@ textarea {
 
 .nav-toggle-icon {
   transition: transform 120ms ease;
-  color: var(--text-muted);
+  color: currentColor;
 }
 
 .nav-toggle-icon.expanded {
   transform: rotate(180deg);
 }
 
+.nav-item-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-width: 0;
+}
+
+.nav-item-content-child {
+  gap: 0.6rem;
+}
+
+.nav-icon {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  color: currentColor;
+}
+
+.nav-icon-child {
+  width: 15px;
+  height: 15px;
+  flex-basis: 15px;
+}
+
+.nav-text {
+  display: inline-block;
+  line-height: 1.2;
+}
+
+.nav-text-child {
+  font-size: 0.86rem;
+}
+
 .nav-item.active {
   border-color: rgba(20, 92, 67, 0.16);
   background: var(--brand-soft);
   color: var(--brand-strong);
+  font-weight: 600;
   box-shadow: var(--shadow-sm);
 }
 
@@ -340,11 +408,15 @@ textarea {
 .nav-children {
   display: grid;
   gap: 0.4rem;
-  padding-left: 0.65rem;
+  margin-left: 0.45rem;
+  padding-left: 0.8rem;
+  border-left: 1px solid var(--border-soft);
 }
 
 .nav-child {
   position: relative;
+  display: flex;
+  align-items: center;
   padding: 0.8rem 0.95rem;
   border-radius: 0.95rem;
   background: transparent;
@@ -364,6 +436,7 @@ textarea {
   color: var(--brand-strong);
   border-color: rgba(20, 92, 67, 0.16);
   background: var(--brand-soft);
+  font-weight: 600;
 }
 
 .pill,
@@ -415,6 +488,12 @@ textarea {
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-md);
+}
+
+.topbar h1 {
+  font-size: clamp(1.45rem, 2vw, 1.85rem);
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
 .topbar-main {
@@ -498,8 +577,9 @@ textarea {
 .eyebrow {
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: 0.12em;
-  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  font-size: 0.7rem;
+  font-weight: 700;
 }
 
 .metric-card strong {
@@ -833,9 +913,10 @@ textarea {
 
 .inventory-table th {
   color: var(--muted);
-  font-size: 0.84rem;
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.14em;
+  font-weight: 700;
 }
 
 .inventory-table-compact td,
@@ -992,10 +1073,14 @@ textarea {
 .inventory-section-title h2 {
   margin: 0;
   font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .inventory-page-header .inventory-section-title h2 {
   font-size: clamp(1.45rem, 2.3vw, 1.95rem);
+  font-weight: 800;
+  letter-spacing: -0.025em;
 }
 
 .inventory-page-header .inventory-section-title p,
@@ -1027,11 +1112,11 @@ textarea {
 }
 
 .inventory-field-label {
-  font-size: 0.82rem;
+  font-size: 0.76rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #5c5144;
+  color: var(--text-secondary);
 }
 
 .inventory-field-hint {
@@ -1185,9 +1270,9 @@ textarea {
 
 .inventory-metric-label {
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 0.74rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
 }
 
@@ -1282,7 +1367,7 @@ textarea {
 }
 
 .inventory-table thead th {
-  background: rgba(245, 239, 229, 0.62);
+  background: #f8fafc;
 }
 
 .inventory-table tbody tr:hover {
@@ -1426,12 +1511,6 @@ textarea {
   display: inline-grid;
   place-items: center;
   color: var(--muted);
-}
-
-.nav-toggle-icon::before {
-  content: "\25BE";
-  font-size: 0.8rem;
-  line-height: 1;
 }
 
 .pos-catalog-list {

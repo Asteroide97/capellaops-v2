@@ -412,6 +412,8 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 
 ## Inventario UX/UI Parity
 
+- Se adopta `Inter` como tipografia global del frontend para acercar la jerarquia visual al estilo SaaS de V1.
+- El sidebar pasa a usar iconografia consistente con `lucide-react`, con Inventario desplegable y subrutas visibles con icono propio.
 - Se elimina la base visual perla/beige y se adopta una base blanca con sombras suaves, bordes neutros y superficies limpias.
 - Se agrega `GET /inventory/materials` con búsqueda por `sku`, `nombre`, `categoria`, `subcategoria` y `codigo_barras`.
 - Se agrega `POST /inventory/movements/bulk` para registrar entradas, salidas y ajustes multi-artículo en una sola transacción.
