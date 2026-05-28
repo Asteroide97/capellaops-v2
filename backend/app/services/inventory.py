@@ -15,6 +15,9 @@ from app.models.procurement import OrdenCompra, Proveedor, Requisicion
 from app.schemas.inventory import (
     InventoryBulkMovementLineCreateRequest,
     InventoryBulkMovementResponse,
+    MaterialLookupItem,
+    MaterialLookupResponse,
+    MaterialLookupWarehouseStockItem,
     InventorySummaryAlertItem,
     InventorySummaryCoreProductItem,
     InventorySummaryIndicators,
@@ -548,6 +551,109 @@ def get_material_item_for_company(db: Session, empresa_id: str, material_id: str
         stock_total=stock_total,
         proveedor_principal_nombre=proveedor_nombre,
         proveedor_principal_rfc=proveedor_rfc,
+    )
+
+
+def lookup_material_by_code(db: Session, empresa_id: str, code: str) -> MaterialLookupResponse:
+    raw_code = normalize_optional_text(code)
+    if not raw_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Codigo obligatorio.",
+        )
+
+    normalized_sku = normalize_code(raw_code, "Codigo")
+    normalized_barcode = normalize_barcode(raw_code)
+
+    stock_totals = (
+        select(
+            Existencia.material_id.label("material_id"),
+            func.coalesce(func.sum(Existencia.cantidad), 0).label("stock_total"),
+        )
+        .where(Existencia.empresa_id == empresa_id)
+        .group_by(Existencia.material_id)
+        .subquery()
+    )
+
+    base_query = (
+        select(
+            Material,
+            func.coalesce(stock_totals.c.stock_total, 0).label("stock_total"),
+            Proveedor.nombre.label("proveedor_principal_nombre"),
+            Proveedor.rfc.label("proveedor_principal_rfc"),
+        )
+        .outerjoin(stock_totals, stock_totals.c.material_id == Material.id)
+        .outerjoin(Proveedor, Proveedor.id == Material.proveedor_principal_id)
+        .where(Material.empresa_id == empresa_id)
+    )
+
+    candidate_rows = []
+    candidate_rows.append(
+        db.execute(
+            base_query.where(
+                Material.activo == True,
+                Material.sku == normalized_sku,
+            )
+        ).first()
+    )
+    if normalized_barcode:
+        candidate_rows.append(
+            db.execute(
+                base_query.where(
+                    Material.activo == True,
+                    Material.codigo_barras == normalized_barcode,
+                )
+            ).first()
+        )
+    candidate_rows.append(
+        db.execute(base_query.where(Material.sku == normalized_sku)).first()
+    )
+    if normalized_barcode:
+        candidate_rows.append(
+            db.execute(base_query.where(Material.codigo_barras == normalized_barcode)).first()
+        )
+
+    row = next((item for item in candidate_rows if item is not None), None)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No se encontro ningun material con ese SKU o codigo de barras.",
+        )
+
+    material, stock_total, proveedor_nombre, proveedor_rfc = row
+    stock_rows = db.execute(
+        select(
+            Existencia.almacen_id.label("almacen_id"),
+            Almacen.nombre.label("almacen_nombre"),
+            func.coalesce(Existencia.cantidad, 0).label("stock_actual"),
+        )
+        .join(Almacen, Almacen.id == Existencia.almacen_id)
+        .where(
+            Existencia.empresa_id == empresa_id,
+            Existencia.material_id == material.id,
+        )
+        .order_by(Almacen.nombre.asc(), Almacen.codigo.asc())
+    ).all()
+
+    serialized = serialize_material(
+        material,
+        stock_total=stock_total,
+        proveedor_principal_nombre=proveedor_nombre,
+        proveedor_principal_rfc=proveedor_rfc,
+    )
+
+    return MaterialLookupResponse(
+        material=MaterialLookupItem(
+            **serialized.model_dump(),
+            stock_por_almacen=[
+                MaterialLookupWarehouseStockItem(
+                    almacen_id=almacen_id,
+                    almacen_nombre=almacen_nombre,
+                    stock_actual=decimal_or_zero(stock_actual),
+                )
+                for almacen_id, almacen_nombre, stock_actual in stock_rows
+            ],
+        )
     )
 
 

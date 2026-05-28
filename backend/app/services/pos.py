@@ -333,7 +333,15 @@ def get_pos_catalog(
             Material.activo == True,
         )
     )
-    query = apply_text_search(query, q, Material.sku, Material.nombre, Material.descripcion, Material.categoria)
+    query = apply_text_search(
+        query,
+        q,
+        Material.sku,
+        Material.codigo_barras,
+        Material.nombre,
+        Material.descripcion,
+        Material.categoria,
+    )
 
     total = count_rows(db, query)
     rows = db.execute(

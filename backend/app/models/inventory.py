@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Numeric,
     String,
     Text,
@@ -49,6 +50,14 @@ class Material(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "materiales"
     __table_args__ = (
         UniqueConstraint("empresa_id", "sku", name="uq_material_empresa_sku"),
+        Index(
+            "uq_material_empresa_codigo_barras",
+            "empresa_id",
+            "codigo_barras",
+            unique=True,
+            sqlite_where=text("codigo_barras IS NOT NULL"),
+            mssql_where=text("codigo_barras IS NOT NULL"),
+        ),
         CheckConstraint("costo_unitario >= 0", name="ck_material_costo_nonnegative"),
         CheckConstraint("precio_venta >= 0", name="ck_material_precio_nonnegative"),
         CheckConstraint("stock_minimo >= 0", name="ck_material_stock_minimo_nonnegative"),

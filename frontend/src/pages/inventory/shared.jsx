@@ -77,23 +77,30 @@ export function toDisplayText(value, fallback = "—") {
     return fallback;
   }
 
-  if (typeof value === "object") {
-    if ("label" in value && value.label) {
-      return String(value.label);
-    }
-    if ("name" in value && value.name) {
-      return String(value.name);
-    }
-    if ("nombre" in value && value.nombre) {
-      return String(value.nombre);
-    }
-    if ("sku" in value && value.sku) {
-      return String(value.sku);
-    }
-    return fallback;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
   }
 
-  return String(value);
+  if (Array.isArray(value)) {
+    return value.map((item) => toDisplayText(item, "")).filter(Boolean).join(", ") || fallback;
+  }
+
+  if (typeof value === "object") {
+    return (
+      value.nombre ||
+      value.name ||
+      value.label ||
+      value.titulo ||
+      value.title ||
+      value.sku ||
+      value.codigo ||
+      value.email ||
+      value.id ||
+      fallback
+    );
+  }
+
+  return fallback;
 }
 
 
@@ -126,6 +133,17 @@ export function safeDisplayText(value, fallback = "â€”") {
   }
 
   return fallback;
+}
+
+
+export function handleScannerEnter(event, callback) {
+  if (event.key !== "Enter") {
+    return;
+  }
+
+  event.preventDefault();
+  const code = typeof event.currentTarget?.value === "string" ? event.currentTarget.value.trim() : "";
+  callback(code, event);
 }
 
 

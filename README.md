@@ -449,11 +449,40 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 ### Pendientes de esta capa
 
 - Upload real a Azure Blob Storage para imágenes y evidencias.
-- Escaneo por cámara real. En esta fase queda placeholder/manual; la captura por lector USB o pegado manual sí está soportada en búsquedas.
+- Robustecer el escaneo por cámara para más navegadores y escenarios de producción; hoy depende de permisos, soporte del navegador y HTTPS.
 - Importación backend de Excel/CSV para materiales. En esta fase queda solo placeholder en UI.
 - FK real a PM/Proyectos cuando el módulo PM exista.
 - Costo promedio ponderado formal.
 - Estados borrador/cancelado para movimientos manuales base.
+
+## SKU, código de barras y escáner
+
+- `SKU` es obligatorio por material y sigue siendo único por empresa.
+- `codigo_barras` es opcional, pero cuando existe se valida como único por empresa.
+- La búsqueda general de materiales ya soporta `sku`, `codigo_barras` y `nombre`.
+- Se agrega `GET /inventory/materials/lookup?code=...` para búsqueda exacta por escáner sobre `sku` o `codigo_barras`.
+- El lookup exacto devuelve el material, `stock_total` y `stock_por_almacen`.
+- Los lectores USB funcionan como teclado:
+  - Materiales: Enter ejecuta búsqueda/lookup.
+  - Movimientos: Enter busca por código y agrega al carrito multi-artículo.
+  - Resumen: Enter consulta el material exacto.
+  - POS: Enter filtra por código y, si hay una sola coincidencia, agrega al carrito.
+- Se agrega escáner por cámara en navegador compatible usando `@zxing/browser`.
+- La cámara funciona en celular o computadora si el navegador soporta `getUserMedia`.
+- En producción la cámara requiere HTTPS.
+- Si no hay permisos o no existe cámara disponible, la UI permite captura manual del código.
+- Integración actual:
+  - Materiales: escanear/buscar y capturar SKU o código de barras en el modal.
+  - Movimientos: escanear/agregar material exacto al carrito.
+  - Resumen: escaneo rápido con resultado operativo y stock por almacén.
+  - POS: búsqueda por `codigo_barras` en catálogo y escaneo básico para agregar si hay coincidencia única.
+
+### Pendientes del escáner
+
+- Escaneo por cámara depende del navegador, permisos y HTTPS en producción.
+- No existe todavía carga de imágenes/evidencias a Azure Blob Storage.
+- No existe importación backend Excel/CSV.
+- PM sigue usando `proyecto_id` / `proyecto_nombre_snapshot` sin FK real.
 
 ## Compras Fase 1
 

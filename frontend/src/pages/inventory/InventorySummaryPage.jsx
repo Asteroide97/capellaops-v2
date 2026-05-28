@@ -2,21 +2,26 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
-import { createMaterialRequisition, getInventorySummary } from "../../api/client";
+import BarcodeScannerModal from "../../components/BarcodeScannerModal";
+import { createMaterialRequisition, getInventorySummary, inventoryLookupMaterial } from "../../api/client";
 import {
   ActionButton,
   DataCard,
   DataTable,
   EmptyState,
   FilterCard,
+  MaterialImage,
   MetricCard,
   PageHeader,
   SearchInput,
   StatusBadge,
+  formatDateTime,
   StockBadge,
   buttonClassName,
   formatMoney,
   formatNumber,
+  handleScannerEnter,
+  safeDisplayText,
 } from "./shared";
 
 
@@ -136,6 +141,8 @@ export default function InventorySummaryPage() {
   const [notice, setNotice] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [summary, setSummary] = useState(emptySummary);
+  const [lookupResult, setLookupResult] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   const criticalAlerts = useMemo(() => summary.alertas.slice(0, 8), [summary.alertas]);
 
@@ -177,20 +184,31 @@ export default function InventorySummaryPage() {
     }
   }
 
-  function handleSearch(event) {
-    event.preventDefault();
-    const query = searchTerm.trim();
+  async function handleLookup(codeOverride = searchTerm) {
+    const query = String(codeOverride || "").trim();
 
     if (!query) {
       setNotice("Escribe un SKU, código de barras o nombre de material para continuar.");
+      setLookupResult(null);
       return;
     }
 
-    navigate(`/inventario/materiales?q=${encodeURIComponent(query)}`);
+    setError("");
+    setNotice("");
+    try {
+      const response = await inventoryLookupMaterial({ code: query, token, empresaId });
+      setLookupResult(response.material);
+      setSearchTerm(query);
+      setNotice(`Código detectado: ${query}`);
+    } catch (requestError) {
+      setLookupResult(null);
+      setError(requestError.message || "No se encontró ningún material con ese SKU o código de barras.");
+    }
   }
 
-  function handleScanPlaceholder() {
-    setNotice("Escaneo con cámara pendiente. Puedes pegar o escribir el código manualmente.");
+  async function handleSearch(event) {
+    event.preventDefault();
+    await handleLookup();
   }
 
   if (loading) {
@@ -214,7 +232,7 @@ export default function InventorySummaryPage() {
             <SearchInput
               action={
                 <div className="inventory-actions">
-                  <ActionButton onClick={handleScanPlaceholder} size="sm" type="button">
+                  <ActionButton onClick={() => setScannerOpen(true)} size="sm" type="button">
                     Escanear
                   </ActionButton>
                   <ActionButton size="sm" tone="primary" type="submit">
@@ -222,20 +240,80 @@ export default function InventorySummaryPage() {
                   </ActionButton>
                 </div>
               }
-              hint="Admite lector USB de código de barras como teclado."
+              hint="Admite lector USB de código de barras como teclado y búsqueda exacta por cámara."
               label="Búsqueda rápida"
               onChange={(event) => setSearchTerm(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  handleSearch(event);
-                }
-              }}
+              onKeyDown={(event) => handleScannerEnter(event, handleLookup)}
               placeholder="Escanea un código o busca por SKU/material"
               value={searchTerm}
             />
           </form>
           {notice ? <p className="feature-note">{notice}</p> : null}
           {error ? <p className="form-error">{error}</p> : null}
+
+          {lookupResult ? (
+            <div className="inventory-lookup-result">
+              <div className="inventory-lookup-result-main">
+                <MaterialImage alt={lookupResult.nombre} size="md" src={lookupResult.imagen_url} />
+                <div className="inventory-lookup-result-copy">
+                  <strong>{lookupResult.nombre}</strong>
+                  <div className="inventory-cell-sub">
+                    {lookupResult.sku} · {lookupResult.codigo_barras || "Sin código de barras"}
+                  </div>
+                  <div className="inventory-cell-sub">
+                    {safeDisplayText(lookupResult.categoria, "Sin categoría")} · Stock total {formatNumber(lookupResult.stock_total)}
+                  </div>
+                  <div className="inventory-cell-sub">
+                    Proveedor principal: {safeDisplayText(lookupResult.proveedor_principal_nombre, "Sin proveedor")}
+                  </div>
+                </div>
+              </div>
+
+              <div className="inventory-actions inventory-actions-wrap">
+                <ActionButton
+                  onClick={() => navigate(`/inventario/materiales?q=${encodeURIComponent(lookupResult.sku)}`)}
+                  size="sm"
+                  tone="primary"
+                  type="button"
+                >
+                  Ver material
+                </ActionButton>
+                <ActionButton onClick={() => navigate("/inventario/kardex")} size="sm" type="button">
+                  Ver Kardex
+                </ActionButton>
+                <ActionButton onClick={() => navigate("/inventario/movimientos")} size="sm" type="button">
+                  Nueva entrada
+                </ActionButton>
+                <ActionButton onClick={() => navigate("/inventario/movimientos")} size="sm" type="button">
+                  Nueva salida
+                </ActionButton>
+              </div>
+
+              <div className="inventory-lookup-result-meta">
+                <span className="table-note">Última actualización: {formatDateTime(lookupResult.updated_at)}</span>
+              </div>
+
+              {lookupResult.stock_por_almacen?.length ? (
+                <DataTable
+                  columns={[
+                    { key: "almacen", label: "Almacén" },
+                    { key: "stock", label: "Stock actual" },
+                  ]}
+                >
+                  <tbody>
+                    {lookupResult.stock_por_almacen.map((item) => (
+                      <tr key={item.almacen_id}>
+                        <td>{item.almacen_nombre}</td>
+                        <td>{formatNumber(item.stock_actual)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </DataTable>
+              ) : (
+                <EmptyState compact note="Este material todavía no tiene existencias registradas por almacén." title="Sin stock por almacén" />
+              )}
+            </div>
+          ) : null}
         </FilterCard>
       </PageHeader>
 
@@ -404,6 +482,16 @@ export default function InventorySummaryPage() {
           </DataTable>
         )}
       </DataCard>
+
+      <BarcodeScannerModal
+        helperText="Apunta la cámara al código de barras o QR para consultar el material exacto."
+        onClose={() => setScannerOpen(false)}
+        onDetected={(code) => {
+          handleLookup(code).finally(() => setScannerOpen(false));
+        }}
+        open={scannerOpen}
+        title="Escanear código"
+      />
     </div>
   );
 }

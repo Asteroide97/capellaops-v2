@@ -30,7 +30,7 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Inventario | Navegacion estructurada del modulo | Implementado | Alta | Inventario Shell | Sidebar lateral desplegable con subrutas. | Crecimiento desordenado del modulo. |
 | Inventario | UX/UI Inventario estilo V1 | Parcial | Alta | Inventario UX/UI Parity | `Resumen`, `Materiales`, `Movimientos`, `Kardex` y `Proveedores` ya comparten una base visual mas operativa, con tipografia `Inter`, sidebar blanco y sistema de iconos consistente. | Experiencia inconsistente frente a V1. |
 | Inventario | Resumen / Dashboard de inventario | Implementado | Alta | Inventario Resumen | Dashboard operativo con KPIs, indicadores, alertas y listas calculadas. | Operacion sin visibilidad ejecutiva. |
-| Inventario | Smart SKU Search | Pendiente | Media | Inventario F2 | En Resumen queda placeholder; la busqueda inteligente real no esta conectada todavia. | Localizacion lenta de materiales. |
+| Inventario | Smart SKU Search | Parcial | Media | Inventario F2 | Ya existe lookup exacto por `sku` / `codigo_barras`, pero no hay motor de busqueda inteligente o ranking operativo avanzado. | Localizacion lenta de materiales. |
 | Inventario | Materiales / productos | Parcial | Critica | Inventario F1.1 | Existe catalogo base con SKU, categoria, unidad, costo, precio y stock minimo. | Catalogo insuficiente para operacion avanzada. |
 | Inventario | Materiales UX avanzado | Parcial | Alta | Inventario UX/UI Parity | La tabla, filtros y modal de materiales ya se acercan al flujo operativo de V1, pero la experiencia aun no cubre importacion backend ni escaneo real por camara. | Operacion de catalogo todavia menos madura que la referencia. |
 | Inventario | Materiales con campos avanzados | Parcial | Alta | Inventario UX / F2 | Existen imagen URL, codigo de barras, subcategoria, stock maximo, ubicacion, proveedor principal, lead time y costo promedio actual. | Escalabilidad limitada del catalogo. |
@@ -70,8 +70,12 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Inventario | Importacion CSV / Excel | Pendiente | Alta | Inventario F2 | Solo existe placeholder/documentacion en frontend. | Altas masivas lentas. |
 | Inventario | Exportacion CSV | Parcial | Media | Inventario UX | Materiales ya permite exportacion simple client-side de la vista actual. | Dificil explotar datos fuera del sistema. |
 | Inventario | Edicion masiva | Pendiente | Media | Inventario F2 | No implementado. | Mantenimiento lento del catalogo. |
-| Inventario | Codigo de barras / QR | Parcial | Media | Inventario UX | Los materiales ya guardan `codigo_barras` y la busqueda manual o por lector USB queda soportada. | Operacion lenta en piso si no hay lector o captura asistida. |
-| Inventario | Escaneo QR / codigo de barras por camara | Pendiente | Media | Inventario F2 | En frontend quedan placeholders manuales; aun no existe integracion con camara. | Operacion lenta en piso. |
+| Inventario | Codigo de barras / QR | Implementado | Media | Inventario UX | Cada material puede guardar `codigo_barras` opcional, con validacion unica por empresa y lookup exacto. | Operacion lenta o errores de captura si no existe identificacion clara. |
+| Inventario | Busqueda por scanner USB | Implementado | Alta | Inventario UX | Los inputs de Materiales, Movimientos, Resumen y POS aceptan captura por lector USB y Enter. | Operacion lenta en piso si el lector no dispara busqueda. |
+| Inventario | Escaneo QR / codigo de barras por camara | Parcial | Media | Inventario UX | Existe modal reusable con `@zxing/browser`, pero depende de permisos, HTTPS y soporte del navegador. | Operacion lenta en piso cuando la camara no esta disponible. |
+| Inventario | Escaner en Materiales | Implementado | Alta | Inventario UX | Materiales permite lookup exacto por camara o USB y captura de SKU / codigo de barras en el modal. | Alta de catalogo y consulta mas lentas. |
+| Inventario | Escaner en Movimientos | Implementado | Alta | Inventario UX | El modal multi-articulo permite escanear o escribir codigo exacto para agregar lineas al carrito. | Captura manual mas lenta en entradas y salidas. |
+| Inventario | Escaner en Resumen | Implementado | Media | Inventario UX | El panel de control permite lookup exacto y muestra stock por almacen como resultado rapido. | Consulta lenta desde piso o supervision. |
 | Inventario | Proveedores | Parcial | Alta | Compras F1 + UX | CRUD operativo con RFC, razon social y vista mas usable. | Compras sin directorio base. |
 | Inventario | Proveedor principal en Material | Implementado | Alta | Inventario UX / Compras F1 | `Material.proveedor_principal_id` ya se valida por empresa y se expone con nombre y RFC cuando existe. | Materiales sin referencia clara de abastecimiento. |
 | Inventario | Proveedores UX avanzado | Parcial | Media | Inventario UX/UI Parity | La vista y modal de proveedores ya se acercan a V1 y ahora comparten la misma base tipografica e iconografica del modulo. | Experiencia de compras todavia menos madura que la referencia. |
@@ -100,6 +104,7 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | POS | Corte de caja | Pendiente | Alta | POS F2 | No implementado. | Riesgo operativo y financiero. |
 | POS | Salida automatica de inventario | Implementado | Critica | POS F1 | Cada venta pagada genera salida de inventario. | Stock falso despues de vender. |
 | POS | Venta pendiente / cancelacion | Parcial | Alta | POS F2 | Existe cancelacion basica; venta pendiente formal sigue pendiente. | Caja rigida para escenarios reales. |
+| POS | Escaner en POS | Parcial | Media | POS F1 + UX | El catalogo POS ya busca por `codigo_barras`, soporta lector USB y camara para agregar cuando hay coincidencia unica. | Cobro mas lento si el escaner no resuelve el producto. |
 | POS | Facturacion via POS | Pendiente | Alta | Facturacion F2 | No implementado. | Venta desconectada del CFDI. |
 | Facturacion | CFDI 4.0 | Congelado | Critica | Facturacion futura | Fuera de esta etapa. | No se puede facturar fiscalmente. |
 | Facturacion | Factura.com | Congelado | Alta | Facturacion futura | Fuera de esta etapa. | Sin integracion fiscal. |

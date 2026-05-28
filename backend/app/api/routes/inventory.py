@@ -27,6 +27,7 @@ from app.schemas.inventory import (
     KardexResponse,
     MaterialCreateRequest,
     MaterialItem,
+    MaterialLookupResponse,
     MaterialListResponse,
     MaterialUpdateRequest,
     MovementItem,
@@ -55,6 +56,7 @@ from app.services.inventory import (
     get_material_for_company,
     get_material_item_for_company,
     get_warehouse_for_company,
+    lookup_material_by_code,
     list_materials,
     list_recent_movements,
     list_stock,
@@ -183,7 +185,7 @@ def ensure_unique_barcode(
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Código de barras ya existe en esta empresa.",
+            detail="El código de barras ya está asignado a otro material.",
         )
     return barcode
 
@@ -389,6 +391,15 @@ def get_materials(
     return MaterialListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
+@router.get("/materials/lookup", response_model=MaterialLookupResponse)
+def lookup_material(
+    code: str = Query(min_length=1, max_length=120),
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> MaterialLookupResponse:
+    return lookup_material_by_code(db, context.empresa.id, code)
+
+
 @router.get("/materials/{material_id}", response_model=MaterialItem)
 def material_detail(
     material_id: str,
@@ -449,7 +460,7 @@ def create_material(
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="SKU ya existe en esta empresa.",
+                detail="El SKU ya existe en esta empresa.",
             )
 
         material = Material(
@@ -532,7 +543,7 @@ def update_material(
             if existing:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="SKU ya existe en esta empresa.",
+                    detail="El SKU ya existe en esta empresa.",
                 )
             material.sku = next_sku
         if payload.codigo_barras is not None:

@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "../../auth/AuthContext";
+import BarcodeScannerModal from "../../components/BarcodeScannerModal";
 import {
   createInventoryMovementBulk,
   getInventoryMovements,
   getMaterials,
   getWarehouses,
+  inventoryLookupMaterial,
 } from "../../api/client";
 import {
   ActionButton,
@@ -26,6 +28,7 @@ import {
   formatDateTime,
   formatMoney,
   formatNumber,
+  handleScannerEnter,
   normalizeDecimalInput,
   safeDisplayText,
 } from "./shared";
@@ -118,6 +121,7 @@ export default function MovementsPage() {
   const [modalState, setModalState] = useState(defaultModalState);
   const [draft, setDraft] = useState(defaultDraft);
   const [detailMovement, setDetailMovement] = useState(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   const filteredMaterials = useMemo(() => {
     const q = draft.material_search.trim().toLowerCase();
@@ -134,6 +138,80 @@ export default function MovementsPage() {
 
   const selectedWarehouse = warehouses.find((warehouse) => warehouse.id === draft.almacen_id);
   const currentMovementMeta = movementMetaMap[modalState.tipo] ?? movementMetaMap.entrada;
+
+  function upsertMaterialOption(material) {
+    setMaterials((current) => {
+      if (current.some((item) => item.id === material.id)) {
+        return current;
+      }
+      return [...current, material].sort((left, right) =>
+        `${left.nombre} ${left.sku}`.localeCompare(`${right.nombre} ${right.sku}`, "es"),
+      );
+    });
+  }
+
+  function addResolvedMaterialToDraft(material) {
+    upsertMaterialOption(material);
+    let nextNotice = `Código detectado: ${material.codigo_barras || material.sku}`;
+
+    setDraft((current) => {
+      const existingIndex = current.items.findIndex((item) => item.material_id === material.id);
+      if (existingIndex >= 0) {
+        if (modalState.tipo === "ajuste") {
+          nextNotice = "Ese material ya existe en el carrito del ajuste.";
+          return current;
+        }
+
+        const nextItems = current.items.map((item, index) => {
+          if (index !== existingIndex) {
+            return item;
+          }
+
+          const nextQuantity = Number(item.cantidad || 0) + 1;
+          return {
+            ...item,
+            cantidad: String(nextQuantity),
+          };
+        });
+        return {
+          ...current,
+          material_candidate_id: "",
+          material_search: "",
+          items: nextItems,
+        };
+      }
+
+      const nextLine = buildDefaultLine(modalState.tipo, material.id);
+      if (modalState.tipo === "entrada" || modalState.tipo === "salida") {
+        nextLine.cantidad = "1";
+      }
+
+      return {
+        ...current,
+        material_candidate_id: "",
+        material_search: "",
+        items: [...current.items, nextLine],
+      };
+    });
+
+    setNotice(nextNotice);
+  }
+
+  async function lookupMaterialForMovement(code) {
+    const normalized = String(code || "").trim();
+    if (!normalized) {
+      setError("Escribe o escanea un código antes de agregar el material.");
+      return;
+    }
+
+    setError("");
+    try {
+      const response = await inventoryLookupMaterial({ code: normalized, token, empresaId });
+      addResolvedMaterialToDraft(response.material);
+    } catch (requestError) {
+      setError(requestError.message || "No se encontró material con ese código.");
+    }
+  }
 
   async function loadOptions() {
     const [warehouseResponse, materialResponse] = await Promise.all([
@@ -198,10 +276,6 @@ export default function MovementsPage() {
   function closeMovementModal() {
     setModalState(defaultModalState);
     setDraft(defaultDraft);
-  }
-
-  function handleScanPlaceholder() {
-    setNotice("Escaneo con cámara pendiente. Puedes pegar o escribir el código manualmente.");
   }
 
   function addDraftLine(materialId = draft.material_candidate_id) {
@@ -321,6 +395,17 @@ export default function MovementsPage() {
             hint="Busca por material, SKU, código de barras o motivo."
             label="Buscar movimientos"
             onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
+            onKeyDown={(event) =>
+              handleScannerEnter(event, async () => {
+                const nextFilters = { ...filters, offset: 0 };
+                setFilters(nextFilters);
+                try {
+                  await loadMovementsPage(nextFilters);
+                } catch (requestError) {
+                  setError(requestError.message || "No se pudieron aplicar los filtros.");
+                }
+              })
+            }
             placeholder="Material, SKU, código de barras o motivo"
             value={filters.q}
           />
@@ -719,11 +804,12 @@ export default function MovementsPage() {
                 <SearchInput
                   action={
                     <div className="inventory-actions">
-                      <ActionButton onClick={handleScanPlaceholder} size="sm" type="button">
+                      <ActionButton onClick={() => setScannerOpen(true)} size="sm" type="button">
                         Escanear SKU
                       </ActionButton>
                     </div>
                   }
+                  hint="Escribe o escanea SKU / código de barras y presiona Enter para agregar."
                   label="Buscar material"
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -731,12 +817,15 @@ export default function MovementsPage() {
                       material_search: event.target.value,
                     }))
                   }
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      addDraftLine();
-                    }
-                  }}
+                  onKeyDown={(event) =>
+                    handleScannerEnter(event, async (code) => {
+                      if (!code && draft.material_candidate_id) {
+                        addDraftLine();
+                        return;
+                      }
+                      await lookupMaterialForMovement(code);
+                    })
+                  }
                   placeholder="Nombre, SKU o código de barras"
                   value={draft.material_search}
                 />
@@ -936,6 +1025,16 @@ export default function MovementsPage() {
           </div>
         ) : null}
       </ModalShell>
+
+      <BarcodeScannerModal
+        helperText="Apunta la cámara al código de barras o QR para agregar el material al carrito."
+        onClose={() => setScannerOpen(false)}
+        onDetected={(code) => {
+          lookupMaterialForMovement(code).finally(() => setScannerOpen(false));
+        }}
+        open={scannerOpen}
+        title="Escanear SKU o código"
+      />
     </div>
   );
 }

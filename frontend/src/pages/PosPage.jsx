@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "../auth/AuthContext";
+import BarcodeScannerModal from "../components/BarcodeScannerModal";
 import {
   cancelPosSale,
   createPosSale,
@@ -150,6 +151,7 @@ export default function POSPage() {
   const [selectedSale, setSelectedSale] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [cancelReason, setCancelReason] = useState("");
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   const cartSubtotal = useMemo(
     () =>
@@ -437,9 +439,41 @@ export default function POSPage() {
     try {
       const nextFilters = { ...catalogFilters, offset: 0 };
       setCatalogFilters(nextFilters);
-      await loadCatalog(selectedWarehouseId, nextFilters);
+      const response = await loadCatalog(selectedWarehouseId, nextFilters);
+      if (nextFilters.q && response?.items?.length === 1) {
+        addToCart(response.items[0]);
+        setSuccess(`Código detectado: ${nextFilters.q}`);
+      }
     } catch (requestError) {
       setError(requestError.message || "No se pudo filtrar el catálogo.");
+    }
+  }
+
+  async function handleCatalogScan(codeOverride = catalogFilters.q) {
+    const code = String(codeOverride || "").trim();
+    if (!code) {
+      setError("Escribe o escanea un código para buscar en POS.");
+      return;
+    }
+
+    setError("");
+    setSuccess("");
+    const nextFilters = { ...catalogFilters, q: code, offset: 0 };
+    setCatalogFilters(nextFilters);
+
+    try {
+      const response = await loadCatalog(selectedWarehouseId, nextFilters);
+      if (!response || response.items.length === 0) {
+        setError("No se encontró ningún material con ese SKU o código de barras.");
+        return;
+      }
+
+      if (response.items.length === 1) {
+        addToCart(response.items[0]);
+        setSuccess(`Código detectado: ${code}`);
+      }
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo buscar el código en POS.");
     }
   }
 
@@ -573,13 +607,16 @@ export default function POSPage() {
                   onChange={(event) =>
                     setCatalogFilters((current) => ({ ...current, q: event.target.value }))
                   }
-                  placeholder="SKU o nombre"
+                  placeholder="SKU, nombre o código de barras"
                   type="text"
                   value={catalogFilters.q}
                 />
               </label>
 
               <div className="inventory-actions">
+                <button className="ghost-button" onClick={() => setScannerOpen(true)} type="button">
+                  Escanear
+                </button>
                 <button className="ghost-button" type="submit">
                   Buscar
                 </button>
@@ -1118,6 +1155,16 @@ export default function POSPage() {
           </>
         )}
       </div>
+
+      <BarcodeScannerModal
+        helperText="Apunta la cámara al código para buscar el producto en el catálogo del almacén seleccionado."
+        onClose={() => setScannerOpen(false)}
+        onDetected={(code) => {
+          handleCatalogScan(code).finally(() => setScannerOpen(false));
+        }}
+        open={scannerOpen}
+        title="Escanear producto POS"
+      />
     </section>
   );
 }

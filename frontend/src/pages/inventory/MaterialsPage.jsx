@@ -2,7 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
-import { createMaterial, createMaterialRequisition, getMaterials, getSuppliers, updateMaterial } from "../../api/client";
+import BarcodeScannerModal from "../../components/BarcodeScannerModal";
+import {
+  createMaterial,
+  createMaterialRequisition,
+  getMaterials,
+  getSuppliers,
+  inventoryLookupMaterial,
+  updateMaterial,
+} from "../../api/client";
 import {
   ActionButton,
   DEFAULT_PAGE_SIZE,
@@ -24,6 +32,7 @@ import {
   buttonClassName,
   formatMoney,
   formatNumber,
+  handleScannerEnter,
   formatPlanLabel,
   normalizeDecimalInput,
   parseBooleanFilter,
@@ -110,6 +119,8 @@ export default function MaterialsPage() {
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(defaultForm);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerTarget, setScannerTarget] = useState("search");
 
   const planLabel = formatPlanLabel(empresa?.plan_code);
   const allSelected = materials.length > 0 && selectedIds.length === materials.length;
@@ -146,13 +157,87 @@ export default function MaterialsPage() {
     setSelectedIds([]);
   }
 
+  function syncQuery(nextQuery) {
+    if (nextQuery) {
+      setSearchParams({ q: nextQuery });
+      return;
+    }
+    setSearchParams({});
+  }
+
+  function applyLookupResult(material, code) {
+    const nextFilters = { ...filters, q: code, offset: 0 };
+    setFilters(nextFilters);
+    syncQuery(code);
+    setMaterials([material]);
+    setMeta({
+      total: 1,
+      limit: Math.max(1, Number(meta.limit || DEFAULT_PAGE_SIZE)),
+      offset: 0,
+    });
+    setSelectedIds([]);
+    setNotice(`Código detectado: ${material.codigo_barras || material.sku}`);
+  }
+
+  async function lookupExactMaterial(code) {
+    return inventoryLookupMaterial({
+      code,
+      token,
+      empresaId,
+    });
+  }
+
+  async function handleMaterialSearch(codeOverride = filters.q) {
+    const query = String(codeOverride || "").trim();
+    const nextFilters = { ...filters, q: query, offset: 0 };
+
+    setError("");
+    setSuccess("");
+    setNotice("");
+
+    if (!query) {
+      await applyFilters(nextFilters);
+      return;
+    }
+
+    try {
+      const response = await lookupExactMaterial(query);
+      applyLookupResult(response.material, query);
+    } catch (requestError) {
+      if (requestError.status === 404) {
+        await applyFilters(nextFilters);
+        return;
+      }
+      throw requestError;
+    }
+  }
+
+  async function handleExactMaterialLookup(code) {
+    const query = String(code || "").trim();
+    if (!query) {
+      setNotice("Escribe o escanea un código para continuar.");
+      return;
+    }
+
+    setError("");
+    setSuccess("");
+    setNotice("");
+    try {
+      const response = await lookupExactMaterial(query);
+      applyLookupResult(response.material, query);
+    } catch (requestError) {
+      setError(requestError.message || "No se encontró ningún material con ese SKU o código de barras.");
+    }
+  }
+
+  function openScanner(target) {
+    setScannerTarget(target);
+    setScannerOpen(true);
+  }
+
   async function applyFilters(nextFilters) {
     setFilters(nextFilters);
-    if (nextFilters.q) {
-      setSearchParams({ q: nextFilters.q });
-    } else {
-      setSearchParams({});
-    }
+    syncQuery(nextFilters.q);
     await loadMaterialsPage(nextFilters);
   }
 
@@ -350,12 +435,18 @@ export default function MaterialsPage() {
     setSuccess("Exportación CSV generada con la vista actual.");
   }
 
-  function handleScanPlaceholder(field) {
-    setNotice(
-      field === "sku"
-        ? "Escaneo con cámara pendiente. Puedes pegar o escribir el SKU manualmente."
-        : "Escaneo con cámara pendiente. Puedes pegar o escribir el código manualmente.",
-    );
+  function handleScannerDetected(code) {
+    if (scannerTarget === "sku" || scannerTarget === "barcode") {
+      setForm((current) => ({
+        ...current,
+        [scannerTarget === "sku" ? "sku" : "codigo_barras"]: code,
+      }));
+      setNotice(`Código detectado: ${code}`);
+      return;
+    }
+
+    setFilters((current) => ({ ...current, q: code }));
+    handleExactMaterialLookup(code);
   }
 
   if (loading) {
@@ -403,16 +494,15 @@ export default function MaterialsPage() {
           <SearchInput
             action={
               <div className="inventory-actions">
-                <ActionButton onClick={() => handleScanPlaceholder("barcode")} size="sm" type="button">
+                <ActionButton onClick={() => openScanner("search")} size="sm" type="button">
                   Escanear
                 </ActionButton>
                 <ActionButton
                   onClick={async () => {
-                    const nextFilters = { ...filters, offset: 0 };
                     try {
-                      await applyFilters(nextFilters);
-                    } catch {
-                      setError(MATERIALS_LOAD_ERROR);
+                      await handleMaterialSearch();
+                    } catch (requestError) {
+                      setError(requestError.message || MATERIALS_LOAD_ERROR);
                     }
                   }}
                   size="sm"
@@ -423,20 +513,18 @@ export default function MaterialsPage() {
                 </ActionButton>
               </div>
             }
-            hint="Admite lectura manual o lector USB de código de barras."
+            hint="Admite lectura manual, lector USB y escáner por cámara."
             label="Buscar material"
             onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
-            onKeyDown={async (event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                const nextFilters = { ...filters, offset: 0 };
+            onKeyDown={(event) =>
+              handleScannerEnter(event, async (code) => {
                 try {
-                  await applyFilters(nextFilters);
-                } catch {
-                  setError(MATERIALS_LOAD_ERROR);
+                  await handleMaterialSearch(code);
+                } catch (requestError) {
+                  setError(requestError.message || MATERIALS_LOAD_ERROR);
                 }
-              }
-            }}
+              })
+            }
             placeholder="Filtrar por nombre, SKU, categoría o código de barras..."
             value={filters.q}
           />
@@ -717,7 +805,7 @@ export default function MaterialsPage() {
                     type="text"
                     value={form.sku}
                   />
-                  <ActionButton onClick={() => handleScanPlaceholder("sku")} size="sm" type="button">
+                  <ActionButton onClick={() => openScanner("sku")} size="sm" type="button">
                     Escanear
                   </ActionButton>
                 </div>
@@ -735,7 +823,7 @@ export default function MaterialsPage() {
                     type="text"
                     value={form.codigo_barras}
                   />
-                  <ActionButton onClick={() => handleScanPlaceholder("barcode")} size="sm" type="button">
+                  <ActionButton onClick={() => openScanner("barcode")} size="sm" type="button">
                     Escanear
                   </ActionButton>
                 </div>
@@ -997,6 +1085,20 @@ export default function MaterialsPage() {
           </div>
         </form>
       </ModalShell>
+
+      <BarcodeScannerModal
+        helperText="Apunta la cámara al código de barras o QR. También puedes escribir el código manualmente."
+        onClose={() => setScannerOpen(false)}
+        onDetected={handleScannerDetected}
+        open={scannerOpen}
+        title={
+          scannerTarget === "sku"
+            ? "Escanear SKU"
+            : scannerTarget === "barcode"
+              ? "Escanear código de barras"
+              : "Escanear código"
+        }
+      />
     </div>
   );
 }

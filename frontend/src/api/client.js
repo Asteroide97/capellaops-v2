@@ -251,6 +251,13 @@ export function getMaterialDetail({ materialId, token, empresaId }) {
 }
 
 
+export function inventoryLookupMaterial({ code, token, empresaId }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "code", code);
+  return apiRequest(`/inventory/materials/lookup?${query.toString()}`, { token, empresaId });
+}
+
+
 export function createMaterialRequisition({ materialId, token, empresaId }) {
   return apiRequest(`/inventory/materials/${materialId}/create-requisition`, {
     method: "POST",

@@ -185,6 +185,20 @@ class MaterialListResponse(BaseModel):
     offset: int
 
 
+class MaterialLookupWarehouseStockItem(BaseModel):
+    almacen_id: str
+    almacen_nombre: str
+    stock_actual: Decimal
+
+
+class MaterialLookupItem(MaterialItem):
+    stock_por_almacen: list[MaterialLookupWarehouseStockItem] = Field(default_factory=list)
+
+
+class MaterialLookupResponse(BaseModel):
+    material: MaterialLookupItem
+
+
 class StockItem(BaseModel):
     id: str
     empresa_id: str
