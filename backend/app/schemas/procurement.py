@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field
 
 class SupplierCreateRequest(BaseModel):
     nombre: str = Field(min_length=1, max_length=160)
+    razon_social: str | None = Field(default=None, max_length=200)
+    rfc: str | None = Field(default=None, max_length=40)
     contacto_nombre: str | None = Field(default=None, max_length=160)
     correo: str | None = Field(default=None, max_length=255)
     telefono: str | None = Field(default=None, max_length=40)
@@ -17,6 +19,8 @@ class SupplierCreateRequest(BaseModel):
 
 class SupplierUpdateRequest(BaseModel):
     nombre: str | None = Field(default=None, min_length=1, max_length=160)
+    razon_social: str | None = Field(default=None, max_length=200)
+    rfc: str | None = Field(default=None, max_length=40)
     contacto_nombre: str | None = Field(default=None, max_length=160)
     correo: str | None = Field(default=None, max_length=255)
     telefono: str | None = Field(default=None, max_length=40)
@@ -29,6 +33,8 @@ class SupplierItem(BaseModel):
     id: str
     empresa_id: str
     nombre: str
+    razon_social: str | None = None
+    rfc: str | None = None
     contacto_nombre: str | None = None
     correo: str | None = None
     telefono: str | None = None

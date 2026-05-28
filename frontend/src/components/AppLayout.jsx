@@ -30,51 +30,53 @@ export default function AppLayout() {
       <Sidebar />
 
       <div className="app-content">
-        {impersonation ? (
-          <div className="impersonation-banner">
-            <div>
-              <strong>
-                Estás impersonando a {user?.full_name} en {empresa?.name}.
-              </strong>
-            </div>
-            <button className="ghost-button" onClick={handleExitImpersonation} type="button">
-              Salir de impersonación
-            </button>
-          </div>
-        ) : null}
-
-        {notice ? (
-          <div className="feature-card setup-inline-card">
-            <div className="setup-inline-row">
-              <span>{notice}</span>
-              <button className="link-button" onClick={dismissNotice} type="button">
-                Cerrar
+        <div className="app-content-shell">
+          {impersonation ? (
+            <div className="impersonation-banner">
+              <div>
+                <strong>
+                  Estás impersonando a {user?.full_name} en {empresa?.name}.
+                </strong>
+              </div>
+              <button className="ghost-button" onClick={handleExitImpersonation} type="button">
+                Salir de impersonación
               </button>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">Capella Ops V2</p>
-            <h1>{empresa?.name ?? "Panel principal"}</h1>
-          </div>
+          {notice ? (
+            <div className="feature-card setup-inline-card">
+              <div className="setup-inline-row">
+                <span>{notice}</span>
+                <button className="link-button" onClick={dismissNotice} type="button">
+                  Cerrar
+                </button>
+              </div>
+            </div>
+          ) : null}
 
-          <div className="topbar-actions">
-            <div className="user-chip">
-              <strong>{user?.full_name}</strong>
-              <span>{user?.email}</span>
+          <header className="topbar">
+            <div className="topbar-main">
+              <p className="eyebrow">Capella Ops V2</p>
+              <h1>{empresa?.name ?? "Panel principal"}</h1>
             </div>
 
-            <button className="ghost-button" onClick={logout} type="button">
-              Cerrar sesión
-            </button>
-          </div>
-        </header>
+            <div className="topbar-actions">
+              <div className="user-chip">
+                <strong>{user?.full_name}</strong>
+                <span>{user?.email}</span>
+              </div>
 
-        <main className="page-container">
-          <Outlet />
-        </main>
+              <button className="ghost-button" onClick={logout} type="button">
+                Cerrar sesión
+              </button>
+            </div>
+          </header>
+
+          <main className="page-container">
+            <Outlet />
+          </main>
+        </div>
       </div>
     </div>
   );

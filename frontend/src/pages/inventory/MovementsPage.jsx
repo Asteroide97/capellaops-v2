@@ -1,30 +1,59 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "../../auth/AuthContext";
 import {
-  createInventoryMovement,
+  createInventoryMovementBulk,
   getInventoryMovements,
   getMaterials,
   getWarehouses,
 } from "../../api/client";
 import {
+  ActionButton,
   DEFAULT_PAGE_SIZE,
+  DataCard,
+  DataTable,
   EmptyState,
-  formatDateTime,
-  formatNumber,
-  normalizeDecimalInput,
+  Field,
+  FilterCard,
+  FormGrid,
+  ModalShell,
+  PageHeader,
   PaginationControls,
   ResultMeta,
+  SearchInput,
+  SectionTitle,
+  StatusBadge,
+  formatDateTime,
+  formatMoney,
+  formatNumber,
+  normalizeDecimalInput,
+  safeDisplayText,
 } from "./shared";
 
 
 const movementTypes = [
-  { value: "entrada", label: "Registrar entrada" },
-  { value: "salida", label: "Registrar salida" },
-  { value: "ajuste", label: "Registrar ajuste" },
+  { value: "entrada", label: "Entrada" },
+  { value: "salida", label: "Salida" },
+  { value: "ajuste", label: "Ajuste" },
 ];
 
+const movementMetaMap = {
+  entrada: {
+    helper: "Aumenta stock",
+    tone: "success",
+  },
+  salida: {
+    helper: "Descuenta stock",
+    tone: "danger",
+  },
+  ajuste: {
+    helper: "Requiere justificación",
+    tone: "warning",
+  },
+};
+
 const defaultFilters = {
+  q: "",
   almacen_id: "",
   material_id: "",
   tipo: "",
@@ -34,6 +63,45 @@ const defaultFilters = {
   offset: 0,
 };
 
+const defaultModalState = {
+  open: false,
+  tipo: "entrada",
+};
+
+const defaultDraft = {
+  almacen_id: "",
+  motivo: "",
+  entregado_por: "",
+  recibido_por: "",
+  documento_referencia: "",
+  evidencia_url: "",
+  referencia_id: "",
+  notas: "",
+  es_proyecto: false,
+  proyecto_id: "",
+  proyecto_nombre_snapshot: "",
+  material_search: "",
+  material_candidate_id: "",
+  items: [],
+};
+
+
+function buildDefaultLine(tipo, materialId = "") {
+  return {
+    local_id: `${tipo}-${crypto.randomUUID()}`,
+    material_id: materialId,
+    cantidad: "",
+    cantidad_nueva: "",
+    costo_unitario: "",
+    notas: "",
+  };
+}
+
+
+function movementTone(tipo) {
+  return movementMetaMap[tipo]?.tone ?? "neutral";
+}
+
 
 export default function MovementsPage() {
   const { token, empresaId } = useAuth();
@@ -41,32 +109,42 @@ export default function MovementsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [notice, setNotice] = useState("");
   const [warehouses, setWarehouses] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [movements, setMovements] = useState([]);
   const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
   const [filters, setFilters] = useState(defaultFilters);
-  const [form, setForm] = useState({
-    almacen_id: "",
-    material_id: "",
-    tipo: "entrada",
-    cantidad: "",
-    cantidad_nueva: "",
-    referencia_tipo: "manual",
-    referencia_id: "",
-    notas: "",
-  });
+  const [modalState, setModalState] = useState(defaultModalState);
+  const [draft, setDraft] = useState(defaultDraft);
+  const [detailMovement, setDetailMovement] = useState(null);
+
+  const filteredMaterials = useMemo(() => {
+    const q = draft.material_search.trim().toLowerCase();
+    if (!q) {
+      return materials.slice(0, 60);
+    }
+
+    return materials.filter((material) =>
+      [material.sku, material.nombre, material.codigo_barras]
+        .filter(Boolean)
+        .some((value) => safeDisplayText(value, "").toLowerCase().includes(q)),
+    );
+  }, [draft.material_search, materials]);
+
+  const selectedWarehouse = warehouses.find((warehouse) => warehouse.id === draft.almacen_id);
+  const currentMovementMeta = movementMetaMap[modalState.tipo] ?? movementMetaMap.entrada;
 
   async function loadOptions() {
     const [warehouseResponse, materialResponse] = await Promise.all([
       getWarehouses({ token, empresaId, filters: { activo: true, limit: 200, offset: 0 } }),
-      getMaterials({ token, empresaId, filters: { activo: true, limit: 200, offset: 0 } }),
+      getMaterials({ token, empresaId, filters: { activo: true, limit: 500, offset: 0 } }),
     ]);
     setWarehouses(warehouseResponse.items);
     setMaterials(materialResponse.items);
     return {
-      warehouses: warehouseResponse.items,
-      materials: materialResponse.items,
+      warehouseItems: warehouseResponse.items,
+      materialItems: materialResponse.items,
     };
   }
 
@@ -90,10 +168,9 @@ export default function MovementsPage() {
       setError("");
       try {
         const options = await loadOptions();
-        setForm((current) => ({
+        setDraft((current) => ({
           ...current,
-          almacen_id: current.almacen_id || options.warehouses[0]?.id || "",
-          material_id: current.material_id || options.materials[0]?.id || "",
+          almacen_id: current.almacen_id || options.warehouseItems[0]?.id || "",
         }));
         await loadMovementsPage(defaultFilters);
       } catch (requestError) {
@@ -106,43 +183,100 @@ export default function MovementsPage() {
     bootstrap();
   }, [token, empresaId]);
 
+  function openMovementModal(tipo) {
+    setModalState({ open: true, tipo });
+    setDraft((current) => ({
+      ...defaultDraft,
+      almacen_id: current.almacen_id || warehouses[0]?.id || "",
+      items: [],
+    }));
+    setError("");
+    setSuccess("");
+    setNotice("");
+  }
+
+  function closeMovementModal() {
+    setModalState(defaultModalState);
+    setDraft(defaultDraft);
+  }
+
+  function handleScanPlaceholder() {
+    setNotice("Escaneo con cámara pendiente. Puedes pegar o escribir el código manualmente.");
+  }
+
+  function addDraftLine(materialId = draft.material_candidate_id) {
+    if (!materialId) {
+      setError("Selecciona un material para agregarlo.");
+      return;
+    }
+
+    setDraft((current) => ({
+      ...current,
+      material_candidate_id: "",
+      material_search: "",
+      items: [...current.items, buildDefaultLine(modalState.tipo, materialId)],
+    }));
+  }
+
+  function updateDraftLine(localId, key, value) {
+    setDraft((current) => ({
+      ...current,
+      items: current.items.map((item) => (item.local_id === localId ? { ...item, [key]: value } : item)),
+    }));
+  }
+
+  function removeDraftLine(localId) {
+    setDraft((current) => ({
+      ...current,
+      items: current.items.filter((item) => item.local_id !== localId),
+    }));
+  }
+
   async function handleSubmit(event) {
     event.preventDefault();
     setSubmitting(true);
     setError("");
     setSuccess("");
-    try {
-      const payload = {
-        almacen_id: form.almacen_id,
-        material_id: form.material_id,
-        tipo: form.tipo,
-        referencia_tipo: form.referencia_tipo || "manual",
-        referencia_id: form.referencia_id || null,
-        notas: form.notas || null,
-      };
 
-      if (form.tipo === "ajuste") {
-        payload.cantidad_nueva = form.cantidad_nueva;
-      } else {
-        payload.cantidad = form.cantidad;
+    try {
+      if (draft.items.length === 0) {
+        throw new Error("Debes agregar al menos un material.");
       }
 
-      await createInventoryMovement({ token, empresaId, payload });
-      setSuccess(
-        form.tipo === "entrada"
-          ? "Entrada registrada correctamente."
-          : form.tipo === "salida"
-            ? "Salida registrada correctamente."
-            : "Ajuste registrado correctamente.",
-      );
-      setForm((current) => ({
-        ...current,
-        cantidad: "",
-        cantidad_nueva: "",
-        referencia_id: "",
-        notas: "",
-      }));
+      if (modalState.tipo === "ajuste" && !draft.notas.trim()) {
+        throw new Error("La justificación detallada es obligatoria para ajustes.");
+      }
+
+      const payload = {
+        almacen_id: draft.almacen_id,
+        tipo: modalState.tipo,
+        referencia_tipo: "manual_bulk",
+        referencia_id: draft.referencia_id || null,
+        motivo: draft.motivo || null,
+        entregado_por: draft.entregado_por || null,
+        recibido_por: draft.recibido_por || null,
+        documento_referencia: draft.documento_referencia || null,
+        evidencia_url: draft.evidencia_url || null,
+        es_proyecto: modalState.tipo === "salida" ? draft.es_proyecto : false,
+        proyecto_id: modalState.tipo === "salida" && draft.es_proyecto ? draft.proyecto_id || null : null,
+        proyecto_nombre_snapshot:
+          modalState.tipo === "salida" && draft.es_proyecto ? draft.proyecto_nombre_snapshot || null : null,
+        notas: draft.notas || null,
+        items: draft.items.map((item) => ({
+          material_id: item.material_id,
+          cantidad: modalState.tipo === "ajuste" ? null : item.cantidad,
+          cantidad_nueva: modalState.tipo === "ajuste" ? item.cantidad_nueva : null,
+          costo_unitario:
+            modalState.tipo === "entrada" || modalState.tipo === "ajuste" ? item.costo_unitario || null : null,
+          notas: item.notas || null,
+        })),
+      };
+
+      await createInventoryMovementBulk({ token, empresaId, payload });
+      setSuccess("Movimiento multi-artículo registrado correctamente.");
+      closeMovementModal();
       await loadMovementsPage(filters);
+      await loadOptions();
     } catch (requestError) {
       setError(requestError.message || "No se pudo registrar el movimiento.");
     } finally {
@@ -154,239 +288,121 @@ export default function MovementsPage() {
     return <div className="screen-center">Cargando movimientos...</div>;
   }
 
-  const currentMovementLabel =
-    movementTypes.find((item) => item.value === form.tipo)?.label ?? "Registrar movimiento";
-
   return (
-    <div className="inventory-grid">
-      <form className="feature-card inventory-form-card" onSubmit={handleSubmit}>
-        <div className="feature-header">
-          <p className="eyebrow">Operación diaria</p>
-          <h2>{currentMovementLabel}</h2>
-          <p>Entradas, salidas y ajustes auditables conectados al stock real de cada almacén.</p>
-        </div>
-
-        {error ? <p className="form-error">{error}</p> : null}
-        {success ? <p className="form-success">{success}</p> : null}
-
-        {warehouses.length === 0 || materials.length === 0 ? (
-          <EmptyState
-            title="Faltan datos base."
-            note="Necesitas al menos un almacén y un material activo antes de mover inventario."
-          />
-        ) : (
+    <div className="dashboard-stack inventory-screen">
+      <PageHeader
+        actions={
           <>
-            <div className="inventory-toggle-row">
-              {movementTypes.map((item) => (
-                <button
-                  className={`inventory-toggle-button ${form.tipo === item.value ? "active" : ""}`}
-                  key={item.value}
-                  onClick={() =>
-                    setForm((current) => ({
-                      ...current,
-                      tipo: item.value,
-                      cantidad: "",
-                      cantidad_nueva: "",
-                    }))
-                  }
-                  type="button"
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="inventory-form-grid">
-              <label>
-                Almacén
-                <select
-                  onChange={(event) => setForm((current) => ({ ...current, almacen_id: event.target.value }))}
-                  required
-                  value={form.almacen_id}
-                >
-                  {warehouses.map((warehouse) => (
-                    <option key={warehouse.id} value={warehouse.id}>
-                      {warehouse.nombre} ({warehouse.codigo})
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label>
-                Material
-                <select
-                  onChange={(event) => setForm((current) => ({ ...current, material_id: event.target.value }))}
-                  required
-                  value={form.material_id}
-                >
-                  {materials.map((material) => (
-                    <option key={material.id} value={material.id}>
-                      {material.sku} - {material.nombre}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {form.tipo === "ajuste" ? (
-                <label>
-                  Cantidad nueva
-                  <input
-                    min="0"
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        cantidad_nueva: normalizeDecimalInput(event.target.value),
-                      }))
-                    }
-                    required
-                    step="0.0001"
-                    type="number"
-                    value={form.cantidad_nueva}
-                  />
-                </label>
-              ) : (
-                <label>
-                  Cantidad
-                  <input
-                    min="0.0001"
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        cantidad: normalizeDecimalInput(event.target.value),
-                      }))
-                    }
-                    required
-                    step="0.0001"
-                    type="number"
-                    value={form.cantidad}
-                  />
-                </label>
-              )}
-
-              <label>
-                Referencia tipo
-                <input
-                  onChange={(event) => setForm((current) => ({ ...current, referencia_tipo: event.target.value }))}
-                  type="text"
-                  value={form.referencia_tipo}
-                />
-              </label>
-
-              <label>
-                Referencia ID
-                <input
-                  onChange={(event) => setForm((current) => ({ ...current, referencia_id: event.target.value }))}
-                  type="text"
-                  value={form.referencia_id}
-                />
-              </label>
-
-              <label className="inventory-form-span-2">
-                Notas
-                <textarea
-                  onChange={(event) => setForm((current) => ({ ...current, notas: event.target.value }))}
-                  rows={3}
-                  value={form.notas}
-                />
-              </label>
-            </div>
-
-            <button className="primary-button" disabled={submitting} type="submit">
-              {submitting ? "Registrando..." : currentMovementLabel}
-            </button>
+            {movementTypes.map((item) => (
+              <ActionButton
+                key={item.value}
+                onClick={() => openMovementModal(item.value)}
+                size="sm"
+                tone={item.value === "entrada" ? "primary" : "ghost"}
+                type="button"
+              >
+                {item.label}
+              </ActionButton>
+            ))}
           </>
-        )}
-      </form>
+        }
+        eyebrow="Inventario"
+        subtitle="Entradas, salidas y ajustes de inventario"
+        title="Movimientos"
+      />
 
-      <div className="feature-card inventory-table-card">
-        <div className="feature-header">
-          <p className="eyebrow">Auditoría</p>
-          <h2>Movimientos recientes</h2>
-          <ResultMeta label="movimientos" loaded={movements.length} total={meta.total} />
-        </div>
+      {error ? <p className="form-error">{error}</p> : null}
+      {success ? <p className="form-success">{success}</p> : null}
+      {notice ? <p className="feature-note">{notice}</p> : null}
 
-        <form
-          className="inventory-filter-grid"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const nextFilters = { ...filters, offset: 0 };
-            setFilters(nextFilters);
-            try {
-              await loadMovementsPage(nextFilters);
-            } catch (requestError) {
-              setError(requestError.message || "No se pudieron filtrar los movimientos.");
-            }
-          }}
-        >
-          <label>
-            Almacén
-            <select
-              onChange={(event) => setFilters((current) => ({ ...current, almacen_id: event.target.value }))}
-              value={filters.almacen_id}
-            >
-              <option value="">Todos</option>
-              {warehouses.map((warehouse) => (
-                <option key={warehouse.id} value={warehouse.id}>
-                  {warehouse.nombre} ({warehouse.codigo})
-                </option>
-              ))}
-            </select>
-          </label>
+      <FilterCard>
+        <div className="inventory-filter-toolbar inventory-filter-toolbar-stack">
+          <SearchInput
+            hint="Busca por material, SKU, código de barras o motivo."
+            label="Buscar movimientos"
+            onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
+            placeholder="Material, SKU, código de barras o motivo"
+            value={filters.q}
+          />
 
-          <label>
-            Material
-            <select
-              onChange={(event) => setFilters((current) => ({ ...current, material_id: event.target.value }))}
-              value={filters.material_id}
-            >
-              <option value="">Todos</option>
-              {materials.map((material) => (
-                <option key={material.id} value={material.id}>
-                  {material.sku} - {material.nombre}
-                </option>
-              ))}
-            </select>
-          </label>
+          <FormGrid className="inventory-filter-grid-wide">
+            <Field label="Almacén">
+              <select
+                onChange={(event) => setFilters((current) => ({ ...current, almacen_id: event.target.value }))}
+                value={filters.almacen_id}
+              >
+                <option value="">Todos</option>
+                {warehouses.map((warehouse) => (
+                  <option key={warehouse.id} value={warehouse.id}>
+                    {safeDisplayText(warehouse.nombre)} ({safeDisplayText(warehouse.codigo)})
+                  </option>
+                ))}
+              </select>
+            </Field>
 
-          <label>
-            Tipo
-            <select
-              onChange={(event) => setFilters((current) => ({ ...current, tipo: event.target.value }))}
-              value={filters.tipo}
-            >
-              <option value="">Todos</option>
-              {movementTypes.map((item) => (
-                <option key={item.value} value={item.value}>
-                  {item.value}
-                </option>
-              ))}
-            </select>
-          </label>
+            <Field label="Material">
+              <select
+                onChange={(event) => setFilters((current) => ({ ...current, material_id: event.target.value }))}
+                value={filters.material_id}
+              >
+                <option value="">Todos</option>
+                {materials.map((material) => (
+                  <option key={material.id} value={material.id}>
+                    {safeDisplayText(material.sku)} - {safeDisplayText(material.nombre)}
+                  </option>
+                ))}
+              </select>
+            </Field>
 
-          <label>
-            Fecha desde
-            <input
-              onChange={(event) => setFilters((current) => ({ ...current, fecha_desde: event.target.value }))}
-              type="datetime-local"
-              value={filters.fecha_desde}
-            />
-          </label>
+            <Field label="Tipo">
+              <select
+                onChange={(event) => setFilters((current) => ({ ...current, tipo: event.target.value }))}
+                value={filters.tipo}
+              >
+                <option value="">Todos</option>
+                {movementTypes.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
 
-          <label>
-            Fecha hasta
-            <input
-              onChange={(event) => setFilters((current) => ({ ...current, fecha_hasta: event.target.value }))}
-              type="datetime-local"
-              value={filters.fecha_hasta}
-            />
-          </label>
+            <Field label="Fecha desde">
+              <input
+                onChange={(event) => setFilters((current) => ({ ...current, fecha_desde: event.target.value }))}
+                type="datetime-local"
+                value={filters.fecha_desde}
+              />
+            </Field>
+
+            <Field label="Fecha hasta">
+              <input
+                onChange={(event) => setFilters((current) => ({ ...current, fecha_hasta: event.target.value }))}
+                type="datetime-local"
+                value={filters.fecha_hasta}
+              />
+            </Field>
+          </FormGrid>
 
           <div className="inventory-actions">
-            <button className="ghost-button" type="submit">
-              Aplicar filtros
-            </button>
-            <button
-              className="ghost-button"
+            <ActionButton
+              onClick={async () => {
+                const nextFilters = { ...filters, offset: 0 };
+                setFilters(nextFilters);
+                try {
+                  await loadMovementsPage(nextFilters);
+                } catch (requestError) {
+                  setError(requestError.message || "No se pudieron aplicar los filtros.");
+                }
+              }}
+              size="sm"
+              tone="primary"
+              type="button"
+            >
+              Filtrar
+            </ActionButton>
+            <ActionButton
               onClick={async () => {
                 setFilters(defaultFilters);
                 try {
@@ -395,12 +411,12 @@ export default function MovementsPage() {
                   setError(requestError.message || "No se pudieron reiniciar los filtros.");
                 }
               }}
+              size="sm"
               type="button"
             >
               Limpiar
-            </button>
-            <button
-              className="ghost-button"
+            </ActionButton>
+            <ActionButton
               onClick={async () => {
                 try {
                   await loadMovementsPage(filters);
@@ -408,53 +424,92 @@ export default function MovementsPage() {
                   setError(requestError.message || "No se pudo actualizar el listado.");
                 }
               }}
+              size="sm"
               type="button"
             >
               Actualizar
-            </button>
+            </ActionButton>
           </div>
-        </form>
+        </div>
+      </FilterCard>
 
+      <DataCard
+        actions={<ResultMeta label="movimientos" loaded={movements.length} total={meta.total} />}
+        subtitle="Registro auditable conectado al stock real"
+        title="Movimientos recientes"
+      >
         {movements.length === 0 ? (
-          <EmptyState
-            title="No hay movimientos todavía."
-            note="Cuando registres entradas, salidas o ajustes aparecerán aquí."
-          />
+          <EmptyState note="Cuando registres entradas, salidas o ajustes aparecerán aquí." title="No hay movimientos todavía" />
         ) : (
           <>
-            <div className="table-wrap">
-              <table className="inventory-table">
-                <thead>
-                  <tr>
-                    <th>Fecha</th>
-                    <th>Tipo</th>
-                    <th>Material</th>
-                    <th>Almacén</th>
-                    <th>Cambio</th>
-                    <th>Nuevo stock</th>
+            <DataTable
+              columns={[
+                { key: "fecha", label: "Fecha" },
+                { key: "tipo", label: "Tipo" },
+                { key: "material", label: "Material" },
+                { key: "cantidad", label: "Cantidad" },
+                { key: "motivo", label: "Motivo" },
+                { key: "entregado", label: "Entregado por" },
+                { key: "recibido", label: "Recibido / Retirado" },
+                { key: "evidencia", label: "Evidencia" },
+                { key: "estatus", label: "Estatus" },
+                { key: "proyecto", label: "Proyecto" },
+                { key: "acciones", label: "Acciones" },
+              ]}
+            >
+              <tbody>
+                {movements.map((movement) => (
+                  <tr key={movement.id}>
+                    <td>{formatDateTime(movement.created_at)}</td>
+                    <td>
+                      <StatusBadge tone={movementTone(movement.tipo)}>{movement.tipo}</StatusBadge>
+                    </td>
+                    <td>
+                      <div className="inventory-cell-main">
+                        {safeDisplayText(
+                          movement.material_nombre ||
+                            movement.material?.nombre ||
+                            movement.material?.sku ||
+                            movement.material_id,
+                        )}
+                      </div>
+                      <div className="inventory-cell-sub">
+                        {safeDisplayText(
+                          movement.material_sku || movement.material?.sku || movement.material_id,
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="inventory-cell-main">{formatNumber(movement.cantidad)}</div>
+                      <div className="inventory-cell-sub">Balance {formatNumber(movement.cantidad_nueva)}</div>
+                    </td>
+                    <td>{safeDisplayText(movement.motivo || movement.notas, "Manual")}</td>
+                    <td>{safeDisplayText(movement.entregado_por)}</td>
+                    <td>{safeDisplayText(movement.recibido_por)}</td>
+                    <td>
+                      {movement.evidencia_url ? (
+                        <a className="link-button" href={movement.evidencia_url} rel="noreferrer" target="_blank">
+                          Ver evidencia
+                        </a>
+                      ) : (
+                        <span className="table-note">Sin evidencia</span>
+                      )}
+                    </td>
+                    <td>
+                      <StatusBadge tone={movement.estatus === "confirmado" ? "success" : movement.estatus === "cancelado" ? "danger" : "neutral"}>
+                        {movement.estatus}
+                      </StatusBadge>
+                    </td>
+                    <td>{safeDisplayText(movement.proyecto_nombre_snapshot || movement.proyecto_id)}</td>
+                    <td className="inventory-row-actions">
+                      <button className="link-button" onClick={() => setDetailMovement(movement)} type="button">
+                        Ver
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {movements.map((movement) => (
-                    <tr key={movement.id}>
-                      <td>{formatDateTime(movement.created_at)}</td>
-                      <td>
-                        <span className={`status-badge ${movement.tipo === "salida" ? "pending" : "enabled"}`}>
-                          {movement.tipo}
-                        </span>
-                      </td>
-                      <td>
-                        <strong>{movement.material_sku}</strong>
-                        <div className="table-note">{movement.material_nombre}</div>
-                      </td>
-                      <td>{movement.almacen_nombre}</td>
-                      <td>{formatNumber(movement.cantidad)}</td>
-                      <td>{formatNumber(movement.cantidad_nueva)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </DataTable>
 
             <PaginationControls
               meta={meta}
@@ -479,7 +534,408 @@ export default function MovementsPage() {
             />
           </>
         )}
-      </div>
+      </DataCard>
+
+      <ModalShell
+        onClose={closeMovementModal}
+        open={modalState.open}
+        size="xl"
+        subtitle="Los movimientos manuales se guardan confirmados. Borrador y cancelación formal quedan pendientes para una fase posterior."
+        title="Nuevo Movimiento - Multi-Artículo"
+      >
+        {warehouses.length === 0 || materials.length === 0 ? (
+          <EmptyState
+            note="Necesitas al menos un almacén y un material activo antes de mover inventario."
+            title="Faltan datos base"
+          />
+        ) : (
+          <form className="inventory-modal-form" onSubmit={handleSubmit}>
+            <div className={`inventory-form-note inventory-form-note-${currentMovementMeta.tone}`}>
+              <strong>{movementTypes.find((item) => item.value === modalState.tipo)?.label}</strong>: {currentMovementMeta.helper}
+            </div>
+
+            <section className="inventory-form-section">
+              <SectionTitle subtitle="Datos generales del movimiento" title="Encabezado" />
+              <FormGrid>
+                <Field label="Tipo de movimiento">
+                  <select
+                    onChange={(event) => setModalState((current) => ({ ...current, tipo: event.target.value }))}
+                    value={modalState.tipo}
+                  >
+                    {movementTypes.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Almacén">
+                  <select
+                    onChange={(event) => setDraft((current) => ({ ...current, almacen_id: event.target.value }))}
+                    required
+                    value={draft.almacen_id}
+                  >
+                    {warehouses.map((warehouse) => (
+                      <option key={warehouse.id} value={warehouse.id}>
+                        {warehouse.nombre} ({warehouse.codigo})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+
+                <Field label="Motivo">
+                  <input
+                    onChange={(event) => setDraft((current) => ({ ...current, motivo: event.target.value }))}
+                    placeholder="Recepción, consumo, ajuste, devolución..."
+                    type="text"
+                    value={draft.motivo}
+                  />
+                </Field>
+
+                <Field hint={modalState.tipo === "ajuste" ? "Obligatoria para ajustes" : "Opcional"} label="Justificación / notas">
+                  <textarea
+                    onChange={(event) => setDraft((current) => ({ ...current, notas: event.target.value }))}
+                    rows={3}
+                    value={draft.notas}
+                  />
+                </Field>
+
+                <Field label={modalState.tipo === "entrada" ? "Entregado por / proveedor" : "Entregado por"}>
+                  <input
+                    onChange={(event) => setDraft((current) => ({ ...current, entregado_por: event.target.value }))}
+                    type="text"
+                    value={draft.entregado_por}
+                  />
+                </Field>
+
+                <Field label={modalState.tipo === "salida" ? "Recibido / persona que retira" : "Recibido por"}>
+                  <input
+                    onChange={(event) => setDraft((current) => ({ ...current, recibido_por: event.target.value }))}
+                    type="text"
+                    value={draft.recibido_por}
+                  />
+                </Field>
+
+                <Field hint="Opcional" label="Documento / factura">
+                  <input
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        documento_referencia: event.target.value,
+                      }))
+                    }
+                    type="text"
+                    value={draft.documento_referencia}
+                  />
+                </Field>
+
+                <Field hint="Opcional" label="Referencia interna">
+                  <input
+                    onChange={(event) => setDraft((current) => ({ ...current, referencia_id: event.target.value }))}
+                    type="text"
+                    value={draft.referencia_id}
+                  />
+                </Field>
+
+                <Field hint="Solo URL en esta fase" label="Evidencia fotográfica URL" span={2}>
+                  <input
+                    onChange={(event) => setDraft((current) => ({ ...current, evidencia_url: event.target.value }))}
+                    placeholder="https://..."
+                    type="url"
+                    value={draft.evidencia_url}
+                  />
+                </Field>
+              </FormGrid>
+            </section>
+
+            {modalState.tipo === "salida" ? (
+              <section className="inventory-form-section">
+                <SectionTitle subtitle="Preparación para la integración futura con PM" title="Proyecto" />
+                <FormGrid>
+                  <Field span={2}>
+                    <label className="inventory-inline-checkbox">
+                      <input
+                        checked={draft.es_proyecto}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            es_proyecto: event.target.checked,
+                          }))
+                        }
+                        type="checkbox"
+                      />
+                      Vincular salida a proyecto
+                    </label>
+                  </Field>
+
+                  {draft.es_proyecto ? (
+                    <>
+                      <Field label="ID / referencia de proyecto">
+                        <input
+                          onChange={(event) =>
+                            setDraft((current) => ({
+                              ...current,
+                              proyecto_id: event.target.value,
+                            }))
+                          }
+                          type="text"
+                          value={draft.proyecto_id}
+                        />
+                      </Field>
+
+                      <Field label="Nombre del proyecto">
+                        <input
+                          onChange={(event) =>
+                            setDraft((current) => ({
+                              ...current,
+                              proyecto_nombre_snapshot: event.target.value,
+                            }))
+                          }
+                          type="text"
+                          value={draft.proyecto_nombre_snapshot}
+                        />
+                      </Field>
+                    </>
+                  ) : null}
+                </FormGrid>
+                <p className="feature-note">
+                  La integración completa con PM se conectará cuando el módulo PM esté activo.
+                </p>
+              </section>
+            ) : null}
+
+            <section className="inventory-form-section">
+              <SectionTitle
+                subtitle={
+                  selectedWarehouse
+                    ? `Los renglones se aplicarán en ${selectedWarehouse.nombre} (${selectedWarehouse.codigo}).`
+                    : "Selecciona un almacén antes de registrar el movimiento."
+                }
+                title="Agregar Materiales"
+              />
+
+              <div className="inventory-material-picker">
+                <SearchInput
+                  action={
+                    <div className="inventory-actions">
+                      <ActionButton onClick={handleScanPlaceholder} size="sm" type="button">
+                        Escanear SKU
+                      </ActionButton>
+                    </div>
+                  }
+                  label="Buscar material"
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      material_search: event.target.value,
+                    }))
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addDraftLine();
+                    }
+                  }}
+                  placeholder="Nombre, SKU o código de barras"
+                  value={draft.material_search}
+                />
+
+                <FormGrid>
+                  <Field label="Material">
+                    <select
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          material_candidate_id: event.target.value,
+                        }))
+                      }
+                      value={draft.material_candidate_id}
+                    >
+                      <option value="">Selecciona un material</option>
+                      {filteredMaterials.map((material) => (
+                        <option key={material.id} value={material.id}>
+                          {safeDisplayText(material.sku)} - {safeDisplayText(material.nombre)}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  <Field label="Acción">
+                    <ActionButton onClick={() => addDraftLine()} size="sm" tone="primary" type="button">
+                      Agregar al carrito
+                    </ActionButton>
+                  </Field>
+                </FormGrid>
+              </div>
+
+              {draft.items.length === 0 ? (
+                <EmptyState compact note="Agrega al menos un material para continuar." title="Sin renglones" />
+              ) : (
+                <DataTable
+                  columns={[
+                    { key: "material", label: "Material" },
+                    { key: "cantidad", label: modalState.tipo === "ajuste" ? "Cantidad nueva" : "Cantidad" },
+                    ...(modalState.tipo === "entrada" || modalState.tipo === "ajuste"
+                      ? [{ key: "costo", label: "Costo unitario" }]
+                      : []),
+                    { key: "notas", label: "Notas" },
+                    { key: "accion", label: "Acción" },
+                  ]}
+                >
+                  <tbody>
+                    {draft.items.map((line) => {
+                      const material = materials.find((item) => item.id === line.material_id);
+                      return (
+                        <tr key={line.local_id}>
+                          <td>
+                            <select
+                              onChange={(event) => updateDraftLine(line.local_id, "material_id", event.target.value)}
+                              required
+                              value={line.material_id}
+                            >
+                              <option value="">Selecciona un material</option>
+                              {materials.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {safeDisplayText(item.sku)} - {safeDisplayText(item.nombre)}
+                                </option>
+                              ))}
+                            </select>
+                            {material ? (
+                              <div className="inventory-cell-sub">
+                                {material.codigo_barras || "Sin código"} · Stock {formatNumber(material.stock_total)}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td>
+                            <input
+                              min={modalState.tipo === "ajuste" ? "0" : "0.0001"}
+                              onChange={(event) =>
+                                updateDraftLine(
+                                  line.local_id,
+                                  modalState.tipo === "ajuste" ? "cantidad_nueva" : "cantidad",
+                                  normalizeDecimalInput(event.target.value),
+                                )
+                              }
+                              required
+                              step="0.0001"
+                              type="number"
+                              value={modalState.tipo === "ajuste" ? line.cantidad_nueva : line.cantidad}
+                            />
+                          </td>
+                          {modalState.tipo === "entrada" || modalState.tipo === "ajuste" ? (
+                            <td>
+                              <input
+                                min="0"
+                                onChange={(event) =>
+                                  updateDraftLine(
+                                    line.local_id,
+                                    "costo_unitario",
+                                    normalizeDecimalInput(event.target.value),
+                                  )
+                                }
+                                step="0.0001"
+                                type="number"
+                                value={line.costo_unitario}
+                              />
+                            </td>
+                          ) : null}
+                          <td>
+                            <input
+                              onChange={(event) => updateDraftLine(line.local_id, "notas", event.target.value)}
+                              type="text"
+                              value={line.notas}
+                            />
+                          </td>
+                          <td>
+                            <button className="link-button" onClick={() => removeDraftLine(line.local_id)} type="button">
+                              Quitar
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </DataTable>
+              )}
+
+              <div className="table-note">Total de líneas: {draft.items.length}</div>
+            </section>
+
+            <div className="inventory-actions inventory-actions-end">
+              <ActionButton disabled={submitting} tone="primary" type="submit">
+                {submitting ? "Registrando..." : `Confirmar ${modalState.tipo}`}
+              </ActionButton>
+              <ActionButton onClick={closeMovementModal} type="button">
+                Cancelar
+              </ActionButton>
+            </div>
+          </form>
+        )}
+      </ModalShell>
+
+      <ModalShell
+        onClose={() => setDetailMovement(null)}
+        open={Boolean(detailMovement)}
+        size="medium"
+        subtitle="Detalle del movimiento aplicado"
+        title="Movimiento"
+      >
+        {detailMovement ? (
+          <div className="inventory-detail-stack">
+            <div className="inventory-detail-grid">
+              <div>
+                <strong>Material</strong>
+                <p>
+                  {safeDisplayText(
+                    detailMovement.material_sku || detailMovement.material?.sku || detailMovement.material_id,
+                  )}{" "}
+                  -{" "}
+                  {safeDisplayText(
+                    detailMovement.material_nombre ||
+                      detailMovement.material?.nombre ||
+                      detailMovement.material?.sku ||
+                      detailMovement.material_id,
+                  )}
+                </p>
+              </div>
+              <div>
+                <strong>Fecha</strong>
+                <p>{formatDateTime(detailMovement.created_at)}</p>
+              </div>
+              <div>
+                <strong>Tipo</strong>
+                <p>{safeDisplayText(detailMovement.tipo)}</p>
+              </div>
+              <div>
+                <strong>Estatus</strong>
+                <p>{safeDisplayText(detailMovement.estatus)}</p>
+              </div>
+              <div>
+                <strong>Cantidad</strong>
+                <p>{formatNumber(detailMovement.cantidad)}</p>
+              </div>
+              <div>
+                <strong>Balance</strong>
+                <p>{formatNumber(detailMovement.cantidad_nueva)}</p>
+              </div>
+              <div>
+                <strong>Costo snapshot</strong>
+                <p>
+                  {detailMovement.costo_unitario_snapshot != null
+                    ? formatMoney(detailMovement.costo_unitario_snapshot)
+                    : "—"}
+                </p>
+              </div>
+              <div>
+                <strong>Proyecto</strong>
+                <p>{safeDisplayText(detailMovement.proyecto_nombre_snapshot || detailMovement.proyecto_id)}</p>
+              </div>
+            </div>
+            <div className="table-note">{safeDisplayText(detailMovement.notas, "Sin notas adicionales.")}</div>
+          </div>
+        ) : null}
+      </ModalShell>
     </div>
   );
 }

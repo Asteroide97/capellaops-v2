@@ -84,6 +84,8 @@ def serialize_supplier(supplier: Proveedor) -> SupplierItem:
         id=supplier.id,
         empresa_id=supplier.empresa_id,
         nombre=supplier.nombre,
+        razon_social=supplier.razon_social,
+        rfc=supplier.rfc,
         contacto_nombre=supplier.contacto_nombre,
         correo=supplier.correo,
         telefono=supplier.telefono,
@@ -121,6 +123,8 @@ def list_suppliers(
         query,
         q,
         Proveedor.nombre,
+        Proveedor.razon_social,
+        Proveedor.rfc,
         Proveedor.contacto_nombre,
         Proveedor.correo,
         Proveedor.telefono,
@@ -139,6 +143,8 @@ def create_supplier(
     empresa: Empresa,
     user: Usuario,
     nombre: str,
+    razon_social: str | None,
+    rfc: str | None,
     contacto_nombre: str | None,
     correo: str | None,
     telefono: str | None,
@@ -150,6 +156,8 @@ def create_supplier(
     supplier = Proveedor(
         empresa_id=empresa.id,
         nombre=normalize_required_text(nombre, "Nombre"),
+        razon_social=normalize_optional_text(razon_social),
+        rfc=normalize_optional_text(rfc.upper() if rfc else None),
         contacto_nombre=normalize_optional_text(contacto_nombre),
         correo=normalize_optional_text(correo),
         telefono=normalize_optional_text(telefono),
@@ -167,7 +175,7 @@ def create_supplier(
         entity_name="proveedor",
         entity_id=supplier.id,
         ip_address=ip_address,
-        metadata_json={"nombre": supplier.nombre, "activo": supplier.activo},
+        metadata_json={"nombre": supplier.nombre, "rfc": supplier.rfc, "activo": supplier.activo},
     )
     return serialize_supplier(supplier)
 
@@ -179,6 +187,8 @@ def update_supplier(
     user: Usuario,
     supplier_id: str,
     nombre: str | None,
+    razon_social: str | None,
+    rfc: str | None,
     contacto_nombre: str | None,
     correo: str | None,
     telefono: str | None,
@@ -190,6 +200,10 @@ def update_supplier(
     supplier = get_supplier_for_company(db, empresa.id, supplier_id)
     if nombre is not None:
         supplier.nombre = normalize_required_text(nombre, "Nombre")
+    if razon_social is not None:
+        supplier.razon_social = normalize_optional_text(razon_social)
+    if rfc is not None:
+        supplier.rfc = normalize_optional_text(rfc.upper())
     if contacto_nombre is not None:
         supplier.contacto_nombre = normalize_optional_text(contacto_nombre)
     if correo is not None:
@@ -211,7 +225,7 @@ def update_supplier(
         entity_name="proveedor",
         entity_id=supplier.id,
         ip_address=ip_address,
-        metadata_json={"nombre": supplier.nombre, "activo": supplier.activo},
+        metadata_json={"nombre": supplier.nombre, "rfc": supplier.rfc, "activo": supplier.activo},
     )
     db.flush()
     db.refresh(supplier)
@@ -1059,6 +1073,7 @@ def receive_purchase_order(
             referencia_id=order.id,
             notas=f"Recepcion de orden {order.folio}",
             ip_address=ip_address,
+            costo_unitario=detail.costo_unitario,
         )
         detail.cantidad_recibida = Decimal(detail.cantidad_recibida) + receive_quantity
         applied_any = True

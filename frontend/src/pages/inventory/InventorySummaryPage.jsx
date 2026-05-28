@@ -1,9 +1,23 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
 import { getInventorySummary } from "../../api/client";
-import { EmptyState, formatMoney, formatNumber } from "./shared";
+import {
+  ActionButton,
+  DataCard,
+  DataTable,
+  EmptyState,
+  FilterCard,
+  MetricCard,
+  PageHeader,
+  SearchInput,
+  StatusBadge,
+  StockBadge,
+  buttonClassName,
+  formatMoney,
+  formatNumber,
+} from "./shared";
 
 
 const emptySummary = {
@@ -26,49 +40,89 @@ const emptySummary = {
 };
 
 
-function KPIGrid({ summary }) {
+function SummaryKpis({ summary }) {
+  const cards = [
+    {
+      label: "Materiales bajo stock",
+      value: formatNumber(summary.kpis.materiales_bajo_stock),
+      meta: "Alertas activas",
+      tone: summary.kpis.materiales_bajo_stock > 0 ? "warning" : "success",
+      icon: "BS",
+    },
+    {
+      label: "OTs pendientes",
+      value: "0",
+      meta: "PM pendiente",
+      tone: "neutral",
+      icon: "OT",
+    },
+    {
+      label: "OC pendientes",
+      value: formatNumber(summary.kpis.ordenes_compra_pendientes),
+      meta: "Compras abiertas",
+      tone: summary.kpis.ordenes_compra_pendientes > 0 ? "warning" : "neutral",
+      icon: "OC",
+    },
+    {
+      label: "Requisiciones pendientes",
+      value: formatNumber(summary.kpis.requisiciones_pendientes),
+      meta: "Por atender",
+      tone: summary.kpis.requisiciones_pendientes > 0 ? "warning" : "neutral",
+      icon: "RQ",
+    },
+    {
+      label: "Total de materiales",
+      value: formatNumber(summary.kpis.total_materiales),
+      meta: "Catálogo activo",
+      tone: "info",
+      icon: "SK",
+    },
+  ];
+
   return (
-    <div className="hero-grid">
-      <article className="metric-card">
-        <span>Materiales bajo stock</span>
-        <strong>{summary.kpis.materiales_bajo_stock}</strong>
-      </article>
-      <article className="metric-card">
-        <span>OC pendientes</span>
-        <strong>{summary.kpis.ordenes_compra_pendientes}</strong>
-      </article>
-      <article className="metric-card">
-        <span>Requisiciones pendientes</span>
-        <strong>{summary.kpis.requisiciones_pendientes}</strong>
-      </article>
-      <article className="metric-card">
-        <span>Total de materiales</span>
-        <strong>{summary.kpis.total_materiales}</strong>
-      </article>
+    <div className="inventory-metric-grid inventory-metric-grid-5">
+        {cards.map((card) => (
+          <MetricCard
+            icon={card.icon}
+            key={card.label}
+            label={card.label}
+            meta={card.meta}
+            tone={card.tone}
+            value={card.value}
+          />
+        ))}
     </div>
   );
 }
 
 
-function IndicatorGrid({ summary }) {
+function SummaryIndicators({ summary }) {
   return (
-    <div className="module-board">
-      <article className="mini-card">
-        <span className="eyebrow">Valor inventario</span>
-        <strong>{formatMoney(summary.indicadores.valor_inventario)}</strong>
-      </article>
-      <article className="mini-card">
-        <span className="eyebrow">Costo de reposición</span>
-        <strong>{formatMoney(summary.indicadores.costo_reposicion)}</strong>
-      </article>
-      <article className="mini-card">
-        <span className="eyebrow">Ajustes del mes</span>
-        <strong>{formatNumber(summary.indicadores.ajustes_mes)}</strong>
-      </article>
-      <article className="mini-card">
-        <span className="eyebrow">Merma del mes</span>
-        <strong>{formatMoney(summary.indicadores.merma_mes)}</strong>
-      </article>
+    <div className="inventory-metric-grid inventory-metric-grid-4">
+      <MetricCard
+        label="Valorización de inventario"
+        meta="Stock total x costo actual"
+        tone="success"
+        value={formatMoney(summary.indicadores.valor_inventario)}
+      />
+      <MetricCard
+        label="Costo de reposición"
+        meta="Faltante contra mínimo"
+        tone="warning"
+        value={formatMoney(summary.indicadores.costo_reposicion)}
+      />
+      <MetricCard
+        label="Ajustes del mes"
+        meta="Conteo de ajustes aplicados"
+        tone="info"
+        value={formatNumber(summary.indicadores.ajustes_mes)}
+      />
+      <MetricCard
+        label="Merma del mes"
+        meta="Clasificación formal pendiente"
+        tone="neutral"
+        value={formatMoney(summary.indicadores.merma_mes)}
+      />
     </div>
   );
 }
@@ -79,9 +133,11 @@ export default function InventorySummaryPage() {
   const { token, empresaId } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [scannerMessage, setScannerMessage] = useState("");
+  const [notice, setNotice] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [summary, setSummary] = useState(emptySummary);
+
+  const criticalAlerts = useMemo(() => summary.alertas.slice(0, 8), [summary.alertas]);
 
   async function loadSummary() {
     if (!token || !empresaId) {
@@ -107,17 +163,17 @@ export default function InventorySummaryPage() {
   function handleSearch(event) {
     event.preventDefault();
     const query = searchTerm.trim();
+
     if (!query) {
-      setScannerMessage("Escribe un SKU o nombre de material para continuar.");
+      setNotice("Escribe un SKU, código de barras o nombre de material para continuar.");
       return;
     }
 
-    setScannerMessage("La búsqueda inteligente desde Resumen se conectará en una fase posterior. Te llevamos a Materiales.");
-    navigate("/inventario/materiales");
+    navigate(`/inventario/materiales?q=${encodeURIComponent(query)}`);
   }
 
   function handleScanPlaceholder() {
-    setScannerMessage("El escaneo QR o código de barras queda pendiente para una fase posterior.");
+    setNotice("Escaneo con cámara pendiente. Puedes pegar o escribir el código manualmente.");
   }
 
   if (loading) {
@@ -125,251 +181,195 @@ export default function InventorySummaryPage() {
   }
 
   return (
-    <div className="dashboard-stack">
-      <section className="feature-card inventory-summary-header">
-        <div className="inventory-summary-title">
-          <div>
-            <p className="eyebrow">Panel de Control</p>
-            <h2>Control de inventario</h2>
-            <p className="table-note">
-              Monitorea stock, compras y alertas sin duplicar la fuente de verdad del inventario.
-            </p>
-          </div>
-
-          <div className="inventory-actions">
-            <button className="ghost-button" onClick={loadSummary} type="button">
-              Actualizar
-            </button>
-          </div>
-        </div>
-
-        <form className="inventory-summary-search" onSubmit={handleSearch}>
-          <label className="inventory-summary-search-input">
-            Escanea un código o busca por SKU/material
-            <input
+    <div className="dashboard-stack inventory-screen">
+      <PageHeader
+        actions={
+          <ActionButton onClick={loadSummary} size="sm" type="button">
+            Actualizar
+          </ActionButton>
+        }
+        eyebrow="Inventario"
+        subtitle="Control de Inventario"
+        title="Panel de Control"
+      >
+        <FilterCard>
+          <form className="inventory-summary-search-panel" onSubmit={handleSearch}>
+            <SearchInput
+              action={
+                <div className="inventory-actions">
+                  <ActionButton onClick={handleScanPlaceholder} size="sm" type="button">
+                    Escanear
+                  </ActionButton>
+                  <ActionButton size="sm" tone="primary" type="submit">
+                    Buscar
+                  </ActionButton>
+                </div>
+              }
+              hint="Admite lector USB de código de barras como teclado."
+              label="Búsqueda rápida"
               onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="SKU, nombre o palabra clave"
-              type="text"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  handleSearch(event);
+                }
+              }}
+              placeholder="Escanea un código o busca por SKU/material"
               value={searchTerm}
             />
-          </label>
+          </form>
+          {notice ? <p className="feature-note">{notice}</p> : null}
+          {error ? <p className="form-error">{error}</p> : null}
+        </FilterCard>
+      </PageHeader>
 
-          <div className="inventory-actions">
-            <button className="primary-button" type="submit">
-              Buscar
-            </button>
-            <button className="ghost-button" onClick={handleScanPlaceholder} type="button">
-              Escanear
-            </button>
-          </div>
-        </form>
+      <SummaryKpis summary={summary} />
+      <SummaryIndicators summary={summary} />
 
-        {scannerMessage ? <p className="feature-note">{scannerMessage}</p> : null}
-        {error ? <p className="form-error">{error}</p> : null}
-      </section>
-
-      <KPIGrid summary={summary} />
-      <IndicatorGrid summary={summary} />
-
-      <div className="module-board">
-        <article className="module-card">
-          <div className="module-card-top">
-            <h3>Acciones rápidas</h3>
-          </div>
-          <p>Atajos operativos para seguir moviendo inventario y compras desde el resumen.</p>
-          <div className="inventory-actions">
-            <button className="ghost-button" onClick={handleScanPlaceholder} type="button">
+      <div className="inventory-content-grid inventory-content-grid-2">
+        <DataCard subtitle="Atajos operativos del módulo Inventario" title="Acciones rápidas">
+          <div className="inventory-action-grid">
+            <button className={buttonClassName({ tone: "ghost", size: "sm" })} onClick={handleScanPlaceholder} type="button">
               Escanear QR
             </button>
-            <Link className="primary-link" to="/inventario/movimientos">
+            <Link className={buttonClassName({ tone: "primary", size: "sm" })} to="/inventario/movimientos">
               Nueva entrada
             </Link>
-            <Link className="ghost-button" to="/inventario/ordenes-compra">
+            <Link className={buttonClassName({ tone: "ghost", size: "sm" })} to="/inventario/ordenes-compra">
               Crear OC
             </Link>
-            <Link className="ghost-button" to="/inventario/materiales">
+            <Link className={buttonClassName({ tone: "ghost", size: "sm" })} to="/inventario/materiales">
               Ver inventario
             </Link>
           </div>
-        </article>
+        </DataCard>
 
-        <article className="module-card">
-          <div className="module-card-top">
-            <h3>Resumen de alertas</h3>
-          </div>
-          <p>El envío automático de alertas queda pendiente para una fase posterior.</p>
-          <div className="inventory-actions">
-            <button className="ghost-button" onClick={() => setScannerMessage("El envío por email queda pendiente para una fase posterior.")} type="button">
-              Enviar por email
-            </button>
-          </div>
-        </article>
-      </div>
-
-      <div className="inventory-grid inventory-summary-grid">
-        <div className="feature-card inventory-table-card">
-          <div className="feature-header">
-            <p className="eyebrow">Productos Core</p>
-            <h2>Top 5 por valor y stock</h2>
-          </div>
-
-          {summary.productos_core.length === 0 ? (
-            <EmptyState
-              title="Sin productos core todavía."
-              note="Cuando existan materiales con stock, aquí verás los más relevantes."
-            />
+        <DataCard subtitle="El envío automático queda pendiente para una fase posterior." title="Resumen de alertas">
+          {criticalAlerts.length === 0 ? (
+            <EmptyState compact note="No hay alertas críticas calculadas en este momento." title="Sin alertas activas" />
           ) : (
-            <div className="table-wrap">
-              <table className="inventory-table">
-                <thead>
-                  <tr>
-                    <th>Ranking</th>
-                    <th>Material</th>
-                    <th>Categoría</th>
-                    <th>Stock</th>
-                    <th>Valor</th>
-                    <th>Días sin movimiento</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summary.productos_core.map((item, index) => (
-                    <tr key={item.material_id}>
-                      <td>{index + 1}</td>
-                      <td>
-                        <strong>{item.nombre}</strong>
-                        <div className="table-note">{item.sku}</div>
-                      </td>
-                      <td>{item.categoria || "Sin categoría"}</td>
-                      <td>{formatNumber(item.stock_total)}</td>
-                      <td>{formatMoney(item.valor_total)}</td>
-                      <td>{item.dias_sin_movimiento}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="feature-card inventory-table-card">
-          <div className="feature-header">
-            <p className="eyebrow">Baja rotación</p>
-            <h2>Últimos 30 días</h2>
-          </div>
-
-          {summary.baja_rotacion.length === 0 ? (
-            <EmptyState
-              title="Sin materiales de baja rotación."
-              note="Cuando exista stock sin movimiento reciente, aparecerá en esta lista."
-            />
-          ) : (
-            <div className="table-wrap">
-              <table className="inventory-table">
-                <thead>
-                  <tr>
-                    <th>Material</th>
-                    <th>SKU</th>
-                    <th>Stock</th>
-                    <th>Valor retenido</th>
-                    <th>Días sin movimiento</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summary.baja_rotacion.map((item) => (
-                    <tr key={item.material_id}>
-                      <td>{item.nombre}</td>
-                      <td>{item.sku}</td>
-                      <td>{formatNumber(item.stock_total)}</td>
-                      <td>{formatMoney(item.valor_retenido)}</td>
-                      <td>{item.dias_sin_movimiento}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="inventory-grid inventory-summary-grid">
-        <div className="feature-card inventory-table-card">
-          <div className="feature-header">
-            <p className="eyebrow">Bajo stock</p>
-            <h2>Materiales que requieren atención</h2>
-          </div>
-
-          {summary.materiales_bajo_stock.length === 0 ? (
-            <EmptyState
-              title="Sin materiales en alerta."
-              note="No hay materiales agotados ni por debajo del mínimo en este momento."
-            />
-          ) : (
-            <div className="table-wrap">
-              <table className="inventory-table">
-                <thead>
-                  <tr>
-                    <th>Material</th>
-                    <th>SKU</th>
-                    <th>Stock actual</th>
-                    <th>Stock mínimo</th>
-                    <th>Faltante</th>
-                    <th>Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summary.materiales_bajo_stock.map((item) => (
-                    <tr key={item.material_id}>
-                      <td>{item.nombre}</td>
-                      <td>{item.sku}</td>
-                      <td>{formatNumber(item.stock_total)}</td>
-                      <td>{formatNumber(item.stock_minimo)}</td>
-                      <td>{formatNumber(item.faltante)}</td>
-                      <td>
-                        <span className={`status-badge ${item.estado === "Agotado" ? "pending" : "enabled"}`}>
-                          {item.estado}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        <div className="feature-card inventory-table-card">
-          <div className="feature-header">
-            <p className="eyebrow">Alertas</p>
-            <h2>Resumen operativo</h2>
-          </div>
-
-          {summary.alertas.length === 0 ? (
-            <EmptyState
-              title="Sin alertas calculadas."
-              note="Cuando detectemos riesgos operativos, aparecerán aquí."
-            />
-          ) : (
-            <div className="inventory-alert-list">
-              {summary.alertas.map((alert, index) => (
+            <div className="inventory-alert-stack">
+              {criticalAlerts.map((alert, index) => (
                 <article className={`inventory-alert-card ${alert.nivel}`} key={`${alert.tipo}-${index}`}>
-                  <div className="module-card-top">
+                  <div className="inventory-alert-card-head">
                     <strong>{alert.titulo}</strong>
-                    <span className={`status-badge ${alert.nivel === "critical" ? "pending" : "enabled"}`}>
+                    <StatusBadge tone={alert.nivel === "critical" ? "danger" : alert.nivel === "warning" ? "warning" : "info"}>
                       {alert.nivel}
-                    </span>
+                    </StatusBadge>
                   </div>
                   <p>{alert.mensaje}</p>
-                  {alert.route ? (
-                    <Link className="link-button" to={alert.route}>
-                      Abrir sección relacionada
-                    </Link>
-                  ) : null}
                 </article>
               ))}
+              <div className="inventory-actions">
+                <ActionButton onClick={() => setNotice("El envío automático de alertas por email queda pendiente para una fase posterior.")} size="sm" type="button">
+                  Enviar por email
+                </ActionButton>
+              </div>
             </div>
           )}
-        </div>
+        </DataCard>
       </div>
+
+      <div className="inventory-content-grid inventory-content-grid-2">
+        <DataCard subtitle="Top 5 por valor operativo y stock visible" title="Productos Core">
+          {summary.productos_core.length === 0 ? (
+            <EmptyState compact note="Cuando existan materiales con stock aparecerán aquí." title="Sin productos core" />
+          ) : (
+            <DataTable
+              columns={[
+                { key: "ranking", label: "#" },
+                { key: "material", label: "Material" },
+                { key: "categoria", label: "Categoría" },
+                { key: "stock", label: "Stock" },
+                { key: "valor", label: "Valor" },
+                { key: "dias", label: "Días sin movimiento" },
+              ]}
+            >
+              <tbody>
+                {summary.productos_core.map((item, index) => (
+                  <tr key={item.material_id}>
+                    <td>
+                      <span className="inventory-rank-pill">{index + 1}</span>
+                    </td>
+                    <td>
+                      <div className="inventory-cell-main">{item.nombre}</div>
+                      <div className="inventory-cell-sub">{item.sku}</div>
+                    </td>
+                    <td>{item.categoria || "—"}</td>
+                    <td>{formatNumber(item.stock_total)}</td>
+                    <td>{formatMoney(item.valor_total)}</td>
+                    <td>{formatNumber(item.dias_sin_movimiento)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </DataCard>
+
+        <DataCard subtitle="Material inmovilizado durante los últimos 30 días" title="Baja rotación">
+          {summary.baja_rotacion.length === 0 ? (
+            <EmptyState compact note="Cuando exista stock sin salida reciente aparecerá en esta lista." title="Sin baja rotación" />
+          ) : (
+            <DataTable
+              columns={[
+                { key: "material", label: "Material" },
+                { key: "sku", label: "SKU" },
+                { key: "stock", label: "Stock" },
+                { key: "valor", label: "Valor retenido" },
+                { key: "dias", label: "Días sin movimiento" },
+              ]}
+            >
+              <tbody>
+                {summary.baja_rotacion.map((item) => (
+                  <tr key={item.material_id}>
+                    <td>{item.nombre}</td>
+                    <td>{item.sku}</td>
+                    <td>{formatNumber(item.stock_total)}</td>
+                    <td>{formatMoney(item.valor_retenido)}</td>
+                    <td>{formatNumber(item.dias_sin_movimiento)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </DataCard>
+      </div>
+
+      <DataCard subtitle="Materiales agotados o por debajo del mínimo definido" title="Materiales bajo stock">
+        {summary.materiales_bajo_stock.length === 0 ? (
+          <EmptyState compact note="No hay materiales agotados ni por debajo del mínimo en este momento." title="Sin alertas de stock" />
+        ) : (
+          <DataTable
+            columns={[
+              { key: "material", label: "Material" },
+              { key: "sku", label: "SKU" },
+              { key: "stock", label: "Stock actual" },
+              { key: "minimo", label: "Stock mínimo" },
+              { key: "faltante", label: "Faltante" },
+              { key: "estado", label: "Estado" },
+            ]}
+          >
+            <tbody>
+              {summary.materiales_bajo_stock.map((item) => (
+                <tr key={item.material_id}>
+                  <td>{item.nombre}</td>
+                  <td>{item.sku}</td>
+                  <td>{formatNumber(item.stock_total)}</td>
+                  <td>{formatNumber(item.stock_minimo)}</td>
+                  <td>{formatNumber(item.faltante)}</td>
+                  <td>
+                    <StockBadge
+                      minimo={item.stock_minimo}
+                      okLabel="Sano"
+                      stock={item.stock_total}
+                      zeroLabel="Agotado"
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        )}
+      </DataCard>
     </div>
   );
 }

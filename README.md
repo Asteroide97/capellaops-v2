@@ -190,6 +190,7 @@ npm run dev
 - `GET /inventory/stock`
 - `GET /inventory/movements`
 - `POST /inventory/movements`
+- `POST /inventory/movements/bulk`
 - `GET /inventory/materials/{id}/kardex`
 
 ### Traspasos y conteos
@@ -323,7 +324,7 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 
 - El stock global se calcula como la suma de `existencias` por material.
 - `Material.stock_actual` no existe como fuente de verdad.
-- `valor_inventario` usa `stock_total * costo_unitario`.
+- `valor_inventario` usa `stock_total * costo_promedio_actual`, con fallback a `costo_unitario`.
 - `costo_reposicion` estima el faltante contra `stock_minimo`.
 - `merma_mes` queda en `0` hasta implementar clasificación formal de merma.
 
@@ -352,6 +353,49 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Tipos de movimiento: `entrada`, `salida`, `ajuste`
 - No se implementa reversa de transferencias confirmadas en esta fase.
 - No se implementa reversa de conteos aplicados en esta fase.
+
+## Inventario UX/UI Parity
+
+- Se elimina la base visual perla/beige y se adopta una base blanca con sombras suaves, bordes neutros y superficies limpias.
+- Se agrega `GET /inventory/materials` con búsqueda por `sku`, `nombre`, `categoria`, `subcategoria` y `codigo_barras`.
+- Se agrega `POST /inventory/movements/bulk` para registrar entradas, salidas y ajustes multi-artículo en una sola transacción.
+- `Material` ahora soporta `imagen_url`, `imagenes_extra_json` como texto JSON, `codigo_barras`, `subcategoria`, `stock_maximo`, `ubicacion_texto`, `proveedor_principal_id`, `lead_time_dias` y `costo_promedio_actual`.
+- `Proveedor` ahora soporta `razon_social` y `rfc`.
+- El stock actual visible en materiales y dashboard sigue calculándose desde `existencias` y `movimientos_inventario`. No se introduce `Material.stock_actual` como fuente de verdad.
+- Se rediseñan visualmente `Inventario > Resumen`, `Materiales`, `Movimientos`, `Kardex` y `Proveedores` con una base de UI consistente para operación diaria.
+- La navegación del módulo Inventario queda centralizada en el sidebar lateral desplegable. No se reintroduce navegación horizontal interna.
+- Se unifican cards, tablas, modales, botones, inputs y badges bajo una misma capa visual del módulo Inventario.
+
+### Flujo operativo agregado
+
+- Materiales:
+  - Alta y edición por modal.
+  - Preview de imagen por URL.
+  - Búsqueda por SKU y código de barras.
+  - Soporte visual para `imagen_url` con preview y placeholder seguro.
+  - Exportación CSV client-side de la vista actual.
+  - Categoría obligatoria y proveedor principal opcional.
+- Movimientos:
+  - Carrito multi-artículo.
+  - Búsqueda manual por SKU, nombre o código de barras.
+  - Evidencia fotográfica por URL.
+  - Campos operativos: motivo, entregado por, recibido por, documento y referencia.
+  - Vinculación preparatoria con proyectos mediante `es_proyecto`, `proyecto_id` y `proyecto_nombre_snapshot`.
+  - Snapshot de costo unitario y costo promedio por movimiento.
+- Kardex:
+  - Vista auditada con filtros, badges y tabla densa.
+  - Muestra entrada, salida, balance, costo snapshot, valor inventario y usuario cuando el backend lo entrega.
+- Proveedores:
+  - Vista operativa con RFC, razón social y modal de edición rediseñado.
+
+### Pendientes de esta capa
+
+- Upload real a Azure Blob Storage para imágenes y evidencias.
+- Escaneo por cámara real. En esta fase queda placeholder/manual; la captura por lector USB o pegado manual sí está soportada en búsquedas.
+- Importación backend de Excel/CSV para materiales. En esta fase queda solo placeholder en UI.
+- FK real a PM/Proyectos cuando el módulo PM exista.
+- Costo promedio ponderado formal.
+- Estados borrador/cancelado para movimientos manuales base.
 
 ## Compras Fase 1
 

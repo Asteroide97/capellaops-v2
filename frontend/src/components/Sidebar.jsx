@@ -45,7 +45,10 @@ export default function Sidebar() {
                     type="button"
                   >
                     <span>{module.label}</span>
-                    <span className={`nav-toggle-icon ${inventoryExpanded ? "expanded" : ""}`}>▾</span>
+                    <span
+                      aria-hidden="true"
+                      className={`nav-toggle-icon ${inventoryExpanded ? "expanded" : ""}`}
+                    />
                   </button>
 
                   {inventoryExpanded ? (

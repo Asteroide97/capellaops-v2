@@ -59,13 +59,55 @@ function logApiDebug(label, payload) {
 }
 
 
+function normalizeApiMessage(value, fallback = "Error inesperado") {
+  if (value === null || value === undefined || value === "") {
+    return fallback;
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeApiMessage(item, "")).filter(Boolean).join(", ") || fallback;
+  }
+
+  if (typeof value === "object") {
+    return (
+      value.detail ||
+      value.message ||
+      value.msg ||
+      value.error ||
+      value.nombre ||
+      value.name ||
+      value.label ||
+      value.title ||
+      value.id ||
+      fallback
+    );
+  }
+
+  return fallback;
+}
+
+
+function clampLimit(limit, fallback = 50, max = 100) {
+  const parsed = Number(limit || fallback);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return Math.min(parsed, max);
+}
+
+
 async function parseResponse(response) {
   const isJson = response.headers.get("content-type")?.includes("application/json");
   const data = isJson ? await response.json() : null;
 
   if (!response.ok) {
     const detail = data?.detail;
-    const detailMessage = Array.isArray(detail) ? detail.join(", ") : detail;
+    const detailMessage = normalizeApiMessage(detail, "");
     const message =
       detailMessage ||
       (response.status >= 500 ? "Error interno de servidor" : "No se pudo completar la solicitud.");
@@ -131,7 +173,7 @@ export async function apiRequest(path, { method = "GET", body, token, empresaId 
 
 function appendQueryValue(query, key, value) {
   if (value !== undefined && value !== null && value !== "") {
-    query.set(key, String(value));
+    query.set(key, key === "limit" ? String(clampLimit(value)) : String(value));
   }
 }
 
@@ -195,6 +237,7 @@ export function getMaterials({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);
   appendQueryValue(query, "categoria", filters.categoria);
+  appendQueryValue(query, "proveedor_principal_id", filters.proveedor_principal_id);
   appendQueryValue(query, "activo", filters.activo);
   appendQueryValue(query, "stock_bajo", filters.stock_bajo);
   appendQueryValue(query, "limit", filters.limit);
@@ -243,6 +286,7 @@ export function getStock({ token, empresaId, filters = {} }) {
 
 export function getInventoryMovements({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
   appendQueryValue(query, "almacen_id", filters.almacen_id);
   appendQueryValue(query, "material_id", filters.material_id);
   appendQueryValue(query, "tipo", filters.tipo);
@@ -256,6 +300,16 @@ export function getInventoryMovements({ token, empresaId, filters = {} }) {
 
 export function createInventoryMovement({ token, empresaId, payload }) {
   return apiRequest("/inventory/movements", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function createInventoryMovementBulk({ token, empresaId, payload }) {
+  return apiRequest("/inventory/movements/bulk", {
     method: "POST",
     body: payload,
     token,

@@ -109,11 +109,20 @@ class MaterialCreateRequest(BaseModel):
     sku: str = Field(min_length=1, max_length=80)
     nombre: str = Field(min_length=1, max_length=180)
     descripcion: str | None = Field(default=None, max_length=2000)
-    categoria: str | None = Field(default=None, max_length=120)
+    categoria: str = Field(min_length=1, max_length=120)
+    subcategoria: str | None = Field(default=None, max_length=120)
     unidad: str = Field(min_length=1, max_length=40)
+    imagen_url: str | None = Field(default=None, max_length=1000)
+    imagenes_extra: list[str] | None = None
+    codigo_barras: str | None = Field(default=None, max_length=120)
     costo_unitario: Decimal = Field(default=Decimal("0"), ge=0)
+    costo_promedio_actual: Decimal | None = Field(default=None, ge=0)
     precio_venta: Decimal = Field(default=Decimal("0"), ge=0)
     stock_minimo: Decimal = Field(default=Decimal("0"), ge=0)
+    stock_maximo: Decimal = Field(default=Decimal("0"), ge=0)
+    ubicacion_texto: str | None = Field(default=None, max_length=255)
+    proveedor_principal_id: str | None = Field(default=None, max_length=64)
+    lead_time_dias: int = Field(default=0, ge=0)
     activo: bool = True
 
 
@@ -122,10 +131,19 @@ class MaterialUpdateRequest(BaseModel):
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     descripcion: str | None = Field(default=None, max_length=2000)
     categoria: str | None = Field(default=None, max_length=120)
+    subcategoria: str | None = Field(default=None, max_length=120)
     unidad: str | None = Field(default=None, min_length=1, max_length=40)
+    imagen_url: str | None = Field(default=None, max_length=1000)
+    imagenes_extra: list[str] | None = None
+    codigo_barras: str | None = Field(default=None, max_length=120)
     costo_unitario: Decimal | None = Field(default=None, ge=0)
+    costo_promedio_actual: Decimal | None = Field(default=None, ge=0)
     precio_venta: Decimal | None = Field(default=None, ge=0)
     stock_minimo: Decimal | None = Field(default=None, ge=0)
+    stock_maximo: Decimal | None = Field(default=None, ge=0)
+    ubicacion_texto: str | None = Field(default=None, max_length=255)
+    proveedor_principal_id: str | None = Field(default=None, max_length=64)
+    lead_time_dias: int | None = Field(default=None, ge=0)
     activo: bool | None = None
 
 
@@ -136,10 +154,23 @@ class MaterialItem(BaseModel):
     nombre: str
     descripcion: str | None = None
     categoria: str | None = None
+    subcategoria: str | None = None
     unidad: str
+    imagen_url: str | None = None
+    imagenes_extra: list[str] = Field(default_factory=list)
+    codigo_barras: str | None = None
     costo_unitario: Decimal
+    costo_promedio_actual: Decimal | None = None
     precio_venta: Decimal
     stock_minimo: Decimal
+    stock_maximo: Decimal
+    stock_total: Decimal
+    valor_inventario: Decimal
+    ubicacion_texto: str | None = None
+    proveedor_principal_id: str | None = None
+    proveedor_principal_nombre: str | None = None
+    lead_time_dias: int
+    stock_bajo: bool
     activo: bool
     created_at: datetime
     updated_at: datetime
@@ -183,7 +214,41 @@ class InventoryMovementCreateRequest(BaseModel):
     cantidad_nueva: Decimal | None = Field(default=None, ge=0)
     referencia_tipo: str | None = Field(default=None, max_length=60)
     referencia_id: str | None = Field(default=None, max_length=64)
+    motivo: str | None = Field(default=None, max_length=160)
+    entregado_por: str | None = Field(default=None, max_length=160)
+    recibido_por: str | None = Field(default=None, max_length=160)
+    documento_referencia: str | None = Field(default=None, max_length=160)
+    evidencia_url: str | None = Field(default=None, max_length=1000)
+    es_proyecto: bool = False
+    proyecto_id: str | None = Field(default=None, max_length=64)
+    proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    costo_unitario: Decimal | None = Field(default=None, ge=0)
     notas: str | None = Field(default=None, max_length=2000)
+
+
+class InventoryBulkMovementLineCreateRequest(BaseModel):
+    material_id: str = Field(min_length=1, max_length=64)
+    cantidad: Decimal | None = Field(default=None, gt=0)
+    cantidad_nueva: Decimal | None = Field(default=None, ge=0)
+    costo_unitario: Decimal | None = Field(default=None, ge=0)
+    notas: str | None = Field(default=None, max_length=500)
+
+
+class InventoryBulkMovementCreateRequest(BaseModel):
+    almacen_id: str = Field(min_length=1, max_length=64)
+    tipo: Literal["entrada", "salida", "ajuste"]
+    referencia_tipo: str | None = Field(default=None, max_length=60)
+    referencia_id: str | None = Field(default=None, max_length=64)
+    motivo: str | None = Field(default=None, max_length=160)
+    entregado_por: str | None = Field(default=None, max_length=160)
+    recibido_por: str | None = Field(default=None, max_length=160)
+    documento_referencia: str | None = Field(default=None, max_length=160)
+    evidencia_url: str | None = Field(default=None, max_length=1000)
+    es_proyecto: bool = False
+    proyecto_id: str | None = Field(default=None, max_length=64)
+    proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    notas: str | None = Field(default=None, max_length=2000)
+    items: list[InventoryBulkMovementLineCreateRequest] = Field(min_length=1, max_length=100)
 
 
 class MovementItem(BaseModel):
@@ -195,14 +260,36 @@ class MovementItem(BaseModel):
     material_sku: str
     material_nombre: str
     tipo: str
+    estatus: str
     cantidad: Decimal
     cantidad_anterior: Decimal
     cantidad_nueva: Decimal
     referencia_tipo: str | None = None
     referencia_id: str | None = None
+    grupo_referencia: str | None = None
+    motivo: str | None = None
+    entregado_por: str | None = None
+    recibido_por: str | None = None
+    documento_referencia: str | None = None
+    evidencia_url: str | None = None
+    es_proyecto: bool = False
+    proyecto_id: str | None = None
+    proyecto_nombre_snapshot: str | None = None
+    costo_unitario_snapshot: Decimal | None = None
+    costo_promedio_snapshot: Decimal | None = None
+    valor_inventario: Decimal | None = None
     notas: str | None = None
     created_by: str
+    created_by_nombre: str | None = None
     created_at: datetime
+
+
+class InventoryBulkMovementResponse(BaseModel):
+    group_reference: str
+    tipo: str
+    almacen_id: str
+    movement_count: int
+    items: list[MovementItem]
 
 
 class MovementListResponse(BaseModel):

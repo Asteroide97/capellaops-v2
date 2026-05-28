@@ -1,14 +1,20 @@
+from __future__ import annotations
+
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import AuditLog, Empresa, Usuario
 from app.models.inventory import Almacen, Existencia, Material, MovimientoInventario
-from app.models.procurement import OrdenCompra, Requisicion
+from app.models.procurement import OrdenCompra, Proveedor, Requisicion
 from app.schemas.inventory import (
+    InventoryBulkMovementLineCreateRequest,
+    InventoryBulkMovementResponse,
     InventorySummaryAlertItem,
     InventorySummaryCoreProductItem,
     InventorySummaryIndicators,
@@ -62,11 +68,66 @@ def normalize_optional_text(value: str | None) -> str | None:
     return cleaned or None
 
 
+def normalize_optional_upper_text(value: str | None) -> str | None:
+    cleaned = normalize_optional_text(value)
+    return cleaned.upper() if cleaned else None
+
+
 def normalize_query_text(value: str | None) -> str | None:
     if value is None:
         return None
     cleaned = value.strip().lower()
     return cleaned or None
+
+
+def normalize_barcode(value: str | None) -> str | None:
+    cleaned = normalize_optional_upper_text(value)
+    return cleaned.replace(" ", "") if cleaned else None
+
+
+def normalize_image_urls(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = normalize_optional_text(value)
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
+def dump_image_urls(values: list[str] | None) -> str | None:
+    normalized = normalize_image_urls(values)
+    if not normalized:
+        return None
+    return json.dumps(normalized, ensure_ascii=False)
+
+
+def load_image_urls(raw_value: str | None) -> list[str]:
+    if not raw_value:
+        return []
+    try:
+        payload = json.loads(raw_value)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    return [str(item).strip() for item in payload if str(item).strip()]
+
+
+def decimal_or_zero(value: Decimal | int | float | str | None) -> Decimal:
+    return Decimal(value or ZERO)
+
+
+def cost_basis_for_material(material: Material) -> Decimal:
+    return decimal_or_zero(material.costo_promedio_actual) or decimal_or_zero(material.costo_unitario)
+
+
+def is_low_stock_value(stock_total: Decimal, stock_minimo: Decimal) -> bool:
+    return stock_total <= stock_minimo if stock_minimo > ZERO else stock_total <= ZERO
 
 
 def validate_inventory_access(user: Usuario, empresa: Empresa) -> None:
@@ -103,10 +164,11 @@ def count_active_warehouses(db: Session, empresa_id: str) -> int:
 def build_inventory_summary(db: Session, empresa_id: str) -> InventorySummaryResponse:
     now = datetime.now(timezone.utc)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    if month_start.month == 12:
-        next_month_start = month_start.replace(year=month_start.year + 1, month=1)
-    else:
-        next_month_start = month_start.replace(month=month_start.month + 1)
+    next_month_start = (
+        month_start.replace(year=month_start.year + 1, month=1)
+        if month_start.month == 12
+        else month_start.replace(month=month_start.month + 1)
+    )
     low_rotation_cutoff = now - timedelta(days=30)
 
     stock_totals = (
@@ -173,18 +235,18 @@ def build_inventory_summary(db: Session, empresa_id: str) -> InventorySummaryRes
     alertas: list[InventorySummaryAlertItem] = []
 
     for material, stock_total_raw, last_movement_at in material_rows:
-        stock_total = Decimal(stock_total_raw or ZERO)
-        stock_minimo = Decimal(material.stock_minimo or ZERO)
-        costo_unitario = Decimal(material.costo_unitario or ZERO)
-        valor_total = stock_total * costo_unitario
+        stock_total = decimal_or_zero(stock_total_raw)
+        stock_minimo = decimal_or_zero(material.stock_minimo)
+        cost_basis = cost_basis_for_material(material)
+        valor_total = stock_total * cost_basis
         dias_sin_movimiento = days_since(last_movement_at, fallback=material.created_at, now=now)
 
         valor_inventario += valor_total
-
-        is_low_stock = stock_total <= stock_minimo if stock_minimo > ZERO else stock_total <= ZERO
+        is_low_stock = is_low_stock_value(stock_total, stock_minimo)
         faltante = max(stock_minimo - stock_total, ZERO)
+
         if is_low_stock:
-            costo_reposicion += faltante * costo_unitario
+            costo_reposicion += faltante * cost_basis
             estado = "Agotado" if stock_total <= ZERO else "Bajo mínimo"
             materiales_bajo_stock.append(
                 InventorySummaryLowStockItem(
@@ -273,26 +335,10 @@ def build_inventory_summary(db: Session, empresa_id: str) -> InventorySummaryRes
         )
 
     materiales_bajo_stock.sort(
-        key=lambda item: (
-            -Decimal(item.faltante),
-            Decimal(item.stock_total),
-            item.nombre.lower(),
-        )
+        key=lambda item: (-decimal_or_zero(item.faltante), decimal_or_zero(item.stock_total), item.nombre.lower())
     )
-    productos_core_candidates.sort(
-        key=lambda item: (
-            -item[0],
-            -item[1],
-            item[2],
-        )
-    )
-    baja_rotacion_candidates.sort(
-        key=lambda item: (
-            -item[0],
-            -item[1],
-            item[2],
-        )
-    )
+    productos_core_candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
+    baja_rotacion_candidates.sort(key=lambda item: (-item[0], -item[1], item[2]))
 
     return InventorySummaryResponse(
         kpis=InventorySummaryKpis(
@@ -314,7 +360,15 @@ def build_inventory_summary(db: Session, empresa_id: str) -> InventorySummaryRes
     )
 
 
-def serialize_material(material: Material) -> MaterialItem:
+def serialize_material(
+    material: Material,
+    *,
+    stock_total: Decimal | int | float | str | None = None,
+    proveedor_principal_nombre: str | None = None,
+) -> MaterialItem:
+    total_stock = decimal_or_zero(stock_total)
+    stock_minimo = decimal_or_zero(material.stock_minimo)
+    cost_basis = cost_basis_for_material(material)
     return MaterialItem(
         id=material.id,
         empresa_id=material.empresa_id,
@@ -322,10 +376,23 @@ def serialize_material(material: Material) -> MaterialItem:
         nombre=material.nombre,
         descripcion=material.descripcion,
         categoria=material.categoria,
+        subcategoria=material.subcategoria,
         unidad=material.unidad,
+        imagen_url=material.imagen_url,
+        imagenes_extra=load_image_urls(material.imagenes_extra_json),
+        codigo_barras=material.codigo_barras,
         costo_unitario=material.costo_unitario,
+        costo_promedio_actual=material.costo_promedio_actual,
         precio_venta=material.precio_venta,
         stock_minimo=material.stock_minimo,
+        stock_maximo=material.stock_maximo,
+        stock_total=total_stock,
+        valor_inventario=total_stock * cost_basis,
+        ubicacion_texto=material.ubicacion_texto,
+        proveedor_principal_id=material.proveedor_principal_id,
+        proveedor_principal_nombre=proveedor_principal_nombre,
+        lead_time_dias=material.lead_time_dias,
+        stock_bajo=is_low_stock_value(total_stock, stock_minimo),
         activo=material.activo,
         created_at=material.created_at,
         updated_at=material.updated_at,
@@ -346,6 +413,8 @@ def serialize_warehouse(warehouse: Almacen) -> WarehouseItem:
 
 
 def serialize_stock_item(stock: Existencia, warehouse: Almacen, material: Material) -> StockItem:
+    quantity = decimal_or_zero(stock.cantidad)
+    minimum = decimal_or_zero(material.stock_minimo)
     return StockItem(
         id=stock.id,
         empresa_id=stock.empresa_id,
@@ -358,7 +427,7 @@ def serialize_stock_item(stock: Existencia, warehouse: Almacen, material: Materi
         material_unidad=material.unidad,
         stock_minimo=material.stock_minimo,
         cantidad=stock.cantidad,
-        low_stock=Decimal(stock.cantidad) <= Decimal(material.stock_minimo),
+        low_stock=is_low_stock_value(quantity, minimum),
         updated_at=stock.updated_at,
     )
 
@@ -444,6 +513,35 @@ def get_material_for_company(db: Session, empresa_id: str, material_id: str) -> 
     return material
 
 
+def get_material_item_for_company(db: Session, empresa_id: str, material_id: str) -> MaterialItem:
+    stock_totals = (
+        select(
+            Existencia.material_id.label("material_id"),
+            func.coalesce(func.sum(Existencia.cantidad), 0).label("stock_total"),
+        )
+        .where(Existencia.empresa_id == empresa_id)
+        .group_by(Existencia.material_id)
+        .subquery()
+    )
+    row = db.execute(
+        select(
+            Material,
+            func.coalesce(stock_totals.c.stock_total, 0).label("stock_total"),
+            Proveedor.nombre.label("proveedor_principal_nombre"),
+        )
+        .outerjoin(stock_totals, stock_totals.c.material_id == Material.id)
+        .outerjoin(Proveedor, Proveedor.id == Material.proveedor_principal_id)
+        .where(
+            Material.id == material_id,
+            Material.empresa_id == empresa_id,
+        )
+    ).one_or_none()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material no encontrado.")
+    material, stock_total, proveedor_nombre = row
+    return serialize_material(material, stock_total=stock_total, proveedor_principal_nombre=proveedor_nombre)
+
+
 def get_or_create_stock(
     db: Session,
     empresa_id: str,
@@ -473,7 +571,13 @@ def get_or_create_stock(
     return stock
 
 
-def build_movement_item(movement: MovimientoInventario, warehouse: Almacen, material: Material) -> MovementItem:
+def build_movement_item(
+    movement: MovimientoInventario,
+    warehouse: Almacen,
+    material: Material,
+    user: Usuario | None = None,
+) -> MovementItem:
+    cost_basis = decimal_or_zero(movement.costo_promedio_snapshot or movement.costo_unitario_snapshot)
     return MovementItem(
         id=movement.id,
         empresa_id=movement.empresa_id,
@@ -483,13 +587,27 @@ def build_movement_item(movement: MovimientoInventario, warehouse: Almacen, mate
         material_sku=material.sku,
         material_nombre=material.nombre,
         tipo=movement.tipo,
+        estatus=movement.estatus,
         cantidad=movement.cantidad,
         cantidad_anterior=movement.cantidad_anterior,
         cantidad_nueva=movement.cantidad_nueva,
         referencia_tipo=movement.referencia_tipo,
         referencia_id=movement.referencia_id,
+        grupo_referencia=movement.grupo_referencia,
+        motivo=movement.motivo,
+        entregado_por=movement.entregado_por,
+        recibido_por=movement.recibido_por,
+        documento_referencia=movement.documento_referencia,
+        evidencia_url=movement.evidencia_url,
+        es_proyecto=movement.es_proyecto,
+        proyecto_id=movement.proyecto_id,
+        proyecto_nombre_snapshot=movement.proyecto_nombre_snapshot,
+        costo_unitario_snapshot=movement.costo_unitario_snapshot,
+        costo_promedio_snapshot=movement.costo_promedio_snapshot,
+        valor_inventario=decimal_or_zero(movement.cantidad_nueva) * cost_basis if cost_basis else ZERO,
         notas=movement.notas,
         created_by=movement.created_by,
+        created_by_nombre=user.full_name if user else None,
         created_at=movement.created_at,
     )
 
@@ -508,13 +626,23 @@ def apply_inventory_movement(
     referencia_id: str | None,
     notas: str | None,
     ip_address: str | None,
+    grupo_referencia: str | None = None,
+    motivo: str | None = None,
+    entregado_por: str | None = None,
+    recibido_por: str | None = None,
+    documento_referencia: str | None = None,
+    evidencia_url: str | None = None,
+    es_proyecto: bool = False,
+    proyecto_id: str | None = None,
+    proyecto_nombre_snapshot: str | None = None,
+    costo_unitario: Decimal | None = None,
 ) -> MovementItem:
     validate_inventory_access(user, empresa)
     warehouse = get_warehouse_for_company(db, empresa.id, almacen_id)
     material = get_material_for_company(db, empresa.id, material_id)
     stock = get_or_create_stock(db, empresa.id, almacen_id, material_id)
 
-    previous_quantity = Decimal(stock.cantidad)
+    previous_quantity = decimal_or_zero(stock.cantidad)
 
     if tipo == "entrada":
         if cantidad is None or cantidad <= ZERO:
@@ -532,10 +660,7 @@ def apply_inventory_movement(
             )
         movement_quantity = Decimal(cantidad)
         if previous_quantity < movement_quantity:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Stock insuficiente.",
-            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stock insuficiente.")
         next_quantity = previous_quantity - movement_quantity
     elif tipo == "ajuste":
         if cantidad_nueva is None:
@@ -559,17 +684,35 @@ def apply_inventory_movement(
             detail="La existencia no puede quedar en negativo.",
         )
 
+    override_cost = decimal_or_zero(costo_unitario) if costo_unitario is not None else None
+    if override_cost is not None and tipo in {"entrada", "ajuste"}:
+        material.costo_unitario = override_cost
+        material.costo_promedio_actual = override_cost
+
     stock.cantidad = next_quantity
+    cost_basis = cost_basis_for_material(material)
     movement = MovimientoInventario(
         empresa_id=empresa.id,
         almacen_id=warehouse.id,
         material_id=material.id,
         tipo=tipo,
+        estatus="confirmado",
         cantidad=movement_quantity,
         cantidad_anterior=previous_quantity,
         cantidad_nueva=next_quantity,
         referencia_tipo=normalize_optional_text(referencia_tipo) or "manual",
         referencia_id=normalize_optional_text(referencia_id),
+        grupo_referencia=normalize_optional_text(grupo_referencia),
+        motivo=normalize_optional_text(motivo),
+        entregado_por=normalize_optional_text(entregado_por),
+        recibido_por=normalize_optional_text(recibido_por),
+        documento_referencia=normalize_optional_text(documento_referencia),
+        evidencia_url=normalize_optional_text(evidencia_url),
+        es_proyecto=bool(es_proyecto),
+        proyecto_id=normalize_optional_text(proyecto_id),
+        proyecto_nombre_snapshot=normalize_optional_text(proyecto_nombre_snapshot),
+        costo_unitario_snapshot=override_cost if override_cost is not None else decimal_or_zero(material.costo_unitario),
+        costo_promedio_snapshot=cost_basis,
         notas=normalize_optional_text(notas),
         created_by=user.id,
     )
@@ -591,11 +734,78 @@ def apply_inventory_movement(
                 "cantidad_anterior": str(previous_quantity),
                 "cantidad_nueva": str(next_quantity),
                 "referencia_tipo": movement.referencia_tipo,
+                "grupo_referencia": movement.grupo_referencia,
+                "es_proyecto": movement.es_proyecto,
             },
         )
     )
 
-    return build_movement_item(movement, warehouse, material)
+    return build_movement_item(movement, warehouse, material, user)
+
+
+def apply_bulk_inventory_movement(
+    db: Session,
+    *,
+    user: Usuario,
+    empresa: Empresa,
+    almacen_id: str,
+    tipo: str,
+    items: list[InventoryBulkMovementLineCreateRequest],
+    referencia_tipo: str | None,
+    referencia_id: str | None,
+    motivo: str | None,
+    entregado_por: str | None,
+    recibido_por: str | None,
+    documento_referencia: str | None,
+    evidencia_url: str | None,
+    es_proyecto: bool,
+    proyecto_id: str | None,
+    proyecto_nombre_snapshot: str | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> InventoryBulkMovementResponse:
+    validate_inventory_access(user, empresa)
+    warehouse = get_warehouse_for_company(db, empresa.id, almacen_id)
+    if not items:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Debes agregar al menos un material.")
+
+    group_reference = str(uuid4())
+    movements: list[MovementItem] = []
+    for item in items:
+        line_notes = "\n".join(part for part in [normalize_optional_text(notas), normalize_optional_text(item.notas)] if part)
+        movement = apply_inventory_movement(
+            db,
+            user=user,
+            empresa=empresa,
+            almacen_id=warehouse.id,
+            material_id=item.material_id,
+            tipo=tipo,
+            cantidad=item.cantidad,
+            cantidad_nueva=item.cantidad_nueva,
+            referencia_tipo=referencia_tipo,
+            referencia_id=referencia_id,
+            notas=line_notes or None,
+            ip_address=ip_address,
+            grupo_referencia=group_reference,
+            motivo=motivo,
+            entregado_por=entregado_por,
+            recibido_por=recibido_por,
+            documento_referencia=documento_referencia,
+            evidencia_url=evidencia_url,
+            es_proyecto=es_proyecto,
+            proyecto_id=proyecto_id,
+            proyecto_nombre_snapshot=proyecto_nombre_snapshot,
+            costo_unitario=item.costo_unitario,
+        )
+        movements.append(movement)
+
+    return InventoryBulkMovementResponse(
+        group_reference=group_reference,
+        tipo=tipo,
+        almacen_id=warehouse.id,
+        movement_count=len(movements),
+        items=movements,
+    )
 
 
 def list_warehouses(
@@ -628,35 +838,68 @@ def list_materials(
     categoria: str | None = None,
     activo: bool | None = None,
     stock_bajo: bool | None = None,
+    proveedor_principal_id: str | None = None,
     limit: int = 25,
     offset: int = 0,
 ) -> tuple[int, list[MaterialItem]]:
-    query = select(Material).where(Material.empresa_id == empresa_id)
-    query = apply_text_search(query, q, Material.sku, Material.nombre, Material.descripcion, Material.categoria)
+    stock_totals = (
+        select(
+            Existencia.material_id.label("material_id"),
+            func.coalesce(func.sum(Existencia.cantidad), 0).label("total_stock"),
+        )
+        .where(Existencia.empresa_id == empresa_id)
+        .group_by(Existencia.material_id)
+        .subquery()
+    )
+    total_stock = func.coalesce(stock_totals.c.total_stock, 0)
+    low_stock_condition = or_(
+        and_(Material.stock_minimo > 0, total_stock <= Material.stock_minimo),
+        and_(Material.stock_minimo <= 0, total_stock <= 0),
+    )
+
+    query = (
+        select(
+            Material,
+            total_stock.label("stock_total"),
+            Proveedor.nombre.label("proveedor_principal_nombre"),
+        )
+        .outerjoin(stock_totals, stock_totals.c.material_id == Material.id)
+        .outerjoin(Proveedor, Proveedor.id == Material.proveedor_principal_id)
+        .where(Material.empresa_id == empresa_id)
+    )
+    query = apply_text_search(
+        query,
+        q,
+        Material.sku,
+        Material.nombre,
+        Material.descripcion,
+        Material.categoria,
+        Material.subcategoria,
+        Material.codigo_barras,
+        Proveedor.nombre,
+        Proveedor.rfc,
+    )
 
     normalized_category = normalize_query_text(categoria)
     if normalized_category:
         query = query.where(func.lower(func.coalesce(Material.categoria, "")) == normalized_category)
+    if proveedor_principal_id:
+        query = query.where(Material.proveedor_principal_id == proveedor_principal_id)
     if activo is not None:
         query = query.where(Material.activo == activo)
-
     if stock_bajo is not None:
-        stock_totals = (
-            select(
-                Existencia.material_id.label("material_id"),
-                func.coalesce(func.sum(Existencia.cantidad), 0).label("total_stock"),
-            )
-            .where(Existencia.empresa_id == empresa_id)
-            .group_by(Existencia.material_id)
-            .subquery()
-        )
-        total_stock = func.coalesce(stock_totals.c.total_stock, 0)
-        query = query.outerjoin(stock_totals, stock_totals.c.material_id == Material.id)
-        query = query.where(total_stock <= Material.stock_minimo if stock_bajo else total_stock > Material.stock_minimo)
+        query = query.where(low_stock_condition if stock_bajo else ~low_stock_condition)
 
     total = count_rows(db, query)
-    rows = db.scalars(query.order_by(Material.nombre.asc(), Material.sku.asc()).offset(offset).limit(limit)).all()
-    return total, [serialize_material(material) for material in rows]
+    rows = db.execute(query.order_by(Material.nombre.asc(), Material.sku.asc()).offset(offset).limit(limit)).all()
+    return total, [
+        serialize_material(
+            material,
+            stock_total=stock_total_value,
+            proveedor_principal_nombre=proveedor_principal_nombre,
+        )
+        for material, stock_total_value, proveedor_principal_nombre in rows
+    ]
 
 
 def list_stock(
@@ -676,14 +919,27 @@ def list_stock(
         .join(Material, Existencia.material_id == Material.id)
         .where(Existencia.empresa_id == empresa_id)
     )
-    query = apply_text_search(query, q, Almacen.nombre, Almacen.codigo, Material.sku, Material.nombre, Material.categoria)
+    query = apply_text_search(
+        query,
+        q,
+        Almacen.nombre,
+        Almacen.codigo,
+        Material.sku,
+        Material.nombre,
+        Material.categoria,
+        Material.codigo_barras,
+    )
 
     if almacen_id:
         query = query.where(Existencia.almacen_id == almacen_id)
     if material_id:
         query = query.where(Existencia.material_id == material_id)
     if stock_bajo is not None:
-        query = query.where(Existencia.cantidad <= Material.stock_minimo if stock_bajo else Existencia.cantidad > Material.stock_minimo)
+        low_condition = or_(
+            and_(Material.stock_minimo > 0, Existencia.cantidad <= Material.stock_minimo),
+            and_(Material.stock_minimo <= 0, Existencia.cantidad <= 0),
+        )
+        query = query.where(low_condition if stock_bajo else ~low_condition)
 
     total = count_rows(db, query)
     rows = db.execute(
@@ -696,6 +952,7 @@ def list_recent_movements(
     db: Session,
     empresa_id: str,
     *,
+    q: str | None = None,
     almacen_id: str | None = None,
     material_id: str | None = None,
     tipo: str | None = None,
@@ -705,10 +962,25 @@ def list_recent_movements(
     offset: int = 0,
 ) -> tuple[int, list[MovementItem]]:
     query = (
-        select(MovimientoInventario, Almacen, Material)
+        select(MovimientoInventario, Almacen, Material, Usuario)
         .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
         .join(Material, MovimientoInventario.material_id == Material.id)
+        .join(Usuario, MovimientoInventario.created_by == Usuario.id)
         .where(MovimientoInventario.empresa_id == empresa_id)
+    )
+    query = apply_text_search(
+        query,
+        q,
+        Material.sku,
+        Material.nombre,
+        Material.codigo_barras,
+        MovimientoInventario.motivo,
+        MovimientoInventario.documento_referencia,
+        MovimientoInventario.referencia_id,
+        MovimientoInventario.notas,
+        MovimientoInventario.entregado_por,
+        MovimientoInventario.recibido_por,
+        MovimientoInventario.proyecto_nombre_snapshot,
     )
 
     if almacen_id:
@@ -726,7 +998,7 @@ def list_recent_movements(
     rows = db.execute(
         query.order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id)).offset(offset).limit(limit)
     ).all()
-    return total, [build_movement_item(movement, warehouse, material) for movement, warehouse, material in rows]
+    return total, [build_movement_item(movement, warehouse, material, created_by) for movement, warehouse, material, created_by in rows]
 
 
 def get_kardex(
@@ -735,7 +1007,7 @@ def get_kardex(
     material_id: str,
     almacen_id: str | None = None,
 ) -> KardexResponse:
-    material = get_material_for_company(db, empresa_id, material_id)
+    material_item = get_material_item_for_company(db, empresa_id, material_id)
     if almacen_id:
         get_warehouse_for_company(db, empresa_id, almacen_id)
 
@@ -752,9 +1024,10 @@ def get_kardex(
         stock_query = stock_query.where(Existencia.almacen_id == almacen_id)
 
     movement_query = (
-        select(MovimientoInventario, Almacen, Material)
+        select(MovimientoInventario, Almacen, Material, Usuario)
         .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
         .join(Material, MovimientoInventario.material_id == Material.id)
+        .join(Usuario, MovimientoInventario.created_by == Usuario.id)
         .where(
             MovimientoInventario.empresa_id == empresa_id,
             MovimientoInventario.material_id == material_id,
@@ -776,11 +1049,14 @@ def get_kardex(
         )
         for stock, warehouse in stock_rows
     ]
-    total_stock = sum((Decimal(item.cantidad) for item in stock_items), ZERO)
+    total_stock = sum((decimal_or_zero(item.cantidad) for item in stock_items), ZERO)
 
     return KardexResponse(
-        material=serialize_material(material),
+        material=material_item,
         existencia_total=total_stock,
         stock_por_almacen=stock_items,
-        movements=[build_movement_item(movement, warehouse, material_row) for movement, warehouse, material_row in movement_rows],
+        movements=[
+            build_movement_item(movement, warehouse, material_row, created_by)
+            for movement, warehouse, material_row, created_by in movement_rows
+        ],
     )

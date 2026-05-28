@@ -21,6 +21,8 @@ class Proveedor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
     nombre: Mapped[str] = mapped_column(String(160), nullable=False)
+    razon_social: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    rfc: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     contacto_nombre: Mapped[str | None] = mapped_column(String(160), nullable=True)
     correo: Mapped[str | None] = mapped_column(String(255), nullable=True)
     telefono: Mapped[str | None] = mapped_column(String(40), nullable=True)

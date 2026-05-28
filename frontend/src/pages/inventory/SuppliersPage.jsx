@@ -3,19 +3,44 @@ import { useEffect, useState } from "react";
 import { useAuth } from "../../auth/AuthContext";
 import { createSupplier, getSuppliers, updateSupplier } from "../../api/client";
 import {
+  ActionButton,
   DEFAULT_PAGE_SIZE,
+  DataCard,
+  DataTable,
   EmptyState,
+  Field,
+  FilterCard,
+  FormGrid,
+  ModalShell,
+  PageHeader,
   PaginationControls,
-  parseBooleanFilter,
   ResultMeta,
+  SearchInput,
+  SectionTitle,
+  StatusBadge,
+  parseBooleanFilter,
+  safeDisplayText,
 } from "./shared";
 
 
 const defaultFilters = {
   q: "",
-  activo: "",
+  activo: "true",
   limit: DEFAULT_PAGE_SIZE,
   offset: 0,
+};
+
+const defaultForm = {
+  id: "",
+  nombre: "",
+  razon_social: "",
+  rfc: "",
+  contacto_nombre: "",
+  correo: "",
+  telefono: "",
+  direccion: "",
+  notas: "",
+  activo: true,
 };
 
 
@@ -28,18 +53,10 @@ export default function SuppliersPage() {
   const [suppliers, setSuppliers] = useState([]);
   const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
   const [filters, setFilters] = useState(defaultFilters);
-  const [form, setForm] = useState({
-    id: "",
-    nombre: "",
-    contacto_nombre: "",
-    correo: "",
-    telefono: "",
-    direccion: "",
-    notas: "",
-    activo: true,
-  });
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState(defaultForm);
 
-  async function loadSuppliers(nextFilters = filters) {
+  async function loadSuppliersPage(nextFilters = filters) {
     const response = await getSuppliers({
       token,
       empresaId,
@@ -65,7 +82,7 @@ export default function SuppliersPage() {
       setLoading(true);
       setError("");
       try {
-        await loadSuppliers(defaultFilters);
+        await loadSuppliersPage(defaultFilters);
       } catch (requestError) {
         setError(requestError.message || "No se pudieron cargar los proveedores.");
       } finally {
@@ -77,16 +94,32 @@ export default function SuppliersPage() {
   }, [token, empresaId]);
 
   function resetForm() {
+    setForm(defaultForm);
+  }
+
+  function openCreateModal() {
+    resetForm();
+    setError("");
+    setSuccess("");
+    setModalOpen(true);
+  }
+
+  function openEditModal(supplier) {
     setForm({
-      id: "",
-      nombre: "",
-      contacto_nombre: "",
-      correo: "",
-      telefono: "",
-      direccion: "",
-      notas: "",
-      activo: true,
+      id: supplier.id,
+      nombre: supplier.nombre,
+      razon_social: supplier.razon_social || "",
+      rfc: supplier.rfc || "",
+      contacto_nombre: supplier.contacto_nombre || "",
+      correo: supplier.correo || "",
+      telefono: supplier.telefono || "",
+      direccion: supplier.direccion || "",
+      notas: supplier.notas || "",
+      activo: supplier.activo,
     });
+    setError("");
+    setSuccess("");
+    setModalOpen(true);
   }
 
   async function handleSubmit(event) {
@@ -94,9 +127,12 @@ export default function SuppliersPage() {
     setSubmitting(true);
     setError("");
     setSuccess("");
+
     try {
       const payload = {
         nombre: form.nombre,
+        razon_social: form.razon_social || null,
+        rfc: form.rfc || null,
         contacto_nombre: form.contacto_nombre || null,
         correo: form.correo || null,
         telefono: form.telefono || null,
@@ -113,12 +149,30 @@ export default function SuppliersPage() {
         setSuccess("Proveedor creado correctamente.");
       }
 
+      setModalOpen(false);
       resetForm();
-      await loadSuppliers(filters);
+      await loadSuppliersPage(filters);
     } catch (requestError) {
       setError(requestError.message || "No se pudo guardar el proveedor.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function toggleSupplierStatus(supplier) {
+    setError("");
+    setSuccess("");
+    try {
+      await updateSupplier({
+        supplierId: supplier.id,
+        token,
+        empresaId,
+        payload: { activo: !supplier.activo },
+      });
+      setSuccess(supplier.activo ? "Proveedor desactivado." : "Proveedor activado.");
+      await loadSuppliersPage(filters);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo actualizar el proveedor.");
     }
   }
 
@@ -127,229 +181,160 @@ export default function SuppliersPage() {
   }
 
   return (
-    <div className="inventory-grid">
-      <form className="feature-card inventory-form-card" onSubmit={handleSubmit}>
-        <div className="feature-header">
-          <p className="eyebrow">Compras</p>
-          <h2>{form.id ? "Editar proveedor" : "Crear proveedor"}</h2>
-          <p>Administra el directorio base de proveedores por empresa.</p>
-        </div>
+    <div className="dashboard-stack inventory-screen">
+      <PageHeader
+        actions={
+          <ActionButton onClick={openCreateModal} size="sm" tone="primary" type="button">
+            Agregar Proveedor
+          </ActionButton>
+        }
+        eyebrow="Compras"
+        subtitle="Gestión de proveedores de materiales"
+        title="Proveedores"
+      />
 
-        {error ? <p className="form-error">{error}</p> : null}
-        {success ? <p className="form-success">{success}</p> : null}
+      {error ? <p className="form-error">{error}</p> : null}
+      {success ? <p className="form-success">{success}</p> : null}
 
-        <div className="inventory-form-grid">
-          <label>
-            Nombre
-            <input
-              onChange={(event) => setForm((current) => ({ ...current, nombre: event.target.value }))}
-              required
-              type="text"
-              value={form.nombre}
-            />
-          </label>
+      <FilterCard>
+        <div className="inventory-filter-toolbar inventory-filter-toolbar-stack">
+          <SearchInput
+            hint="Busca por nombre, contacto, email o RFC."
+            label="Buscar proveedor"
+            onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
+            onKeyDown={async (event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                const nextFilters = { ...filters, offset: 0 };
+                setFilters(nextFilters);
+                try {
+                  await loadSuppliersPage(nextFilters);
+                } catch (requestError) {
+                  setError(requestError.message || "No se pudieron aplicar los filtros.");
+                }
+              }
+            }}
+            placeholder="Proveedor, RFC, contacto o correo"
+            value={filters.q}
+          />
 
-          <label>
-            Contacto
-            <input
-              onChange={(event) => setForm((current) => ({ ...current, contacto_nombre: event.target.value }))}
-              type="text"
-              value={form.contacto_nombre}
-            />
-          </label>
-
-          <label>
-            Correo
-            <input
-              onChange={(event) => setForm((current) => ({ ...current, correo: event.target.value }))}
-              type="email"
-              value={form.correo}
-            />
-          </label>
-
-          <label>
-            Teléfono
-            <input
-              onChange={(event) => setForm((current) => ({ ...current, telefono: event.target.value }))}
-              type="text"
-              value={form.telefono}
-            />
-          </label>
-
-          <label className="inventory-form-span-2">
-            Dirección
-            <textarea
-              onChange={(event) => setForm((current) => ({ ...current, direccion: event.target.value }))}
-              rows={3}
-              value={form.direccion}
-            />
-          </label>
-
-          <label className="inventory-form-span-2">
-            Notas
-            <textarea
-              onChange={(event) => setForm((current) => ({ ...current, notas: event.target.value }))}
-              rows={3}
-              value={form.notas}
-            />
-          </label>
-
-          <label className="checkbox-row">
-            <input
-              checked={form.activo}
-              onChange={(event) => setForm((current) => ({ ...current, activo: event.target.checked }))}
-              type="checkbox"
-            />
-            Proveedor activo
-          </label>
-        </div>
-
-        <div className="inventory-actions">
-          <button className="primary-button" disabled={submitting} type="submit">
-            {submitting ? "Guardando..." : form.id ? "Actualizar proveedor" : "Crear proveedor"}
-          </button>
-          <button className="ghost-button" onClick={resetForm} type="button">
-            Nuevo proveedor
-          </button>
-        </div>
-      </form>
-
-      <div className="feature-card inventory-table-card">
-        <div className="feature-header">
-          <p className="eyebrow">Listado</p>
-          <h2>Proveedores registrados</h2>
-          <ResultMeta label="proveedores" loaded={suppliers.length} total={meta.total} />
-        </div>
-
-        <form
-          className="inventory-filter-grid"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const nextFilters = { ...filters, offset: 0 };
-            setFilters(nextFilters);
-            try {
-              await loadSuppliers(nextFilters);
-            } catch (requestError) {
-              setError(requestError.message || "No se pudieron filtrar los proveedores.");
-            }
-          }}
-        >
-          <label>
-            Buscar
-            <input
-              onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
-              placeholder="Nombre, contacto o correo"
-              type="text"
-              value={filters.q}
-            />
-          </label>
-
-          <label>
-            Estado
-            <select
-              onChange={(event) => setFilters((current) => ({ ...current, activo: event.target.value }))}
-              value={filters.activo}
-            >
-              <option value="">Todos</option>
-              <option value="true">Activos</option>
-              <option value="false">Inactivos</option>
-            </select>
-          </label>
+          <div className="inventory-toggle-row inventory-toggle-row-compact">
+            <label className="inventory-inline-checkbox">
+              <input
+                checked={filters.activo !== "false"}
+                onChange={(event) =>
+                  setFilters((current) => ({
+                    ...current,
+                    activo: event.target.checked ? "true" : "",
+                  }))
+                }
+                type="checkbox"
+              />
+              Solo activos
+            </label>
+          </div>
 
           <div className="inventory-actions">
-            <button className="ghost-button" type="submit">
-              Aplicar filtros
-            </button>
-            <button
-              className="ghost-button"
+            <ActionButton
+              onClick={async () => {
+                const nextFilters = { ...filters, offset: 0 };
+                setFilters(nextFilters);
+                try {
+                  await loadSuppliersPage(nextFilters);
+                } catch (requestError) {
+                  setError(requestError.message || "No se pudieron aplicar los filtros.");
+                }
+              }}
+              size="sm"
+              tone="primary"
+              type="button"
+            >
+              Buscar
+            </ActionButton>
+            <ActionButton
               onClick={async () => {
                 setFilters(defaultFilters);
                 try {
-                  await loadSuppliers(defaultFilters);
+                  await loadSuppliersPage(defaultFilters);
                 } catch (requestError) {
                   setError(requestError.message || "No se pudieron reiniciar los filtros.");
                 }
               }}
+              size="sm"
               type="button"
             >
               Limpiar
-            </button>
-            <button
-              className="ghost-button"
+            </ActionButton>
+            <ActionButton
               onClick={async () => {
                 try {
-                  await loadSuppliers(filters);
+                  await loadSuppliersPage(filters);
                 } catch (requestError) {
                   setError(requestError.message || "No se pudo actualizar el listado.");
                 }
               }}
+              size="sm"
               type="button"
             >
               Actualizar
-            </button>
+            </ActionButton>
           </div>
-        </form>
+        </div>
+      </FilterCard>
 
+      <DataCard
+        actions={<ResultMeta label="proveedores" loaded={suppliers.length} total={meta.total} />}
+        subtitle="Directorio operativo para compras, recepciones y reposición de inventario"
+        title="Proveedores registrados"
+      >
         {suppliers.length === 0 ? (
           <EmptyState
-            title="No hay proveedores."
-            note="Crea el primer proveedor para comenzar el flujo de compras."
+            note="Agrega el primer proveedor para comenzar el flujo de compras."
+            title="No hay proveedores registrados"
           />
         ) : (
           <>
-            <div className="table-wrap">
-              <table className="inventory-table">
-                <thead>
-                  <tr>
-                    <th>Proveedor</th>
-                    <th>Contacto</th>
-                    <th>Canales</th>
-                    <th>Estado</th>
-                    <th>Acciones</th>
+            <DataTable
+              columns={[
+                { key: "proveedor", label: "Proveedor" },
+                { key: "rfc", label: "RFC" },
+                { key: "contacto", label: "Contacto" },
+                { key: "email", label: "Email" },
+                { key: "telefono", label: "Teléfono" },
+                { key: "estatus", label: "Estatus" },
+                { key: "acciones", label: "Acciones" },
+              ]}
+            >
+              <tbody>
+                {suppliers.map((supplier) => (
+                  <tr key={supplier.id}>
+                    <td>
+                      <div className="inventory-cell-main">{safeDisplayText(supplier.nombre)}</div>
+                      <div className="inventory-cell-sub">
+                        {supplier.razon_social || supplier.direccion || "Sin razón social"}
+                      </div>
+                    </td>
+                    <td>{safeDisplayText(supplier.rfc, "Sin RFC")}</td>
+                    <td>{safeDisplayText(supplier.contacto_nombre, "Sin contacto")}</td>
+                    <td>{safeDisplayText(supplier.correo, "Sin email")}</td>
+                    <td>{supplier.telefono || "Sin teléfono"}</td>
+                    <td>
+                      <StatusBadge tone={supplier.activo ? "success" : "neutral"}>
+                        {supplier.activo ? "Activo" : "Inactivo"}
+                      </StatusBadge>
+                    </td>
+                    <td className="inventory-row-actions">
+                      <button className="link-button" onClick={() => openEditModal(supplier)} type="button">
+                        Editar
+                      </button>
+                      <button className="link-button" onClick={() => toggleSupplierStatus(supplier)} type="button">
+                        {supplier.activo ? "Desactivar" : "Activar"}
+                      </button>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {suppliers.map((supplier) => (
-                    <tr key={supplier.id}>
-                      <td>
-                        <strong>{supplier.nombre}</strong>
-                        <div className="table-note">{supplier.direccion || "Sin dirección"}</div>
-                      </td>
-                      <td>{supplier.contacto_nombre || "Sin contacto"}</td>
-                      <td>
-                        <div>{supplier.correo || "Sin correo"}</div>
-                        <div className="table-note">{supplier.telefono || "Sin teléfono"}</div>
-                      </td>
-                      <td>
-                        <span className={`status-badge ${supplier.activo ? "enabled" : "pending"}`}>
-                          {supplier.activo ? "Activo" : "Inactivo"}
-                        </span>
-                      </td>
-                      <td className="inventory-row-actions">
-                        <button
-                          className="link-button"
-                          onClick={() =>
-                            setForm({
-                              id: supplier.id,
-                              nombre: supplier.nombre,
-                              contacto_nombre: supplier.contacto_nombre || "",
-                              correo: supplier.correo || "",
-                              telefono: supplier.telefono || "",
-                              direccion: supplier.direccion || "",
-                              notas: supplier.notas || "",
-                              activo: supplier.activo,
-                            })
-                          }
-                          type="button"
-                        >
-                          Editar
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </DataTable>
 
             <PaginationControls
               meta={meta}
@@ -357,7 +342,7 @@ export default function SuppliersPage() {
                 const nextFilters = { ...filters, offset: meta.offset + meta.limit };
                 setFilters(nextFilters);
                 try {
-                  await loadSuppliers(nextFilters);
+                  await loadSuppliersPage(nextFilters);
                 } catch (requestError) {
                   setError(requestError.message || "No se pudo cambiar la página.");
                 }
@@ -366,7 +351,7 @@ export default function SuppliersPage() {
                 const nextFilters = { ...filters, offset: Math.max(0, meta.offset - meta.limit) };
                 setFilters(nextFilters);
                 try {
-                  await loadSuppliers(nextFilters);
+                  await loadSuppliersPage(nextFilters);
                 } catch (requestError) {
                   setError(requestError.message || "No se pudo cambiar la página.");
                 }
@@ -374,7 +359,125 @@ export default function SuppliersPage() {
             />
           </>
         )}
-      </div>
+      </DataCard>
+
+      <ModalShell
+        onClose={() => setModalOpen(false)}
+        open={modalOpen}
+        size="medium"
+        subtitle="Registro base de proveedor sin mezclar CRM ni cuentas por pagar."
+        title={form.id ? "Editar Proveedor" : "Nuevo Proveedor"}
+      >
+        <form className="inventory-modal-form" onSubmit={handleSubmit}>
+          <section className="inventory-form-section">
+            <SectionTitle subtitle="Información comercial y fiscal básica" title="Identificación" />
+            <FormGrid>
+              <Field label="Nombre">
+                <input
+                  onChange={(event) => setForm((current) => ({ ...current, nombre: event.target.value }))}
+                  required
+                  type="text"
+                  value={form.nombre}
+                />
+              </Field>
+
+              <Field label="Razón social">
+                <input
+                  onChange={(event) => setForm((current) => ({ ...current, razon_social: event.target.value }))}
+                  type="text"
+                  value={form.razon_social}
+                />
+              </Field>
+
+              <Field label="RFC">
+                <input
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, rfc: event.target.value.toUpperCase() }))
+                  }
+                  type="text"
+                  value={form.rfc}
+                />
+              </Field>
+
+              <Field label="Contacto">
+                <input
+                  onChange={(event) => setForm((current) => ({ ...current, contacto_nombre: event.target.value }))}
+                  type="text"
+                  value={form.contacto_nombre}
+                />
+              </Field>
+            </FormGrid>
+          </section>
+
+          <section className="inventory-form-section">
+            <SectionTitle subtitle="Canales de contacto operativos" title="Contacto" />
+            <FormGrid>
+              <Field label="Teléfono">
+                <input
+                  onChange={(event) => setForm((current) => ({ ...current, telefono: event.target.value }))}
+                  type="text"
+                  value={form.telefono}
+                />
+              </Field>
+
+              <Field label="Email">
+                <input
+                  onChange={(event) => setForm((current) => ({ ...current, correo: event.target.value }))}
+                  type="email"
+                  value={form.correo}
+                />
+              </Field>
+
+              <Field label="Dirección" span={2}>
+                <textarea
+                  onChange={(event) => setForm((current) => ({ ...current, direccion: event.target.value }))}
+                  rows={3}
+                  value={form.direccion}
+                />
+              </Field>
+            </FormGrid>
+          </section>
+
+          <section className="inventory-form-section">
+            <SectionTitle subtitle="Notas internas de operación" title="Seguimiento" />
+            <FormGrid>
+              <Field label="Notas" span={2}>
+                <textarea
+                  onChange={(event) => setForm((current) => ({ ...current, notas: event.target.value }))}
+                  rows={4}
+                  value={form.notas}
+                />
+              </Field>
+
+              <Field span={2}>
+                <label className="inventory-inline-checkbox">
+                  <input
+                    checked={form.activo}
+                    onChange={(event) => setForm((current) => ({ ...current, activo: event.target.checked }))}
+                    type="checkbox"
+                  />
+                  Proveedor activo
+                </label>
+              </Field>
+            </FormGrid>
+          </section>
+
+          <div className="inventory-actions inventory-actions-end">
+            <ActionButton disabled={submitting} tone="primary" type="submit">
+              {submitting ? "Guardando..." : form.id ? "Guardar cambios" : "Crear proveedor"}
+            </ActionButton>
+            <ActionButton
+              onClick={() => {
+                resetForm();
+                setModalOpen(false);
+              }}
+              type="button"
+            >
+              Cancelar
+            </ActionButton>
+          </div>
+        </form>
+      </ModalShell>
     </div>
   );
 }

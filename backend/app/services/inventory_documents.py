@@ -742,6 +742,7 @@ def confirm_transfer(
             referencia_id=transfer.id,
             notas=transfer_note,
             ip_address=ip_address,
+            costo_unitario=detail.costo_unitario_snapshot,
         )
         apply_inventory_movement(
             db,
@@ -756,6 +757,7 @@ def confirm_transfer(
             referencia_id=transfer.id,
             notas=transfer_note,
             ip_address=ip_address,
+            costo_unitario=detail.costo_unitario_snapshot,
         )
 
     transfer.estatus = "confirmada"

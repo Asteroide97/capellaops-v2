@@ -11,12 +11,15 @@ from app.api.deps import TenantContext, get_tenant_context
 from app.db.session import get_db
 from app.models import AuditLog
 from app.models.inventory import Almacen, Material
+from app.models.procurement import Proveedor
 from app.schemas.inventory import (
     CountCreateRequest,
     CountDetailCreateRequest,
     CountDetailUpdateRequest,
     CountListResponse,
     CountResponse,
+    InventoryBulkMovementCreateRequest,
+    InventoryBulkMovementResponse,
     InventorySummaryResponse,
     CountUpdateRequest,
     InventoryMovementCreateRequest,
@@ -42,16 +45,20 @@ from app.schemas.inventory import (
 )
 from app.services.inventory import (
     apply_inventory_movement,
+    apply_bulk_inventory_movement,
     build_inventory_summary,
     count_active_warehouses,
     create_warehouse_record,
+    dump_image_urls,
     get_kardex,
     get_material_for_company,
+    get_material_item_for_company,
     get_warehouse_for_company,
     list_materials,
     list_recent_movements,
     list_stock,
     list_warehouses,
+    normalize_barcode,
     normalize_code,
     normalize_optional_text,
     normalize_required_text,
@@ -123,6 +130,60 @@ def validate_date_range(fecha_desde: datetime | None, fecha_hasta: datetime | No
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="fecha_hasta no puede ser menor que fecha_desde.",
         )
+
+
+def get_supplier_for_company(db: Session, empresa_id: str, supplier_id: str) -> Proveedor:
+    supplier = db.scalar(
+        select(Proveedor).where(
+            Proveedor.id == supplier_id,
+            Proveedor.empresa_id == empresa_id,
+        )
+    )
+    if not supplier:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proveedor no encontrado.")
+    return supplier
+
+
+def ensure_material_supplier(
+    db: Session,
+    *,
+    empresa_id: str,
+    proveedor_principal_id: str | None,
+) -> str | None:
+    if proveedor_principal_id is None:
+        return None
+    supplier_id = normalize_optional_text(proveedor_principal_id)
+    if not supplier_id:
+        return None
+    get_supplier_for_company(db, empresa_id, supplier_id)
+    return supplier_id
+
+
+def ensure_unique_barcode(
+    db: Session,
+    *,
+    empresa_id: str,
+    codigo_barras: str | None,
+    material_id: str | None = None,
+) -> str | None:
+    barcode = normalize_barcode(codigo_barras)
+    if not barcode:
+        return None
+
+    query = select(Material.id).where(
+        Material.empresa_id == empresa_id,
+        Material.codigo_barras == barcode,
+    )
+    if material_id:
+        query = query.where(Material.id != material_id)
+
+    existing = db.scalar(query)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Código de barras ya existe en esta empresa.",
+        )
+    return barcode
 
 
 @router.get("/onboarding-status", response_model=InventoryOnboardingStatusResponse)
@@ -304,6 +365,7 @@ def update_warehouse(
 def get_materials(
     q: str | None = None,
     categoria: str | None = None,
+    proveedor_principal_id: str | None = None,
     activo: bool | None = None,
     stock_bajo: bool | None = None,
     limit: int = Query(default=25, ge=1, le=100),
@@ -316,6 +378,7 @@ def get_materials(
         context.empresa.id,
         q=q,
         categoria=categoria,
+        proveedor_principal_id=proveedor_principal_id,
         activo=activo,
         stock_bajo=stock_bajo,
         limit=limit,
@@ -330,8 +393,7 @@ def material_detail(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> MaterialItem:
-    material = get_material_for_company(db, context.empresa.id, material_id)
-    return serialize_material(material)
+    return get_material_item_for_company(db, context.empresa.id, material_id)
 
 
 @router.post("/materials", response_model=MaterialItem, status_code=status.HTTP_201_CREATED)
@@ -345,6 +407,16 @@ def create_material(
         sku = normalize_code(payload.sku, "SKU")
         nombre = normalize_required_text(payload.nombre, "Nombre")
         unidad = normalize_required_text(payload.unidad, "Unidad")
+        proveedor_principal_id = ensure_material_supplier(
+            db,
+            empresa_id=context.empresa.id,
+            proveedor_principal_id=payload.proveedor_principal_id,
+        )
+        codigo_barras = ensure_unique_barcode(
+            db,
+            empresa_id=context.empresa.id,
+            codigo_barras=payload.codigo_barras,
+        )
 
         existing = db.scalar(
             select(Material.id).where(
@@ -363,11 +435,20 @@ def create_material(
             sku=sku,
             nombre=nombre,
             descripcion=normalize_optional_text(payload.descripcion),
-            categoria=normalize_optional_text(payload.categoria),
+            categoria=normalize_required_text(payload.categoria, "Categoria"),
+            subcategoria=normalize_optional_text(payload.subcategoria),
             unidad=unidad,
+            imagen_url=normalize_optional_text(payload.imagen_url),
+            imagenes_extra_json=dump_image_urls(payload.imagenes_extra),
+            codigo_barras=codigo_barras,
             costo_unitario=payload.costo_unitario,
+            costo_promedio_actual=payload.costo_promedio_actual or payload.costo_unitario,
             precio_venta=payload.precio_venta,
             stock_minimo=payload.stock_minimo,
+            stock_maximo=payload.stock_maximo,
+            ubicacion_texto=normalize_optional_text(payload.ubicacion_texto),
+            proveedor_principal_id=proveedor_principal_id,
+            lead_time_dias=payload.lead_time_dias,
             activo=payload.activo,
         )
         db.add(material)
@@ -380,11 +461,16 @@ def create_material(
                 entity_name="material",
                 entity_id=material.id,
                 ip_address=request.client.host if request.client else None,
-                metadata_json={"sku": material.sku, "nombre": material.nombre},
+                metadata_json={
+                    "sku": material.sku,
+                    "nombre": material.nombre,
+                    "codigo_barras": material.codigo_barras,
+                    "proveedor_principal_id": material.proveedor_principal_id,
+                },
             )
         )
         db.refresh(material)
-        return serialize_material(material)
+        return get_material_item_for_company(db, context.empresa.id, material.id)
 
     return run_inventory_write(db, "create_material", operation)
 
@@ -427,20 +513,49 @@ def update_material(
                     detail="SKU ya existe en esta empresa.",
                 )
             material.sku = next_sku
+        if payload.codigo_barras is not None:
+            material.codigo_barras = ensure_unique_barcode(
+                db,
+                empresa_id=context.empresa.id,
+                codigo_barras=payload.codigo_barras,
+                material_id=material.id,
+            )
         if payload.nombre is not None:
             material.nombre = normalize_required_text(payload.nombre, "Nombre")
         if payload.descripcion is not None:
             material.descripcion = normalize_optional_text(payload.descripcion)
         if payload.categoria is not None:
-            material.categoria = normalize_optional_text(payload.categoria)
+            material.categoria = normalize_required_text(payload.categoria, "Categoria")
+        if payload.subcategoria is not None:
+            material.subcategoria = normalize_optional_text(payload.subcategoria)
         if payload.unidad is not None:
             material.unidad = normalize_required_text(payload.unidad, "Unidad")
+        if payload.imagen_url is not None:
+            material.imagen_url = normalize_optional_text(payload.imagen_url)
+        if payload.imagenes_extra is not None:
+            material.imagenes_extra_json = dump_image_urls(payload.imagenes_extra)
         if payload.costo_unitario is not None:
             material.costo_unitario = payload.costo_unitario
+            if payload.costo_promedio_actual is None and material.costo_promedio_actual in {None, 0}:
+                material.costo_promedio_actual = payload.costo_unitario
+        if payload.costo_promedio_actual is not None:
+            material.costo_promedio_actual = payload.costo_promedio_actual
         if payload.precio_venta is not None:
             material.precio_venta = payload.precio_venta
         if payload.stock_minimo is not None:
             material.stock_minimo = payload.stock_minimo
+        if payload.stock_maximo is not None:
+            material.stock_maximo = payload.stock_maximo
+        if payload.ubicacion_texto is not None:
+            material.ubicacion_texto = normalize_optional_text(payload.ubicacion_texto)
+        if payload.proveedor_principal_id is not None:
+            material.proveedor_principal_id = ensure_material_supplier(
+                db,
+                empresa_id=context.empresa.id,
+                proveedor_principal_id=payload.proveedor_principal_id,
+            )
+        if payload.lead_time_dias is not None:
+            material.lead_time_dias = payload.lead_time_dias
         if payload.activo is not None:
             material.activo = payload.activo
 
@@ -452,12 +567,18 @@ def update_material(
                 entity_name="material",
                 entity_id=material.id,
                 ip_address=request.client.host if request.client else None,
-                metadata_json={"sku": material.sku, "nombre": material.nombre, "activo": material.activo},
+                metadata_json={
+                    "sku": material.sku,
+                    "nombre": material.nombre,
+                    "codigo_barras": material.codigo_barras,
+                    "proveedor_principal_id": material.proveedor_principal_id,
+                    "activo": material.activo,
+                },
             )
         )
         db.flush()
         db.refresh(material)
-        return serialize_material(material)
+        return get_material_item_for_company(db, context.empresa.id, material.id)
 
     return run_inventory_write(db, "update_material", operation)
 
@@ -493,6 +614,7 @@ def get_stock(
 
 @router.get("/movements", response_model=MovementListResponse)
 def get_movements(
+    q: str | None = None,
     almacen_id: str | None = None,
     material_id: str | None = None,
     tipo: Literal["entrada", "salida", "ajuste"] | None = None,
@@ -512,6 +634,7 @@ def get_movements(
     total, items = list_recent_movements(
         db,
         context.empresa.id,
+        q=q,
         almacen_id=almacen_id,
         material_id=material_id,
         tipo=tipo,
@@ -544,9 +667,50 @@ def create_inventory_movement(
             referencia_id=payload.referencia_id,
             notas=payload.notas,
             ip_address=request.client.host if request.client else None,
+            motivo=payload.motivo,
+            entregado_por=payload.entregado_por,
+            recibido_por=payload.recibido_por,
+            documento_referencia=payload.documento_referencia,
+            evidencia_url=payload.evidencia_url,
+            es_proyecto=payload.es_proyecto,
+            proyecto_id=payload.proyecto_id,
+            proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
+            costo_unitario=payload.costo_unitario,
         )
 
     return run_inventory_write(db, "create_inventory_movement", operation)
+
+
+@router.post("/movements/bulk", response_model=InventoryBulkMovementResponse, status_code=status.HTTP_201_CREATED)
+def create_inventory_movement_bulk(
+    payload: InventoryBulkMovementCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> InventoryBulkMovementResponse:
+    def operation() -> InventoryBulkMovementResponse:
+        return apply_bulk_inventory_movement(
+            db,
+            user=context.user,
+            empresa=context.empresa,
+            almacen_id=payload.almacen_id,
+            tipo=payload.tipo,
+            items=payload.items,
+            referencia_tipo=payload.referencia_tipo,
+            referencia_id=payload.referencia_id,
+            motivo=payload.motivo,
+            entregado_por=payload.entregado_por,
+            recibido_por=payload.recibido_por,
+            documento_referencia=payload.documento_referencia,
+            evidencia_url=payload.evidencia_url,
+            es_proyecto=payload.es_proyecto,
+            proyecto_id=payload.proyecto_id,
+            proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        )
+
+    return run_inventory_write(db, "create_inventory_movement_bulk", operation)
 
 
 @router.get("/transfers", response_model=TransferListResponse)

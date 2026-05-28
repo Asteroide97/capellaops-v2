@@ -52,6 +52,12 @@ class Material(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint("costo_unitario >= 0", name="ck_material_costo_nonnegative"),
         CheckConstraint("precio_venta >= 0", name="ck_material_precio_nonnegative"),
         CheckConstraint("stock_minimo >= 0", name="ck_material_stock_minimo_nonnegative"),
+        CheckConstraint("stock_maximo >= 0", name="ck_material_stock_maximo_nonnegative"),
+        CheckConstraint("lead_time_dias >= 0", name="ck_material_lead_time_nonnegative"),
+        CheckConstraint(
+            "costo_promedio_actual IS NULL OR costo_promedio_actual >= 0",
+            name="ck_material_costo_promedio_nonnegative",
+        ),
     )
 
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
@@ -59,13 +65,32 @@ class Material(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
     categoria: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    subcategoria: Mapped[str | None] = mapped_column(String(120), nullable=True)
     unidad: Mapped[str] = mapped_column(String(40), nullable=False)
+    imagen_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    imagenes_extra_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    codigo_barras: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     costo_unitario: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
+    costo_promedio_actual: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     precio_venta: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     stock_minimo: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
+    stock_maximo: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    ubicacion_texto: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    proveedor_principal_id: Mapped[str | None] = mapped_column(
+        ForeignKey("proveedores.id"),
+        nullable=True,
+        index=True,
+    )
+    lead_time_dias: Mapped[int] = mapped_column(nullable=False, default=0, server_default="0")
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
 
     empresa = relationship("Empresa")
+    proveedor_principal = relationship("Proveedor")
     existencias = relationship("Existencia", back_populates="material", cascade="all, delete-orphan")
     movimientos = relationship("MovimientoInventario", back_populates="material")
     transferencia_detalles = relationship("TransferenciaInventarioDetalle", back_populates="material")
@@ -94,6 +119,18 @@ class MovimientoInventario(UUIDPrimaryKeyMixin, Base):
     __table_args__ = (
         CheckConstraint("tipo IN ('entrada', 'salida', 'ajuste')", name="ck_movimiento_inventario_tipo"),
         CheckConstraint("cantidad_nueva >= 0", name="ck_movimiento_inventario_cantidad_nueva_nonnegative"),
+        CheckConstraint(
+            "estatus IN ('borrador', 'confirmado', 'cancelado')",
+            name="ck_movimiento_inventario_estatus",
+        ),
+        CheckConstraint(
+            "costo_unitario_snapshot IS NULL OR costo_unitario_snapshot >= 0",
+            name="ck_movimiento_inventario_costo_unitario_nonnegative",
+        ),
+        CheckConstraint(
+            "costo_promedio_snapshot IS NULL OR costo_promedio_snapshot >= 0",
+            name="ck_movimiento_inventario_costo_promedio_nonnegative",
+        ),
     )
 
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
@@ -105,6 +142,24 @@ class MovimientoInventario(UUIDPrimaryKeyMixin, Base):
     cantidad_nueva: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     referencia_tipo: Mapped[str | None] = mapped_column(String(60), nullable=True)
     referencia_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    grupo_referencia: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    motivo: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    entregado_por: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    recibido_por: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    documento_referencia: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    evidencia_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    estatus: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="confirmado",
+        server_default=text("'confirmado'"),
+        index=True,
+    )
+    es_proyecto: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    proyecto_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    proyecto_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    costo_unitario_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    costo_promedio_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(
