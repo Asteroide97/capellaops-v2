@@ -1,28 +1,37 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
 import {
   addRequisitionDetail,
   approveRequisition,
   cancelRequisition,
+  createPurchaseOrderFromRequisition,
   createRequisition,
   deleteRequisitionDetail,
   getMaterials,
   getRequisitionDetail,
   getRequisitions,
+  getSuppliers,
+  getWarehouses,
   rejectRequisition,
   submitRequisition,
   updateRequisition,
   updateRequisitionDetail,
 } from "../../api/client";
 import {
+  ActionButton,
   DEFAULT_PAGE_SIZE,
+  Field,
+  FormGrid,
   EmptyState,
   formatDateTime,
   formatNumber,
+  ModalShell,
   normalizeDecimalInput,
   PaginationControls,
   ResultMeta,
+  StatusBadge,
 } from "./shared";
 
 
@@ -33,6 +42,12 @@ const defaultFilters = {
   offset: 0,
 };
 
+const defaultPurchaseOrderForm = {
+  proveedor_id: "",
+  almacen_destino_id: "",
+  folio: "",
+};
+
 
 export default function RequisitionsPage() {
   const { token, empresaId } = useAuth();
@@ -41,10 +56,14 @@ export default function RequisitionsPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [materials, setMaterials] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [warehouses, setWarehouses] = useState([]);
   const [requisitions, setRequisitions] = useState([]);
   const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
   const [filters, setFilters] = useState(defaultFilters);
   const [selectedRequisition, setSelectedRequisition] = useState(null);
+  const [purchaseOrderModalOpen, setPurchaseOrderModalOpen] = useState(false);
+  const [purchaseOrderForm, setPurchaseOrderForm] = useState(defaultPurchaseOrderForm);
   const [form, setForm] = useState({
     id: "",
     folio: "",
@@ -57,14 +76,32 @@ export default function RequisitionsPage() {
     notas: "",
   });
 
-  async function loadMaterialsOptions() {
-    const response = await getMaterials({
-      token,
-      empresaId,
-      filters: { activo: true, limit: 200, offset: 0 },
-    });
-    setMaterials(response.items);
-    return response.items;
+  async function loadOptions() {
+    const [materialResponse, supplierResponse, warehouseResponse] = await Promise.all([
+      getMaterials({
+        token,
+        empresaId,
+        filters: { activo: true, limit: 100, offset: 0 },
+      }),
+      getSuppliers({
+        token,
+        empresaId,
+        filters: { activo: true, limit: 100, offset: 0 },
+      }),
+      getWarehouses({
+        token,
+        empresaId,
+        filters: { activo: true, limit: 100, offset: 0 },
+      }),
+    ]);
+    setMaterials(materialResponse.items);
+    setSuppliers(supplierResponse.items);
+    setWarehouses(warehouseResponse.items);
+    return {
+      materialItems: materialResponse.items,
+      supplierItems: supplierResponse.items,
+      warehouseItems: warehouseResponse.items,
+    };
   }
 
   async function loadRequisitionList(nextFilters = filters) {
@@ -98,6 +135,11 @@ export default function RequisitionsPage() {
     resetDetailForm();
   }
 
+  function closePurchaseOrderModal() {
+    setPurchaseOrderModalOpen(false);
+    setPurchaseOrderForm(defaultPurchaseOrderForm);
+  }
+
   function resetDetailForm() {
     setDetailForm({
       id: "",
@@ -116,10 +158,15 @@ export default function RequisitionsPage() {
       setLoading(true);
       setError("");
       try {
-        const materialItems = await loadMaterialsOptions();
-        if (materialItems.length > 0) {
-          setDetailForm((current) => ({ ...current, material_id: current.material_id || materialItems[0].id }));
+        const options = await loadOptions();
+        if (options.materialItems.length > 0) {
+          setDetailForm((current) => ({ ...current, material_id: current.material_id || options.materialItems[0].id }));
         }
+        setPurchaseOrderForm((current) => ({
+          ...current,
+          proveedor_id: current.proveedor_id || options.supplierItems[0]?.id || "",
+          almacen_destino_id: current.almacen_destino_id || options.warehouseItems[0]?.id || "",
+        }));
         await loadRequisitionList(defaultFilters);
       } catch (requestError) {
         setError(requestError.message || "No se pudieron cargar las requisiciones.");
@@ -268,6 +315,51 @@ export default function RequisitionsPage() {
     }
   }
 
+  function openPurchaseOrderModal() {
+    if (!selectedRequisition) {
+      return;
+    }
+
+    setPurchaseOrderForm({
+      proveedor_id:
+        selectedRequisition.proveedor_sugerido_id || suppliers[0]?.id || "",
+      almacen_destino_id: warehouses[0]?.id || "",
+      folio: "",
+    });
+    setPurchaseOrderModalOpen(true);
+    setError("");
+    setSuccess("");
+  }
+
+  async function handleCreatePurchaseOrder() {
+    if (!selectedRequisition) {
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+    setSuccess("");
+    try {
+      const order = await createPurchaseOrderFromRequisition({
+        requisitionId: selectedRequisition.id,
+        token,
+        empresaId,
+        payload: {
+          proveedor_id: purchaseOrderForm.proveedor_id,
+          almacen_destino_id: purchaseOrderForm.almacen_destino_id,
+          folio: purchaseOrderForm.folio || null,
+        },
+      });
+      closePurchaseOrderModal();
+      await Promise.all([loadRequisitionDocument(selectedRequisition.id), loadRequisitionList(filters)]);
+      setSuccess(`OC ${order.folio} creada en borrador.`);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo crear la orden de compra.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   if (loading) {
     return <div className="screen-center">Cargando requisiciones...</div>;
   }
@@ -341,7 +433,23 @@ export default function RequisitionsPage() {
                 Cancelar
               </button>
             ) : null}
+            {selectedRequisition?.estatus === "aprobada" && !selectedRequisition?.orden_compra_id ? (
+              <button className="ghost-button" disabled={submitting} onClick={openPurchaseOrderModal} type="button">
+                Crear OC
+              </button>
+            ) : null}
+            {selectedRequisition?.orden_compra_folio ? (
+              <Link className="ghost-button inventory-button inventory-button-ghost inventory-button-sm" to="/inventario/ordenes-compra">
+                OC creada
+              </Link>
+            ) : null}
           </div>
+          {selectedRequisition?.proveedor_sugerido_nombre ? (
+            <p className="table-note">Proveedor sugerido: {selectedRequisition.proveedor_sugerido_nombre}</p>
+          ) : null}
+          {selectedRequisition?.orden_compra_folio ? (
+            <p className="table-note">Orden vinculada: {selectedRequisition.orden_compra_folio}</p>
+          ) : null}
         </form>
 
         <div className="feature-card inventory-table-card">
@@ -597,6 +705,9 @@ export default function RequisitionsPage() {
                         <button className="link-button" onClick={() => loadRequisitionDocument(requisition.id)} type="button">
                           Ver detalle
                         </button>
+                        {requisition.orden_compra_folio ? (
+                          <StatusBadge tone="info">{requisition.orden_compra_folio}</StatusBadge>
+                        ) : null}
                       </td>
                     </tr>
                   ))}
@@ -628,6 +739,84 @@ export default function RequisitionsPage() {
           </>
         )}
       </div>
+
+      <ModalShell
+        onClose={closePurchaseOrderModal}
+        open={purchaseOrderModalOpen}
+        size="medium"
+        subtitle="La requisicion se mantiene aprobada hasta que la orden avance en el flujo de compras."
+        title="Crear orden de compra"
+      >
+        <div className="inventory-modal-form">
+          <FormGrid>
+            <Field label="Proveedor">
+              <select
+                onChange={(event) =>
+                  setPurchaseOrderForm((current) => ({
+                    ...current,
+                    proveedor_id: event.target.value,
+                  }))
+                }
+                value={purchaseOrderForm.proveedor_id}
+              >
+                <option value="">Selecciona un proveedor</option>
+                {suppliers.map((supplier) => (
+                  <option key={supplier.id} value={supplier.id}>
+                    {supplier.nombre}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field label="Almacen destino">
+              <select
+                onChange={(event) =>
+                  setPurchaseOrderForm((current) => ({
+                    ...current,
+                    almacen_destino_id: event.target.value,
+                  }))
+                }
+                value={purchaseOrderForm.almacen_destino_id}
+              >
+                <option value="">Selecciona un almacen</option>
+                {warehouses.map((warehouse) => (
+                  <option key={warehouse.id} value={warehouse.id}>
+                    {warehouse.nombre} ({warehouse.codigo})
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            <Field hint="Opcional" label="Folio de la OC">
+              <input
+                onChange={(event) =>
+                  setPurchaseOrderForm((current) => ({
+                    ...current,
+                    folio: event.target.value.toUpperCase(),
+                  }))
+                }
+                placeholder="Auto"
+                type="text"
+                value={purchaseOrderForm.folio}
+              />
+            </Field>
+          </FormGrid>
+
+          <div className="inventory-actions inventory-actions-end">
+            <ActionButton
+              disabled={submitting || !purchaseOrderForm.proveedor_id || !purchaseOrderForm.almacen_destino_id}
+              onClick={handleCreatePurchaseOrder}
+              tone="primary"
+              type="button"
+            >
+              {submitting ? "Creando..." : "Crear OC"}
+            </ActionButton>
+            <ActionButton onClick={closePurchaseOrderModal} type="button">
+              Cancelar
+            </ActionButton>
+          </div>
+        </div>
+      </ModalShell>
     </div>
   );
 }

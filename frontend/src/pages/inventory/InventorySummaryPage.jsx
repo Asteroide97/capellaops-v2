@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
-import { getInventorySummary } from "../../api/client";
+import { createMaterialRequisition, getInventorySummary } from "../../api/client";
 import {
   ActionButton,
   DataCard,
@@ -160,6 +160,23 @@ export default function InventorySummaryPage() {
     loadSummary();
   }, [token, empresaId]);
 
+  async function handleCreateRequisition(materialId) {
+    if (!materialId) {
+      setNotice("No se encontro el material asociado a esta alerta.");
+      return;
+    }
+
+    setError("");
+    setNotice("");
+    try {
+      const response = await createMaterialRequisition({ materialId, token, empresaId });
+      setNotice(`Requisicion ${response.folio} creada desde bajo stock.`);
+      await loadSummary();
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo crear la requisicion.");
+    }
+  }
+
   function handleSearch(event) {
     event.preventDefault();
     const query = searchTerm.trim();
@@ -257,6 +274,13 @@ export default function InventorySummaryPage() {
                     </StatusBadge>
                   </div>
                   <p>{alert.mensaje}</p>
+                  {alert.tipo === "stock" && alert.material_id ? (
+                    <div className="inventory-actions">
+                      <ActionButton onClick={() => handleCreateRequisition(alert.material_id)} size="sm" type="button">
+                        Crear requisicion
+                      </ActionButton>
+                    </div>
+                  ) : null}
                 </article>
               ))}
               <div className="inventory-actions">
@@ -346,6 +370,7 @@ export default function InventorySummaryPage() {
               { key: "minimo", label: "Stock mínimo" },
               { key: "faltante", label: "Faltante" },
               { key: "estado", label: "Estado" },
+              { key: "accion", label: "Accion" },
             ]}
           >
             <tbody>
@@ -363,6 +388,15 @@ export default function InventorySummaryPage() {
                       stock={item.stock_total}
                       zeroLabel="Agotado"
                     />
+                  </td>
+                  <td>
+                    <button
+                      className={buttonClassName({ tone: "ghost", size: "sm" })}
+                      onClick={() => handleCreateRequisition(item.material_id)}
+                      type="button"
+                    >
+                      Crear requisicion
+                    </button>
                   </td>
                 </tr>
               ))}

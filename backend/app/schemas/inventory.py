@@ -94,6 +94,7 @@ class InventorySummaryAlertItem(BaseModel):
     titulo: str
     mensaje: str
     route: str | None = None
+    material_id: str | None = None
 
 
 class InventorySummaryResponse(BaseModel):
@@ -169,6 +170,7 @@ class MaterialItem(BaseModel):
     ubicacion_texto: str | None = None
     proveedor_principal_id: str | None = None
     proveedor_principal_nombre: str | None = None
+    proveedor_principal_rfc: str | None = None
     lead_time_dias: int
     stock_bajo: bool
     activo: bool

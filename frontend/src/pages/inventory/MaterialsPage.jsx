@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
-import { createMaterial, getMaterials, getSuppliers, updateMaterial } from "../../api/client";
+import { createMaterial, createMaterialRequisition, getMaterials, getSuppliers, updateMaterial } from "../../api/client";
 import {
   ActionButton,
   DEFAULT_PAGE_SIZE,
@@ -288,6 +288,21 @@ export default function MaterialsPage() {
       await loadMaterialsPage(filters);
     } catch (requestError) {
       setError(requestError.message || "No se pudo actualizar el estado del material.");
+    }
+  }
+
+  async function handleCreateRequisition(material) {
+    setError("");
+    setSuccess("");
+    try {
+      const response = await createMaterialRequisition({
+        materialId: material.id,
+        token,
+        empresaId,
+      });
+      setSuccess(`Requisicion ${response.folio} creada para ${material.sku}.`);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo crear la requisicion.");
     }
   }
 
@@ -629,6 +644,11 @@ export default function MaterialsPage() {
                         <button className="link-button" onClick={() => openEditModal(material)} type="button">
                           Editar
                         </button>
+                        {material.stock_bajo ? (
+                          <button className="link-button" onClick={() => handleCreateRequisition(material)} type="button">
+                            Crear requisicion
+                          </button>
+                        ) : null}
                         <button className="link-button" onClick={() => toggleMaterialStatus(material)} type="button">
                           {material.activo ? "Desactivar" : "Activar"}
                         </button>

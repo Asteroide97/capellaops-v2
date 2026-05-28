@@ -91,6 +91,10 @@ class RequisitionItem(BaseModel):
     folio: str
     solicitante_user_id: str
     solicitante_nombre: str
+    proveedor_sugerido_id: str | None = None
+    proveedor_sugerido_nombre: str | None = None
+    orden_compra_id: str | None = None
+    orden_compra_folio: str | None = None
     estatus: str
     notas: str | None = None
     created_at: datetime
@@ -107,6 +111,12 @@ class RequisitionListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class RequisitionCreatePurchaseOrderRequest(BaseModel):
+    proveedor_id: str = Field(min_length=1, max_length=64)
+    almacen_destino_id: str = Field(min_length=1, max_length=64)
+    folio: str | None = Field(default=None, max_length=60)
 
 
 class PurchaseOrderCreateRequest(BaseModel):

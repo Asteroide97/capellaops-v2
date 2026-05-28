@@ -251,6 +251,15 @@ export function getMaterialDetail({ materialId, token, empresaId }) {
 }
 
 
+export function createMaterialRequisition({ materialId, token, empresaId }) {
+  return apiRequest(`/inventory/materials/${materialId}/create-requisition`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
 export function createMaterial({ token, empresaId, payload }) {
   return apiRequest("/inventory/materials", {
     method: "POST",
@@ -691,6 +700,16 @@ export function rejectRequisition({ requisitionId, token, empresaId }) {
 export function cancelRequisition({ requisitionId, token, empresaId }) {
   return apiRequest(`/inventory/requisitions/${requisitionId}/cancel`, {
     method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPurchaseOrderFromRequisition({ requisitionId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/create-purchase-order`, {
+    method: "POST",
+    body: payload,
     token,
     empresaId,
   });

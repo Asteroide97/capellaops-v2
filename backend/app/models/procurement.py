@@ -46,6 +46,8 @@ class Requisicion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
     folio: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     solicitante_user_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
+    proveedor_sugerido_id: Mapped[str | None] = mapped_column(ForeignKey("proveedores.id"), nullable=True, index=True)
+    orden_compra_id: Mapped[str | None] = mapped_column(ForeignKey("ordenes_compra.id"), nullable=True, index=True)
     estatus: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -57,6 +59,8 @@ class Requisicion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     empresa = relationship("Empresa")
     solicitante_user = relationship("Usuario")
+    proveedor_sugerido = relationship("Proveedor")
+    orden_compra = relationship("OrdenCompra", back_populates="requisiciones")
     detalles = relationship("RequisicionDetalle", back_populates="requisicion", cascade="all, delete-orphan")
 
 
@@ -122,6 +126,7 @@ class OrdenCompra(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     almacen_destino = relationship("Almacen")
     created_by_user = relationship("Usuario")
     detalles = relationship("OrdenCompraDetalle", back_populates="orden_compra", cascade="all, delete-orphan")
+    requisiciones = relationship("Requisicion", back_populates="orden_compra")
 
 
 class OrdenCompraDetalle(UUIDPrimaryKeyMixin, Base):

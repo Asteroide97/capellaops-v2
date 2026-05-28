@@ -186,6 +186,7 @@ npm run dev
 - `GET /inventory/materials`
 - `GET /inventory/materials/{id}`
 - `POST /inventory/materials`
+- `POST /inventory/materials/{id}/create-requisition`
 - `PUT /inventory/materials/{id}`
 - `GET /inventory/stock`
 - `GET /inventory/movements`
@@ -231,6 +232,7 @@ npm run dev
 - `POST /inventory/requisitions/{id}/approve`
 - `POST /inventory/requisitions/{id}/reject`
 - `POST /inventory/requisitions/{id}/cancel`
+- `POST /inventory/requisitions/{id}/create-purchase-order`
 - `GET /inventory/purchase-orders`
 - `POST /inventory/purchase-orders`
 - `GET /inventory/purchase-orders/{id}`
@@ -336,6 +338,60 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Merma formal
 - Reportes avanzados
 
+## Conexiones de Inventario
+
+### POS -> Inventario
+
+- La venta pagada crea una salida por cada renglon.
+- La cancelacion crea entradas inversas y devuelve stock.
+- Cada `VentaDetalle` guarda `movimiento_inventario_id`.
+- El flujo valida stock suficiente y no permite stock negativo.
+
+### Compras -> Inventario
+
+- La recepcion de OC crea movimientos `entrada`.
+- Soporta recepcion parcial y total.
+- Actualiza `cantidad_recibida`.
+- Cambia estatus a `recibida_parcial` o `recibida`.
+
+### Requisicion -> Orden de compra
+
+- `POST /inventory/requisitions/{id}/create-purchase-order`
+- Solo opera con requisiciones `aprobada`.
+- Requiere `proveedor_id` y `almacen_destino_id`.
+- Crea la OC en `borrador`, copia detalles y calcula totales en backend.
+- Guarda `requisiciones.orden_compra_id` para evitar duplicados.
+- La requisicion se mantiene `aprobada` hasta que la OC avance en compras.
+
+### Bajo stock -> requisicion sugerida
+
+- `POST /inventory/materials/{id}/create-requisition`
+- Calcula stock total desde `existencias`.
+- Sugiere cantidad usando `stock_minimo` y `stock_maximo`.
+- Usa `proveedor_principal_id` como sugerencia cuando existe.
+- Bloquea duplicados si ya existe una requisicion pendiente para el material.
+
+### Proveedor -> Material
+
+- `Material.proveedor_principal_id` se valida contra la misma empresa.
+- Los responses de materiales incluyen nombre y RFC del proveedor principal cuando existe.
+
+### Movimientos -> PM placeholder
+
+- Los movimientos bulk aceptan `es_proyecto`, `proyecto_id` y `proyecto_nombre_snapshot`.
+- Kardex y movimientos muestran la referencia de proyecto cuando se captura.
+- No existe FK real a PM en esta fase.
+
+### Pendientes de conexiones
+
+- CRMProveedorMaterial
+- PM real con FK
+- Notificaciones persistentes
+- Email de bajo stock
+- Acavike
+- Tiendanube
+- Facturacion via POS / CFDI
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.
@@ -419,13 +475,12 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 ### Alcance actual
 
 - Proveedores: CRUD básico con filtros y paginación.
-- Requisiciones: borrador, detalles, envío, aprobación, rechazo y cancelación.
+- Requisiciones: borrador, detalles, envío, aprobación, rechazo, cancelación y creación de OC vinculada.
 - Órdenes de compra: borrador, detalles, emisión y recepción parcial o total.
 - Recepción conectada a inventario: implementada.
 
 ### Pendientes de Compras
 
-- Relación automática requisición → orden de compra
 - Cancelación avanzada de órdenes emitidas
 - Historial formal de recepciones por documento
 - Cuentas por pagar

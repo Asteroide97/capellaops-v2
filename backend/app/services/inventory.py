@@ -271,6 +271,7 @@ def build_inventory_summary(db: Session, empresa_id: str) -> InventorySummaryRes
                         else f"{material.nombre} está por debajo de su stock mínimo."
                     ),
                     route="/inventario/materiales",
+                    material_id=material.id,
                 )
             )
 
@@ -365,6 +366,7 @@ def serialize_material(
     *,
     stock_total: Decimal | int | float | str | None = None,
     proveedor_principal_nombre: str | None = None,
+    proveedor_principal_rfc: str | None = None,
 ) -> MaterialItem:
     total_stock = decimal_or_zero(stock_total)
     stock_minimo = decimal_or_zero(material.stock_minimo)
@@ -391,6 +393,7 @@ def serialize_material(
         ubicacion_texto=material.ubicacion_texto,
         proveedor_principal_id=material.proveedor_principal_id,
         proveedor_principal_nombre=proveedor_principal_nombre,
+        proveedor_principal_rfc=proveedor_principal_rfc,
         lead_time_dias=material.lead_time_dias,
         stock_bajo=is_low_stock_value(total_stock, stock_minimo),
         activo=material.activo,
@@ -528,6 +531,7 @@ def get_material_item_for_company(db: Session, empresa_id: str, material_id: str
             Material,
             func.coalesce(stock_totals.c.stock_total, 0).label("stock_total"),
             Proveedor.nombre.label("proveedor_principal_nombre"),
+            Proveedor.rfc.label("proveedor_principal_rfc"),
         )
         .outerjoin(stock_totals, stock_totals.c.material_id == Material.id)
         .outerjoin(Proveedor, Proveedor.id == Material.proveedor_principal_id)
@@ -538,8 +542,13 @@ def get_material_item_for_company(db: Session, empresa_id: str, material_id: str
     ).one_or_none()
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material no encontrado.")
-    material, stock_total, proveedor_nombre = row
-    return serialize_material(material, stock_total=stock_total, proveedor_principal_nombre=proveedor_nombre)
+    material, stock_total, proveedor_nombre, proveedor_rfc = row
+    return serialize_material(
+        material,
+        stock_total=stock_total,
+        proveedor_principal_nombre=proveedor_nombre,
+        proveedor_principal_rfc=proveedor_rfc,
+    )
 
 
 def get_or_create_stock(
@@ -862,6 +871,7 @@ def list_materials(
             Material,
             total_stock.label("stock_total"),
             Proveedor.nombre.label("proveedor_principal_nombre"),
+            Proveedor.rfc.label("proveedor_principal_rfc"),
         )
         .outerjoin(stock_totals, stock_totals.c.material_id == Material.id)
         .outerjoin(Proveedor, Proveedor.id == Material.proveedor_principal_id)
@@ -897,8 +907,9 @@ def list_materials(
             material,
             stock_total=stock_total_value,
             proveedor_principal_nombre=proveedor_principal_nombre,
+            proveedor_principal_rfc=proveedor_principal_rfc,
         )
-        for material, stock_total_value, proveedor_principal_nombre in rows
+        for material, stock_total_value, proveedor_principal_nombre, proveedor_principal_rfc in rows
     ]
 
 

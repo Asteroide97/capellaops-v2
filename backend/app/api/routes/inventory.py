@@ -43,6 +43,7 @@ from app.schemas.inventory import (
     WarehouseListResponse,
     WarehouseUpdateRequest,
 )
+from app.schemas.procurement import RequisitionResponse
 from app.services.inventory import (
     apply_inventory_movement,
     apply_bulk_inventory_movement,
@@ -66,6 +67,7 @@ from app.services.inventory import (
     serialize_warehouse,
     validate_inventory_access,
 )
+from app.services.procurement import create_requisition_from_material
 from app.services.inventory_documents import (
     add_count_detail,
     add_transfer_detail,
@@ -394,6 +396,26 @@ def material_detail(
     db: Session = Depends(get_db),
 ) -> MaterialItem:
     return get_material_item_for_company(db, context.empresa.id, material_id)
+
+
+@router.post("/materials/{material_id}/create-requisition", response_model=RequisitionResponse, status_code=status.HTTP_201_CREATED)
+def create_material_requisition_endpoint(
+    material_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> RequisitionResponse:
+    return run_inventory_write(
+        db,
+        "create_material_requisition",
+        lambda: create_requisition_from_material(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            material_id=material_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.post("/materials", response_model=MaterialItem, status_code=status.HTTP_201_CREATED)

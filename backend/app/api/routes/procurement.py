@@ -15,6 +15,7 @@ from app.schemas.procurement import (
     PurchaseOrderReceiveRequest,
     PurchaseOrderResponse,
     PurchaseOrderUpdateRequest,
+    RequisitionCreatePurchaseOrderRequest,
     RequisitionCreateRequest,
     RequisitionDetailCreateRequest,
     RequisitionDetailUpdateRequest,
@@ -32,6 +33,7 @@ from app.services.procurement import (
     add_requisition_detail,
     change_requisition_status,
     create_purchase_order,
+    create_purchase_order_from_requisition,
     create_requisition,
     create_supplier,
     delete_purchase_order_detail,
@@ -410,6 +412,30 @@ def cancel_requisition_endpoint(
             next_status="cancelada",
             allowed_current_statuses={"borrador", "enviada", "aprobada"},
             action="inventory.requisition.cancel",
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/requisitions/{requisition_id}/create-purchase-order", response_model=PurchaseOrderResponse, status_code=status.HTTP_201_CREATED)
+def create_purchase_order_from_requisition_endpoint(
+    requisition_id: str,
+    payload: RequisitionCreatePurchaseOrderRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> PurchaseOrderResponse:
+    return run_inventory_write(
+        db,
+        "create_purchase_order_from_requisition",
+        lambda: create_purchase_order_from_requisition(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            requisition_id=requisition_id,
+            proveedor_id=payload.proveedor_id,
+            almacen_destino_id=payload.almacen_destino_id,
+            folio=payload.folio,
             ip_address=request.client.host if request.client else None,
         ),
     )
