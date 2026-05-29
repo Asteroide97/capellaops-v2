@@ -370,6 +370,12 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - si el correo ya existe, se vincula a la empresa
   - si ya pertenece a la empresa, responde `already_member`
   - si no existe, se registra una invitacion pendiente
+- La pantalla `Empresa > Usuarios` ahora muestra:
+  - resumen visual de cupo del plan
+  - miembros activos y pendientes
+  - modal de invitacion
+  - cambio de rol
+  - desactivacion y reactivacion
 - El envio real de email de invitacion sigue pendiente.
 
 ## Conexiones de Inventario

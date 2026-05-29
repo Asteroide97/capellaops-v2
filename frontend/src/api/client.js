@@ -634,6 +634,11 @@ export function getCompanyUsers({ token, empresaId }) {
 }
 
 
+export function listCompanyUsers({ token, empresaId }) {
+  return getCompanyUsers({ token, empresaId });
+}
+
+
 export function inviteCompanyUser({ token, empresaId, payload }) {
   return apiRequest("/company/users/invite", {
     method: "POST",

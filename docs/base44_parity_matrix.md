@@ -26,6 +26,7 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Core | Planes comerciales | Implementado | Critica | Core actual | `basico`, `pro`, `total`. | Acceso comercial incorrecto. |
 | Core | Limites por plan | Implementado | Alta | Core hardening | Los planes ya controlan modulos, maximo de usuarios, maximo de almacenes y maximo de facturas mensuales. `null` significa ilimitado. | Sobreuso sin control comercial. |
 | Core | Usuarios por empresa | Implementado | Alta | Core hardening | Los usuarios adicionales se gestionan con `EmpresaUsuario` y no crean empresas nuevas. El owner cuenta dentro del limite. | Mezcla de tenants o sobrecupo silencioso. |
+| Core | Administracion de usuarios por empresa | Implementado | Alta | Core hardening | La pantalla `Empresa > Usuarios` ya muestra cupos del plan, miembros, invitaciones pendientes, cambio de rol y desactivacion/reactivacion. | Administracion operativa limitada del tenant. |
 | Core | Invitaciones por email | Parcial | Media | Core hardening | Ya existe registro de invitacion pendiente y vinculacion de usuarios existentes, pero no se envia correo real todavia. | Alta manual y seguimiento incompleto. |
 | Core | Almacenes por plan | Implementado | Alta | Core hardening | La creacion de almacenes y el onboarding del primer almacen respetan `max_almacenes` del plan. | Empresas operando fuera de su capacidad contratada. |
 | Core | Trial | Implementado | Alta | Core actual | Trial de 15 dias. | Onboarding comercial incompleto. |
