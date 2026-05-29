@@ -184,6 +184,7 @@ npm run dev
 - `POST /inventory/warehouses`
 - `PUT /inventory/warehouses/{id}`
 - `GET /inventory/materials`
+- `POST /inventory/materials/image-upload`
 - `GET /inventory/materials/{id}`
 - `POST /inventory/materials`
 - `POST /inventory/materials/{id}/create-requisition`
@@ -428,9 +429,9 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 
 - Materiales:
   - Alta y edición por modal.
-  - Preview de imagen por URL.
+  - Carga de imagen principal desde archivo, galería o cámara cuando el navegador la soporta.
   - Búsqueda por SKU y código de barras.
-  - Soporte visual para `imagen_url` con preview y placeholder seguro.
+  - `imagen_url` sigue siendo el campo persistido y se alimenta desde upload.
   - Exportación CSV client-side de la vista actual.
   - Categoría obligatoria y proveedor principal opcional.
 - Movimientos:
@@ -448,7 +449,6 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 
 ### Pendientes de esta capa
 
-- Upload real a Azure Blob Storage para imágenes y evidencias.
 - Robustecer el escaneo por cámara para más navegadores y escenarios de producción; hoy depende de permisos, soporte del navegador y HTTPS.
 - Importación backend de Excel/CSV para materiales. En esta fase queda solo placeholder en UI.
 - FK real a PM/Proyectos cuando el módulo PM exista.
@@ -480,9 +480,30 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 ### Pendientes del escáner
 
 - Escaneo por cámara depende del navegador, permisos y HTTPS en producción.
-- No existe todavía carga de imágenes/evidencias a Azure Blob Storage.
 - No existe importación backend Excel/CSV.
 - PM sigue usando `proyecto_id` / `proyecto_nombre_snapshot` sin FK real.
+
+## Imágenes de materiales
+
+- Las imágenes no se guardan en SQL.
+- `Material.imagen_url` guarda la URL final de la imagen principal.
+- `POST /inventory/materials/image-upload` recibe `multipart/form-data`, valida formato/tamaño y sube la imagen a Azure Blob Storage.
+- El modal de `Nuevo Material` permite:
+  - tomar foto desde celular o navegador compatible
+  - elegir imagen desde galería o archivos
+  - previsualizar la imagen antes de guardar
+  - quitar la imagen antes de guardar
+- Variables requeridas en backend:
+  - `AZURE_STORAGE_CONNECTION_STRING`
+  - `AZURE_STORAGE_CONTAINER`
+  - `AZURE_STORAGE_PUBLIC_BASE_URL` si se requiere URL pública personalizada
+
+### Pendientes de imágenes
+
+- Imágenes adicionales
+- Compresión automática
+- Borrado físico del blob al quitar o reemplazar una imagen
+- Thumbnails
 
 ## Compras Fase 1
 

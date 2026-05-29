@@ -171,6 +171,48 @@ export async function apiRequest(path, { method = "GET", body, token, empresaId 
 }
 
 
+export async function uploadFormDataRequest(path, { formData, token, empresaId } = {}) {
+  const url = `${API_URL}${path}`;
+  const headers = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  if (empresaId) {
+    headers["X-Empresa-Id"] = empresaId;
+  }
+
+  logApiDebug("request", {
+    url,
+    method: "POST",
+    body: {
+      has_file: Boolean(formData?.get("file")),
+    },
+    has_auth: Boolean(token),
+    has_empresa_id: Boolean(empresaId),
+  });
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers,
+      body: formData,
+    });
+  } catch {
+    logApiDebug("network_error", {
+      url,
+      method: "POST",
+      message: "No se pudo conectar con el backend",
+    });
+    throw new ApiError("No se pudo conectar con el backend");
+  }
+
+  return parseResponse(response);
+}
+
+
 function appendQueryValue(query, key, value) {
   if (value !== undefined && value !== null && value !== "") {
     query.set(key, key === "limit" ? String(clampLimit(value)) : String(value));
@@ -255,6 +297,17 @@ export function inventoryLookupMaterial({ code, token, empresaId }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "code", code);
   return apiRequest(`/inventory/materials/lookup?${query.toString()}`, { token, empresaId });
+}
+
+
+export function uploadMaterialImage({ file, token, empresaId }) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return uploadFormDataRequest("/inventory/materials/image-upload", {
+    formData,
+    token,
+    empresaId,
+  });
 }
 
 

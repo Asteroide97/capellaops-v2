@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Callable, Literal, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -26,6 +26,7 @@ from app.schemas.inventory import (
     InventoryOnboardingStatusResponse,
     KardexResponse,
     MaterialCreateRequest,
+    MaterialImageUploadResponse,
     MaterialItem,
     MaterialLookupResponse,
     MaterialListResponse,
@@ -70,6 +71,7 @@ from app.services.inventory import (
     validate_inventory_access,
 )
 from app.services.procurement import create_requisition_from_material
+from app.services.storage import StorageConfigurationError, upload_material_image
 from app.services.inventory_documents import (
     add_count_detail,
     add_transfer_detail,
@@ -398,6 +400,28 @@ def lookup_material(
     db: Session = Depends(get_db),
 ) -> MaterialLookupResponse:
     return lookup_material_by_code(db, context.empresa.id, code)
+
+
+@router.post("/materials/image-upload", response_model=MaterialImageUploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_material_image_endpoint(
+    file: UploadFile = File(...),
+    context: TenantContext = Depends(get_inventory_context),
+) -> MaterialImageUploadResponse:
+    try:
+        upload = await upload_material_image(file, context.empresa.id)
+        return MaterialImageUploadResponse(
+            imagen_url=upload.imagen_url,
+            filename=upload.filename,
+            content_type=upload.content_type,
+            size_bytes=upload.size_bytes,
+        )
+    except StorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+    finally:
+        await file.close()
 
 
 @router.get("/materials/{material_id}", response_model=MaterialItem)

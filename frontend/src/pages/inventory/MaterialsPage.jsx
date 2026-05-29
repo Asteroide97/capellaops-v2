@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
@@ -9,6 +9,7 @@ import {
   getMaterials,
   getSuppliers,
   inventoryLookupMaterial,
+  uploadMaterialImage,
   updateMaterial,
 } from "../../api/client";
 import {
@@ -68,19 +69,13 @@ const defaultForm = {
   lead_time_dias: "0",
   codigo_barras: "",
   imagen_url: "",
-  imagenes_extra_text: "",
+  imagenes_extra: [],
   activo: true,
 };
 
 const MATERIALS_LOAD_ERROR = "No se pudieron cargar los materiales. Intenta actualizar.";
-
-
-function parseExtraImages(value) {
-  return value
-    .split(/\r?\n/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
+const MATERIAL_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const MATERIAL_IMAGE_ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 
 function downloadCsv(filename, rows) {
@@ -121,10 +116,16 @@ export default function MaterialsPage() {
   const [form, setForm] = useState(defaultForm);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scannerTarget, setScannerTarget] = useState("search");
+  const [selectedImageFile, setSelectedImageFile] = useState(null);
+  const [selectedImagePreviewUrl, setSelectedImagePreviewUrl] = useState("");
+  const [imageRemoved, setImageRemoved] = useState(false);
+  const fileInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
 
   const planLabel = formatPlanLabel(empresa?.plan_code);
   const allSelected = materials.length > 0 && selectedIds.length === materials.length;
   const selectedCount = selectedIds.length;
+  const hasCurrentImage = Boolean(selectedImagePreviewUrl || form.imagen_url);
 
   const skuMeta = useMemo(() => `SKUs registrados: ${meta.total}`, [meta.total]);
 
@@ -155,6 +156,74 @@ export default function MaterialsPage() {
       offset: response.offset,
     });
     setSelectedIds([]);
+  }
+
+  function revokePreviewUrl(url) {
+    if (url && url.startsWith("blob:")) {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  function resetImageState() {
+    revokePreviewUrl(selectedImagePreviewUrl);
+    setSelectedImageFile(null);
+    setSelectedImagePreviewUrl("");
+    setImageRemoved(false);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    if (cameraInputRef.current) {
+      cameraInputRef.current.value = "";
+    }
+  }
+
+  function validateImageFile(file) {
+    if (!file) {
+      return "Debes seleccionar una imagen.";
+    }
+    if (!MATERIAL_IMAGE_ALLOWED_TYPES.has(file.type)) {
+      return "Formato de imagen no permitido. Usa JPG, PNG o WEBP.";
+    }
+    if (file.size > MATERIAL_IMAGE_MAX_BYTES) {
+      return "La imagen excede el tamaño máximo de 5 MB.";
+    }
+    return "";
+  }
+
+  function openImagePicker(mode) {
+    const target = mode === "camera" ? cameraInputRef.current : fileInputRef.current;
+    target?.click();
+  }
+
+  function applyImageFile(file) {
+    const validationMessage = validateImageFile(file);
+    if (validationMessage) {
+      setError(validationMessage);
+      return;
+    }
+
+    const nextPreviewUrl = URL.createObjectURL(file);
+    revokePreviewUrl(selectedImagePreviewUrl);
+    setSelectedImageFile(file);
+    setSelectedImagePreviewUrl(nextPreviewUrl);
+    setImageRemoved(false);
+    setError("");
+    setNotice("Imagen lista para guardarse con el material.");
+  }
+
+  function handleImageInputChange(event) {
+    const file = event.target.files?.[0];
+    if (file) {
+      applyImageFile(file);
+    }
+    event.target.value = "";
+  }
+
+  function removeImage() {
+    resetImageState();
+    setForm((current) => ({ ...current, imagen_url: "" }));
+    setImageRemoved(true);
+    setNotice("La imagen se quitará cuando guardes el material.");
   }
 
   function syncQuery(nextQuery) {
@@ -261,6 +330,8 @@ export default function MaterialsPage() {
     bootstrap();
   }, [token, empresaId]);
 
+  useEffect(() => () => revokePreviewUrl(selectedImagePreviewUrl), [selectedImagePreviewUrl]);
+
   useEffect(() => {
     if (!urlQuery || urlQuery === filters.q) {
       return;
@@ -274,6 +345,7 @@ export default function MaterialsPage() {
   }, [urlQuery]);
 
   function resetForm() {
+    resetImageState();
     setForm(defaultForm);
   }
 
@@ -304,9 +376,10 @@ export default function MaterialsPage() {
       lead_time_dias: String(material.lead_time_dias ?? 0),
       codigo_barras: material.codigo_barras || "",
       imagen_url: material.imagen_url || "",
-      imagenes_extra_text: (material.imagenes_extra || []).join("\n"),
+      imagenes_extra: material.imagenes_extra || [],
       activo: material.activo,
     });
+    resetImageState();
     setError("");
     setSuccess("");
     setNotice("");
@@ -320,6 +393,19 @@ export default function MaterialsPage() {
     setSuccess("");
 
     try {
+      let nextImageUrl = form.imagen_url || null;
+
+      if (selectedImageFile) {
+        const uploadResponse = await uploadMaterialImage({
+          file: selectedImageFile,
+          token,
+          empresaId,
+        });
+        nextImageUrl = uploadResponse.imagen_url;
+      } else if (imageRemoved) {
+        nextImageUrl = null;
+      }
+
       const payload = {
         sku: form.sku,
         nombre: form.nombre,
@@ -336,8 +422,8 @@ export default function MaterialsPage() {
         proveedor_principal_id: form.proveedor_principal_id || null,
         lead_time_dias: Number(form.lead_time_dias || 0),
         codigo_barras: form.codigo_barras || null,
-        imagen_url: form.imagen_url || null,
-        imagenes_extra: parseExtraImages(form.imagenes_extra_text),
+        imagen_url: nextImageUrl,
+        imagenes_extra: form.imagenes_extra || [],
         activo: form.activo,
       };
 
@@ -783,7 +869,10 @@ export default function MaterialsPage() {
       </DataCard>
 
       <ModalShell
-        onClose={() => setModalOpen(false)}
+        onClose={() => {
+          resetForm();
+          setModalOpen(false);
+        }}
         open={modalOpen}
         size="xl"
         subtitle="El stock inicial y los ajustes se registran desde Movimientos."
@@ -1014,41 +1103,58 @@ export default function MaterialsPage() {
           </section>
 
           <section className="inventory-form-section">
-            <SectionTitle subtitle="Solo URLs en esta fase, sin binarios en SQL" title="Imágenes" />
+            <SectionTitle
+              subtitle="Selecciona una foto desde tu dispositivo o toma una nueva con la cámara."
+              title="Imagen principal"
+            />
             <div className="inventory-image-preview-panel">
               <div className="inventory-image-preview">
-                <MaterialImage alt={form.nombre || "Preview de material"} size="lg" src={form.imagen_url} />
+                <MaterialImage
+                  alt={form.nombre || "Preview de material"}
+                  size="lg"
+                  src={selectedImagePreviewUrl || form.imagen_url}
+                />
               </div>
 
-              <div className="inventory-image-fields">
-                <FormGrid columns={1}>
-                  <Field hint="Opcional" label="Imagen principal URL">
-                    <input
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          imagen_url: event.target.value,
-                        }))
-                      }
-                      placeholder="https://..."
-                      type="url"
-                      value={form.imagen_url}
-                    />
-                  </Field>
-
-                  <Field hint="Una URL por línea" label="Imágenes adicionales">
-                    <textarea
-                      onChange={(event) =>
-                        setForm((current) => ({
-                          ...current,
-                          imagenes_extra_text: event.target.value,
-                        }))
-                      }
-                      rows={4}
-                      value={form.imagenes_extra_text}
-                    />
-                  </Field>
-                </FormGrid>
+              <div className="inventory-image-fields inventory-image-upload-copy">
+                <p className="table-note">
+                  En celular puedes tomar una foto o elegir una imagen de tu galería. En computadora puedes elegir un
+                  archivo o usar la cámara si tu navegador la ofrece.
+                </p>
+                <div className="inventory-actions inventory-image-upload-actions">
+                  <ActionButton onClick={() => openImagePicker("camera")} size="sm" type="button">
+                    Tomar foto
+                  </ActionButton>
+                  <ActionButton onClick={() => openImagePicker("file")} size="sm" type="button">
+                    Elegir imagen
+                  </ActionButton>
+                  {hasCurrentImage ? (
+                    <ActionButton onClick={removeImage} size="sm" type="button">
+                      Quitar imagen
+                    </ActionButton>
+                  ) : null}
+                </div>
+                <div className="inventory-form-note inventory-form-note-warning">
+                  No se muestran URLs técnicas al usuario. La imagen se sube al guardar el material.
+                </div>
+                <div className="inventory-form-note">
+                  Imágenes adicionales quedarán disponibles en una fase posterior.
+                </div>
+                <input
+                  accept="image/jpeg,image/png,image/webp"
+                  className="inventory-visually-hidden"
+                  onChange={handleImageInputChange}
+                  ref={fileInputRef}
+                  type="file"
+                />
+                <input
+                  accept="image/*"
+                  capture="environment"
+                  className="inventory-visually-hidden"
+                  onChange={handleImageInputChange}
+                  ref={cameraInputRef}
+                  type="file"
+                />
               </div>
             </div>
           </section>

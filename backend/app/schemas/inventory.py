@@ -199,6 +199,13 @@ class MaterialLookupResponse(BaseModel):
     material: MaterialLookupItem
 
 
+class MaterialImageUploadResponse(BaseModel):
+    imagen_url: str
+    filename: str
+    content_type: str
+    size_bytes: int
+
+
 class StockItem(BaseModel):
     id: str
     empresa_id: str
