@@ -6,16 +6,31 @@ from app.models import Empresa, EmpresaModulo, Plan
 
 PLAN_SEED_DATA = {
     "basico": {
-        "name": "Básico",
-        "description": "Inventario para operación esencial.",
+        "name": "Basico",
+        "description": "Inventario para operacion esencial.",
+        "max_usuarios": 2,
+        "max_almacenes": 1,
+        "max_facturas_mensuales": 20,
+        "productos_ilimitados": True,
+        "ventas_ilimitadas": True,
     },
     "pro": {
         "name": "Pro",
-        "description": "Inventario, POS y facturación marcada como pendiente.",
+        "description": "Inventario, POS y facturacion marcada como pendiente.",
+        "max_usuarios": 3,
+        "max_almacenes": 3,
+        "max_facturas_mensuales": 50,
+        "productos_ilimitados": True,
+        "ventas_ilimitadas": True,
     },
     "total": {
         "name": "Total",
-        "description": "Inventario, POS, CRM y gestión de proyectos.",
+        "description": "Inventario, POS, CRM y gestion de proyectos.",
+        "max_usuarios": 4,
+        "max_almacenes": None,
+        "max_facturas_mensuales": None,
+        "productos_ilimitados": True,
+        "ventas_ilimitadas": True,
     },
 }
 
@@ -28,6 +43,11 @@ def seed_default_plans(db: Session) -> None:
             plan.name = config["name"]
             plan.description = config["description"]
             plan.modules = modules
+            plan.max_usuarios = config["max_usuarios"]
+            plan.max_almacenes = config["max_almacenes"]
+            plan.max_facturas_mensuales = config["max_facturas_mensuales"]
+            plan.productos_ilimitados = config["productos_ilimitados"]
+            plan.ventas_ilimitadas = config["ventas_ilimitadas"]
         else:
             db.add(
                 Plan(
@@ -35,6 +55,11 @@ def seed_default_plans(db: Session) -> None:
                     name=config["name"],
                     description=config["description"],
                     modules=modules,
+                    max_usuarios=config["max_usuarios"],
+                    max_almacenes=config["max_almacenes"],
+                    max_facturas_mensuales=config["max_facturas_mensuales"],
+                    productos_ilimitados=config["productos_ilimitados"],
+                    ventas_ilimitadas=config["ventas_ilimitadas"],
                 )
             )
     db.commit()
@@ -48,7 +73,7 @@ def build_company_modules(plan_code: str, empresa_id: str) -> list[EmpresaModulo
             empresa_id=empresa_id,
             module_name=module_name,
             is_enabled=module_name in plan_modules,
-            notes="Creado automáticamente a partir del plan asignado.",
+            notes="Creado automaticamente a partir del plan asignado.",
         )
         for module_name in module_names
     ]
@@ -64,7 +89,7 @@ def sync_company_modules(empresa: Empresa, plan_code: str) -> None:
         existing = module_map.get(module_name)
         if existing:
             existing.is_enabled = is_enabled
-            existing.notes = "Actualizado automÃ¡ticamente a partir del plan asignado."
+            existing.notes = "Actualizado automaticamente a partir del plan asignado."
             continue
 
         empresa.modules.append(
@@ -72,6 +97,6 @@ def sync_company_modules(empresa: Empresa, plan_code: str) -> None:
                 empresa_id=empresa.id,
                 module_name=module_name,
                 is_enabled=is_enabled,
-                notes="Creado automÃ¡ticamente a partir del plan asignado.",
+                notes="Creado automaticamente a partir del plan asignado.",
             )
         )

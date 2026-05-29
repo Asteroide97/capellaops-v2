@@ -72,6 +72,7 @@ from app.services.inventory import (
 )
 from app.services.procurement import create_requisition_from_material
 from app.services.storage import StorageConfigurationError, upload_material_image
+from app.services.company import ensure_within_company_warehouse_limit
 from app.services.inventory_documents import (
     add_count_detail,
     add_transfer_detail,
@@ -347,6 +348,8 @@ def update_warehouse(
         if payload.descripcion is not None:
             warehouse.descripcion = normalize_optional_text(payload.descripcion)
         if payload.activo is not None:
+            if payload.activo and not warehouse.activo:
+                ensure_within_company_warehouse_limit(db, context.empresa)
             warehouse.activo = payload.activo
 
         db.add(

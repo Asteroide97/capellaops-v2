@@ -79,12 +79,13 @@ def get_tenant_context(
         select(EmpresaUsuario).where(
             EmpresaUsuario.empresa_id == empresa_id,
             EmpresaUsuario.usuario_id == current_user.id,
+            EmpresaUsuario.is_active == True,
         )
     )
     if not membership:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="El usuario no pertenece a la empresa solicitada.",
+            detail="El usuario no pertenece a la empresa solicitada o su acceso esta desactivado.",
         )
 
     empresa = db.get(Empresa, empresa_id)

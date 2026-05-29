@@ -8,7 +8,7 @@ from app.api.deps import SuperadminContext, get_superadmin_context
 from app.core.catalog import ALLOWED_ACCESS_STATUSES, ALLOWED_PLAN_CODES
 from app.core.security import build_token_expiration, create_access_token
 from app.db.session import get_db
-from app.models import AuditLog, Empresa, EmpresaModulo, EmpresaUsuario, Usuario
+from app.models import AuditLog, Empresa, EmpresaModulo, EmpresaUsuario, Plan, Usuario
 from app.models.inventory import Almacen, Existencia, Material, MovimientoInventario
 from app.schemas.superadmin import (
     ImpersonateRequest,
@@ -29,7 +29,9 @@ from app.schemas.superadmin import (
     SuperadminUserListResponse,
     UpdateCompanyAccessRequest,
 )
+from app.schemas.common import CompanyLimitsSummary
 from app.services.phone import mask_phone
+from app.services.company import get_company_plan_limits
 from app.services.seed import sync_company_modules
 
 
@@ -107,12 +109,13 @@ def list_recent_audit_logs(
 def build_company_user_item(membership: EmpresaUsuario) -> SuperadminCompanyUserItem:
     user = membership.usuario
     return SuperadminCompanyUserItem(
+        membership_id=membership.id,
         usuario_id=user.id,
         nombre_completo=user.full_name,
         email=user.email,
         phone_e164_masked=mask_phone(user.phone_e164 or "", user.country_code) if user.phone_e164 else None,
         role=membership.role,
-        activo=user.is_active,
+        activo=bool(membership.is_active and user.is_active),
         created_at=user.created_at,
         last_login_at=user.last_login_at,
     )
@@ -124,6 +127,7 @@ def build_user_company_item(membership: EmpresaUsuario) -> SuperadminUserCompany
         empresa_id=company.id,
         empresa_nombre=company.name,
         role=membership.role,
+        is_active=membership.is_active,
         plan_code=company.plan_code,
         access_status=company.access_status,
     )
@@ -142,13 +146,16 @@ def build_company_detail(db: Session, empresa_id: str) -> SuperadminCompanyDetai
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no encontrada.")
 
     inventory_counts = SuperadminInventoryCounts(
-        almacenes=db.scalar(select(func.count(Almacen.id)).where(Almacen.empresa_id == company.id)) or 0,
+        almacenes=db.scalar(
+            select(func.count(Almacen.id)).where(Almacen.empresa_id == company.id, Almacen.activo == True)
+        ) or 0,
         materiales=db.scalar(select(func.count(Material.id)).where(Material.empresa_id == company.id)) or 0,
         existencias=db.scalar(select(func.count(Existencia.id)).where(Existencia.empresa_id == company.id)) or 0,
         movimientos=db.scalar(
             select(func.count(MovimientoInventario.id)).where(MovimientoInventario.empresa_id == company.id)
         ) or 0,
     )
+    limits = get_company_plan_limits(db, company)
     _, audit_items = list_recent_audit_logs(db, empresa_id=company.id, limit=25)
 
     sorted_memberships = sorted(
@@ -161,11 +168,30 @@ def build_company_detail(db: Session, empresa_id: str) -> SuperadminCompanyDetai
         id=company.id,
         nombre=company.name,
         slug=company.slug,
+        razon_social=company.razon_social,
+        rfc=company.rfc,
+        giro=company.giro,
+        telefono=company.telefono,
+        email_contacto=company.email_contacto,
+        pais=company.pais,
+        estado=company.estado,
+        ciudad=company.ciudad,
+        direccion=company.direccion,
         plan_code=company.plan_code,
         access_status=company.access_status,
         trial_ends_at=company.trial_ends_at,
         created_at=company.created_at,
+        is_trial=company.access_status == "trial",
         estado_pago=None,
+        limits=CompanyLimitsSummary(
+            max_usuarios=limits.max_usuarios,
+            usuarios_actuales=limits.usuarios_actuales,
+            max_almacenes=limits.max_almacenes,
+            almacenes_actuales=limits.almacenes_actuales,
+            max_facturas_mensuales=limits.max_facturas_mensuales,
+            productos_ilimitados=limits.productos_ilimitados,
+            ventas_ilimitadas=limits.ventas_ilimitadas,
+        ),
         users=[build_company_user_item(membership) for membership in sorted_memberships],
         modules=[
             SuperadminCompanyModuleItem(
@@ -260,11 +286,13 @@ def companies(
 
     user_counts_sq = (
         select(EmpresaUsuario.empresa_id.label("empresa_id"), func.count(EmpresaUsuario.id).label("usuarios_count"))
+        .where(EmpresaUsuario.is_active == True)
         .group_by(EmpresaUsuario.empresa_id)
         .subquery()
     )
     warehouse_counts_sq = (
         select(Almacen.empresa_id.label("empresa_id"), func.count(Almacen.id).label("almacenes_count"))
+        .where(Almacen.activo == True)
         .group_by(Almacen.empresa_id)
         .subquery()
     )
@@ -310,11 +338,14 @@ def companies(
             func.coalesce(warehouse_counts_sq.c.almacenes_count, 0),
             func.coalesce(material_counts_sq.c.materiales_count, 0),
             last_login_sq.c.ultimo_login_at,
+            Plan.max_usuarios,
+            Plan.max_almacenes,
         )
         .outerjoin(user_counts_sq, user_counts_sq.c.empresa_id == Empresa.id)
         .outerjoin(warehouse_counts_sq, warehouse_counts_sq.c.empresa_id == Empresa.id)
         .outerjoin(material_counts_sq, material_counts_sq.c.empresa_id == Empresa.id)
         .outerjoin(last_login_sq, last_login_sq.c.empresa_id == Empresa.id)
+        .outerjoin(Plan, Plan.code == Empresa.plan_code)
         .where(*filters)
         .order_by(desc(Empresa.created_at), Empresa.name.asc())
         .offset(offset)
@@ -327,6 +358,8 @@ def companies(
             SuperadminCompanyListItem(
                 id=company.id,
                 nombre=company.name,
+                razon_social=company.razon_social,
+                rfc=company.rfc,
                 plan_code=company.plan_code,
                 access_status=company.access_status,
                 trial_ends_at=company.trial_ends_at,
@@ -334,10 +367,12 @@ def companies(
                 usuarios_count=usuarios_count,
                 almacenes_count=almacenes_count,
                 materiales_count=materiales_count,
+                max_usuarios=max_usuarios,
+                max_almacenes=max_almacenes,
                 ultimo_login_at=ultimo_login_at,
                 estado_pago=None,
             )
-            for company, usuarios_count, almacenes_count, materiales_count, ultimo_login_at in rows
+            for company, usuarios_count, almacenes_count, materiales_count, ultimo_login_at, max_usuarios, max_almacenes in rows
         ],
     )
 
@@ -483,6 +518,7 @@ def impersonate(
         .where(
             EmpresaUsuario.empresa_id == company.id,
             EmpresaUsuario.usuario_id == user.id,
+            EmpresaUsuario.is_active == True,
         )
     )
     if not membership:

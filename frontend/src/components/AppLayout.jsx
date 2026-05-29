@@ -11,10 +11,12 @@ export default function AppLayout() {
     empresa,
     exitImpersonation,
     impersonation,
+    membership,
     notice,
     logout,
     user,
   } = useAuth();
+  const canManageCompanyUsers = membership?.role === "owner" || membership?.role === "admin";
 
   async function handleExitImpersonation() {
     try {
@@ -62,6 +64,12 @@ export default function AppLayout() {
             </div>
 
             <div className="topbar-actions">
+              {canManageCompanyUsers ? (
+                <button className="ghost-button" onClick={() => navigate("/empresa/usuarios")} type="button">
+                  Usuarios
+                </button>
+              ) : null}
+
               <div className="user-chip">
                 <strong>{user?.full_name}</strong>
                 <span>{user?.email}</span>

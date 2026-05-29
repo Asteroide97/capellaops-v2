@@ -21,7 +21,13 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Core | Multiempresa por tenant | Implementado | Critica | Core actual | Aislamiento por `empresa_id` y contexto activo. | Fuga de datos entre clientes. |
 | Core | Auth de usuarios | Implementado | Critica | Core actual | JWT propio, `/me`, login y registro. | Accesos no controlados. |
 | Core | Roles por empresa | Parcial | Alta | Core hardening | Existe `EmpresaUsuario`, pero la matriz fina de permisos todavia no cubre todos los dominios futuros. | Sobreacceso o permisos inconsistentes. |
+| Core | Empresa completa | Implementado | Alta | Core hardening | `Empresa` ya guarda nombre, razon social, RFC, giro, telefono, email de contacto, ubicacion y plan. | Contexto comercial incompleto por cliente. |
+| Core | Registro empresa + owner | Implementado | Critica | Core actual | El registro crea la empresa, el usuario owner y su `EmpresaUsuario`. El almacen sigue como onboarding posterior. | Onboarding confuso o tenant incompleto. |
 | Core | Planes comerciales | Implementado | Critica | Core actual | `basico`, `pro`, `total`. | Acceso comercial incorrecto. |
+| Core | Limites por plan | Implementado | Alta | Core hardening | Los planes ya controlan modulos, maximo de usuarios, maximo de almacenes y maximo de facturas mensuales. `null` significa ilimitado. | Sobreuso sin control comercial. |
+| Core | Usuarios por empresa | Implementado | Alta | Core hardening | Los usuarios adicionales se gestionan con `EmpresaUsuario` y no crean empresas nuevas. El owner cuenta dentro del limite. | Mezcla de tenants o sobrecupo silencioso. |
+| Core | Invitaciones por email | Parcial | Media | Core hardening | Ya existe registro de invitacion pendiente y vinculacion de usuarios existentes, pero no se envia correo real todavia. | Alta manual y seguimiento incompleto. |
+| Core | Almacenes por plan | Implementado | Alta | Core hardening | La creacion de almacenes y el onboarding del primer almacen respetan `max_almacenes` del plan. | Empresas operando fuera de su capacidad contratada. |
 | Core | Trial | Implementado | Alta | Core actual | Trial de 15 dias. | Onboarding comercial incompleto. |
 | Core | Modulos por plan | Implementado | Critica | Core actual | Acceso centralizado con `/modules` y `can_access_module`. | Clientes viendo modulos no contratados. |
 | Core | Superadmin | Implementado | Alta | Core actual | Portal, cambio de acceso, overview e impersonacion. | Falta de control operativo central. |

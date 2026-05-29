@@ -5,6 +5,15 @@ from app.schemas.common import EmpresaSummary, MembershipSummary, UserSummary
 
 class RegisterStartRequest(BaseModel):
     empresa_nombre: str = Field(min_length=2, max_length=160)
+    empresa_razon_social: str | None = Field(default=None, max_length=180)
+    empresa_rfc: str | None = Field(default=None, max_length=32)
+    empresa_giro: str | None = Field(default=None, max_length=120)
+    empresa_telefono: str | None = Field(default=None, max_length=40)
+    empresa_email_contacto: EmailStr | None = None
+    empresa_pais: str | None = Field(default=None, max_length=80)
+    empresa_estado: str | None = Field(default=None, max_length=80)
+    empresa_ciudad: str | None = Field(default=None, max_length=80)
+    empresa_direccion: str | None = Field(default=None, max_length=500)
     nombre_completo: str = Field(min_length=2, max_length=160)
     email: EmailStr
     country_code: str = Field(min_length=2, max_length=8)

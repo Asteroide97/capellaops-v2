@@ -19,7 +19,7 @@ from app.models.procurement import (
     Requisicion,
     RequisicionDetalle,
 )
-from app.models.user import EmpresaUsuario, PendingRegistration, Usuario
+from app.models.user import EmpresaUsuario, EmpresaUsuarioInvitacion, PendingRegistration, Usuario
 
 __all__ = [
     "Almacen",
@@ -30,6 +30,7 @@ __all__ = [
     "Empresa",
     "EmpresaModulo",
     "EmpresaUsuario",
+    "EmpresaUsuarioInvitacion",
     "Existencia",
     "Material",
     "MovimientoInventario",

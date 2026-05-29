@@ -41,6 +41,15 @@ export default function RegisterPage() {
   const [countrySelection, setCountrySelection] = useState("mx");
   const [form, setForm] = useState({
     empresa_nombre: "",
+    empresa_razon_social: "",
+    empresa_rfc: "",
+    empresa_giro: "",
+    empresa_telefono: "",
+    empresa_email_contacto: "",
+    empresa_pais: "Mexico",
+    empresa_estado: "",
+    empresa_ciudad: "",
+    empresa_direccion: "",
     nombre_completo: "",
     email: "",
     country_code: "+52",
@@ -97,6 +106,15 @@ export default function RegisterPage() {
 
     return {
       empresa_nombre: form.empresa_nombre,
+      empresa_razon_social: form.empresa_razon_social,
+      empresa_rfc: form.empresa_rfc,
+      empresa_giro: form.empresa_giro,
+      empresa_telefono: form.empresa_telefono,
+      empresa_email_contacto: form.empresa_email_contacto,
+      empresa_pais: form.empresa_pais,
+      empresa_estado: form.empresa_estado,
+      empresa_ciudad: form.empresa_ciudad,
+      empresa_direccion: form.empresa_direccion,
       nombre_completo: form.nombre_completo,
       email: form.email,
       country_code: countryCode,
@@ -186,11 +204,11 @@ export default function RegisterPage() {
         <form className="auth-card" onSubmit={handleStart}>
           <div>
             <h2>Registro</h2>
-            <p>Enviaremos un codigo por SMS antes de crear la empresa.</p>
+            <p>Enviaremos un codigo por SMS antes de crear la empresa y vincularte como owner.</p>
           </div>
 
           <label>
-            Empresa
+            Nombre comercial / empresa
             <input
               onChange={(event) => updateForm("empresa_nombre", event.target.value)}
               required
@@ -198,6 +216,101 @@ export default function RegisterPage() {
               value={form.empresa_nombre}
             />
           </label>
+
+          <div className="split-fields">
+            <label>
+              Razon social
+              <input
+                onChange={(event) => updateForm("empresa_razon_social", event.target.value)}
+                type="text"
+                value={form.empresa_razon_social}
+              />
+            </label>
+
+            <label>
+              RFC
+              <input
+                onChange={(event) => updateForm("empresa_rfc", event.target.value.toUpperCase())}
+                type="text"
+                value={form.empresa_rfc}
+              />
+            </label>
+          </div>
+
+          <div className="split-fields">
+            <label>
+              Giro / industria
+              <input
+                onChange={(event) => updateForm("empresa_giro", event.target.value)}
+                type="text"
+                value={form.empresa_giro}
+              />
+            </label>
+
+            <label>
+              Telefono de empresa
+              <input
+                onChange={(event) => updateForm("empresa_telefono", event.target.value)}
+                type="text"
+                value={form.empresa_telefono}
+              />
+            </label>
+          </div>
+
+          <div className="split-fields">
+            <label>
+              Email de contacto
+              <input
+                onChange={(event) => updateForm("empresa_email_contacto", event.target.value)}
+                placeholder="Por defecto se usara el email del owner"
+                type="email"
+                value={form.empresa_email_contacto}
+              />
+            </label>
+
+            <label>
+              Pais
+              <input
+                onChange={(event) => updateForm("empresa_pais", event.target.value)}
+                type="text"
+                value={form.empresa_pais}
+              />
+            </label>
+          </div>
+
+          <div className="split-fields">
+            <label>
+              Estado
+              <input
+                onChange={(event) => updateForm("empresa_estado", event.target.value)}
+                type="text"
+                value={form.empresa_estado}
+              />
+            </label>
+
+            <label>
+              Ciudad
+              <input
+                onChange={(event) => updateForm("empresa_ciudad", event.target.value)}
+                type="text"
+                value={form.empresa_ciudad}
+              />
+            </label>
+          </div>
+
+          <label>
+            Direccion
+            <textarea
+              onChange={(event) => updateForm("empresa_direccion", event.target.value)}
+              rows={2}
+              value={form.empresa_direccion}
+            />
+          </label>
+
+          <div className="security-note">
+            <strong>Owner de la empresa</strong>
+            <span>Este usuario sera el primer owner/admin de la empresa registrada.</span>
+          </div>
 
           <label>
             Nombre completo

@@ -51,6 +51,13 @@ def normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 def ensure_utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -120,16 +127,29 @@ def build_token_response(user: Usuario, empresa: Empresa, membership: EmpresaUsu
             email=user.email,
             full_name=user.full_name,
             is_superadmin=user.is_superadmin,
+            role=membership.role,
         ),
         empresa=EmpresaSummary(
             id=empresa.id,
             name=empresa.name,
             slug=empresa.slug,
+            razon_social=empresa.razon_social,
+            rfc=empresa.rfc,
+            giro=empresa.giro,
+            telefono=empresa.telefono,
+            email_contacto=empresa.email_contacto,
+            sitio_web=empresa.sitio_web,
+            pais=empresa.pais,
+            estado=empresa.estado,
+            ciudad=empresa.ciudad,
+            codigo_postal=empresa.codigo_postal,
+            direccion=empresa.direccion,
             plan_code=empresa.plan_code,
             access_status=empresa.access_status,
             trial_ends_at=empresa.trial_ends_at,
+            is_trial=empresa.access_status == "trial",
         ),
-        membership=MembershipSummary(role=membership.role),
+        membership=MembershipSummary(role=membership.role, is_active=membership.is_active),
     )
 
 
@@ -199,6 +219,17 @@ def register_start(
     if pending is None:
         pending = PendingRegistration(
             empresa_nombre=payload.empresa_nombre.strip(),
+            empresa_razon_social=normalize_optional_text(payload.empresa_razon_social),
+            empresa_rfc=normalize_optional_text(payload.empresa_rfc),
+            empresa_giro=normalize_optional_text(payload.empresa_giro),
+            empresa_telefono=normalize_optional_text(payload.empresa_telefono),
+            empresa_email_contacto=normalize_email(payload.empresa_email_contacto)
+            if payload.empresa_email_contacto
+            else None,
+            empresa_pais=normalize_optional_text(payload.empresa_pais),
+            empresa_estado=normalize_optional_text(payload.empresa_estado),
+            empresa_ciudad=normalize_optional_text(payload.empresa_ciudad),
+            empresa_direccion=normalize_optional_text(payload.empresa_direccion),
             nombre_completo=payload.nombre_completo.strip(),
             email=email,
             country_code=normalized_phone["country_code"],
@@ -214,6 +245,17 @@ def register_start(
         db.add(pending)
     else:
         pending.empresa_nombre = payload.empresa_nombre.strip()
+        pending.empresa_razon_social = normalize_optional_text(payload.empresa_razon_social)
+        pending.empresa_rfc = normalize_optional_text(payload.empresa_rfc)
+        pending.empresa_giro = normalize_optional_text(payload.empresa_giro)
+        pending.empresa_telefono = normalize_optional_text(payload.empresa_telefono)
+        pending.empresa_email_contacto = (
+            normalize_email(payload.empresa_email_contacto) if payload.empresa_email_contacto else None
+        )
+        pending.empresa_pais = normalize_optional_text(payload.empresa_pais)
+        pending.empresa_estado = normalize_optional_text(payload.empresa_estado)
+        pending.empresa_ciudad = normalize_optional_text(payload.empresa_ciudad)
+        pending.empresa_direccion = normalize_optional_text(payload.empresa_direccion)
         pending.nombre_completo = payload.nombre_completo.strip()
         pending.country_code = normalized_phone["country_code"]
         pending.phone_number = normalized_phone["phone_number"]
@@ -346,6 +388,15 @@ def register_verify(
     empresa = Empresa(
         name=pending.empresa_nombre,
         slug=build_unique_slug(db, pending.empresa_nombre),
+        razon_social=normalize_optional_text(pending.empresa_razon_social),
+        rfc=normalize_optional_text(pending.empresa_rfc),
+        giro=normalize_optional_text(pending.empresa_giro),
+        telefono=normalize_optional_text(pending.empresa_telefono),
+        email_contacto=normalize_email(pending.empresa_email_contacto) if pending.empresa_email_contacto else pending.email,
+        pais=normalize_optional_text(pending.empresa_pais),
+        estado=normalize_optional_text(pending.empresa_estado),
+        ciudad=normalize_optional_text(pending.empresa_ciudad),
+        direccion=normalize_optional_text(pending.empresa_direccion),
         plan_code=plan.code,
         access_status="trial",
         trial_ends_at=now + timedelta(days=15),
@@ -417,11 +468,15 @@ def login(
             detail="Correo o contrasena incorrectos.",
         )
 
-    memberships = [membership for membership in user.memberships if membership.empresa is not None]
+    memberships = [
+        membership
+        for membership in user.memberships
+        if membership.empresa is not None and membership.is_active
+    ]
     if not memberships:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="El usuario no tiene empresas asociadas.",
+            detail="El usuario no tiene empresas activas asociadas.",
         )
 
     selected_membership = None

@@ -169,6 +169,10 @@ npm run dev
 - `POST /auth/register/verify`
 - `POST /auth/login`
 - `GET /me`
+- `GET /company/users`
+- `POST /company/users/invite`
+- `PATCH /company/users/{empresa_usuario_id}`
+- `POST /company/users/{empresa_usuario_id}/deactivate`
 - `GET /modules`
 
 ### Onboarding de inventario
@@ -338,6 +342,35 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Envío automático de alertas por email
 - Merma formal
 - Reportes avanzados
+
+## Empresa, usuarios y limites por plan
+
+- El registro crea una `Empresa` real y el usuario inicial queda vinculado como `owner`.
+- El registro no crea almacenes automaticamente.
+- El onboarding posterior crea el primer almacen y ahora respeta el limite del plan.
+- Los usuarios adicionales se vinculan a la empresa existente por `EmpresaUsuario`.
+- Los planes controlan:
+  - modulos
+  - `max_usuarios`
+  - `max_almacenes`
+  - `max_facturas_mensuales`
+- `null` significa ilimitado.
+- `productos_ilimitados` y `ventas_ilimitadas` quedan preparados en el modelo del plan.
+- `/me` devuelve:
+  - empresa activa con datos ampliados
+  - rol del usuario
+  - limites actuales de usuarios y almacenes
+  - modulos operativos
+- Endpoints de usuarios de empresa:
+  - `GET /company/users`
+  - `POST /company/users/invite`
+  - `PATCH /company/users/{empresa_usuario_id}`
+  - `POST /company/users/{empresa_usuario_id}/deactivate`
+- Flujo actual de usuarios:
+  - si el correo ya existe, se vincula a la empresa
+  - si ya pertenece a la empresa, responde `already_member`
+  - si no existe, se registra una invitacion pendiente
+- El envio real de email de invitacion sigue pendiente.
 
 ## Conexiones de Inventario
 

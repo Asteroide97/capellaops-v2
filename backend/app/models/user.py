@@ -41,9 +41,36 @@ class EmpresaUsuario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
     usuario_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
     role: Mapped[str] = mapped_column(String(40), nullable=False, default="staff")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1", index=True)
 
     empresa = relationship("Empresa", back_populates="users")
     usuario = relationship("Usuario", back_populates="memberships")
+
+
+class EmpresaUsuarioInvitacion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "empresa_usuario_invitaciones"
+    __table_args__ = (
+        Index(
+            "uq_empresa_usuario_invitacion_pending_email",
+            "empresa_id",
+            "email",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+            mssql_where=text("status = 'pending'"),
+        ),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    full_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    role: Mapped[str] = mapped_column(String(40), nullable=False, default="user")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending", server_default="pending", index=True)
+    invited_by_user_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
+    linked_user_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    empresa = relationship("Empresa", back_populates="invitations")
+    invited_by_user = relationship("Usuario", foreign_keys=[invited_by_user_id])
+    linked_user = relationship("Usuario", foreign_keys=[linked_user_id])
 
 
 class PendingRegistration(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -60,6 +87,15 @@ class PendingRegistration(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     empresa_nombre: Mapped[str] = mapped_column(String(160), nullable=False)
+    empresa_razon_social: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    empresa_rfc: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    empresa_giro: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    empresa_telefono: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    empresa_email_contacto: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    empresa_pais: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    empresa_estado: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    empresa_ciudad: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    empresa_direccion: Mapped[str | None] = mapped_column(String(500), nullable=True)
     nombre_completo: Mapped[str] = mapped_column(String(160), nullable=False)
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     country_code: Mapped[str | None] = mapped_column(String(8), nullable=True)

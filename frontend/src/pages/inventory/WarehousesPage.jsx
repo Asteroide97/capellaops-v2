@@ -20,7 +20,7 @@ const defaultFilters = {
 
 
 export default function WarehousesPage() {
-  const { token, empresaId } = useAuth();
+  const { empresa, token, empresaId, limits, refreshSession } = useAuth();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -35,6 +35,10 @@ export default function WarehousesPage() {
     descripcion: "",
     activo: true,
   });
+
+  const maxWarehouses = limits?.max_almacenes ?? null;
+  const activeWarehouses = limits?.almacenes_actuales ?? 0;
+  const createLimitReached = !form.id && form.activo && maxWarehouses !== null && activeWarehouses >= maxWarehouses;
 
   async function loadWarehousesPage(nextFilters = filters) {
     const response = await getWarehouses({
@@ -98,16 +102,17 @@ export default function WarehousesPage() {
 
       if (form.id) {
         await updateWarehouse({ warehouseId: form.id, token, empresaId, payload });
-        setSuccess("Almacén actualizado correctamente.");
+        setSuccess("Almacen actualizado correctamente.");
       } else {
         await createWarehouse({ token, empresaId, payload });
-        setSuccess("Almacén creado correctamente.");
+        setSuccess("Almacen creado correctamente.");
       }
 
+      await refreshSession();
       resetForm();
       await loadWarehousesPage(filters);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar el almacén.");
+      setError(requestError.message || "No se pudo guardar el almacen.");
     } finally {
       setSubmitting(false);
     }
@@ -121,13 +126,21 @@ export default function WarehousesPage() {
     <div className="inventory-grid">
       <form className="feature-card inventory-form-card" onSubmit={handleSubmit}>
         <div className="feature-header">
-          <p className="eyebrow">Configuración</p>
-          <h2>{form.id ? "Editar almacén" : "Crear almacén"}</h2>
-          <p>Administra almacenes activos sin salir del módulo Inventario.</p>
+          <p className="eyebrow">Configuracion</p>
+          <h2>{form.id ? "Editar almacen" : "Crear almacen"}</h2>
+          <p>Administra almacenes activos sin salir del modulo Inventario.</p>
+          <p className="table-note">
+            {empresa?.name || "Empresa activa"} | Almacenes: {activeWarehouses} / {maxWarehouses ?? "Ilimitado"}
+          </p>
         </div>
 
         {error ? <p className="form-error">{error}</p> : null}
         {success ? <p className="form-success">{success}</p> : null}
+        {createLimitReached ? (
+          <p className="form-error">
+            Tu plan permite hasta {maxWarehouses} almacen(es). Actualiza tu plan para agregar mas.
+          </p>
+        ) : null}
 
         <div className="inventory-form-grid">
           <label>
@@ -141,7 +154,7 @@ export default function WarehousesPage() {
           </label>
 
           <label>
-            Código
+            Codigo
             <input
               onChange={(event) => setForm((current) => ({ ...current, codigo: event.target.value }))}
               required
@@ -151,7 +164,7 @@ export default function WarehousesPage() {
           </label>
 
           <label className="inventory-form-span-2">
-            Descripción
+            Descripcion
             <textarea
               onChange={(event) => setForm((current) => ({ ...current, descripcion: event.target.value }))}
               rows={3}
@@ -165,16 +178,16 @@ export default function WarehousesPage() {
               onChange={(event) => setForm((current) => ({ ...current, activo: event.target.checked }))}
               type="checkbox"
             />
-            Almacén activo
+            Almacen activo
           </label>
         </div>
 
         <div className="inventory-actions">
-          <button className="primary-button" disabled={submitting} type="submit">
-            {submitting ? "Guardando..." : form.id ? "Actualizar almacén" : "Crear almacén"}
+          <button className="primary-button" disabled={submitting || createLimitReached} type="submit">
+            {submitting ? "Guardando..." : form.id ? "Actualizar almacen" : "Crear almacen"}
           </button>
           <button className="ghost-button" onClick={resetForm} type="button">
-            Nuevo almacén
+            Nuevo almacen
           </button>
         </div>
       </form>
@@ -203,7 +216,7 @@ export default function WarehousesPage() {
             Buscar
             <input
               onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
-              placeholder="Nombre o código"
+              placeholder="Nombre o codigo"
               type="text"
               value={filters.q}
             />
@@ -258,7 +271,7 @@ export default function WarehousesPage() {
         {warehouses.length === 0 ? (
           <EmptyState
             title="No hay almacenes."
-            note="Crea el primer almacén para comenzar a operar inventario."
+            note="Crea el primer almacen para comenzar a operar inventario."
           />
         ) : (
           <>
@@ -267,7 +280,7 @@ export default function WarehousesPage() {
                 <thead>
                   <tr>
                     <th>Nombre</th>
-                    <th>Código</th>
+                    <th>Codigo</th>
                     <th>Estado</th>
                     <th>Acciones</th>
                   </tr>
@@ -277,7 +290,7 @@ export default function WarehousesPage() {
                     <tr key={warehouse.id}>
                       <td>
                         <strong>{warehouse.nombre}</strong>
-                        <div className="table-note">{warehouse.descripcion || "Sin descripción"}</div>
+                        <div className="table-note">{warehouse.descripcion || "Sin descripcion"}</div>
                       </td>
                       <td>{warehouse.codigo}</td>
                       <td>
@@ -316,7 +329,7 @@ export default function WarehousesPage() {
                 try {
                   await loadWarehousesPage(nextFilters);
                 } catch (requestError) {
-                  setError(requestError.message || "No se pudo cambiar la página.");
+                  setError(requestError.message || "No se pudo cambiar la pagina.");
                 }
               }}
               onPrevious={async () => {
@@ -325,7 +338,7 @@ export default function WarehousesPage() {
                 try {
                   await loadWarehousesPage(nextFilters);
                 } catch (requestError) {
-                  setError(requestError.message || "No se pudo cambiar la página.");
+                  setError(requestError.message || "No se pudo cambiar la pagina.");
                 }
               }}
             />

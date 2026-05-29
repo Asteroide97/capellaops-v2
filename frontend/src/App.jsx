@@ -4,6 +4,7 @@ import { useAuth } from "./auth/AuthContext";
 import AppLayout from "./components/AppLayout";
 import FeaturePlaceholder from "./components/FeaturePlaceholder";
 import BillingPendingPage from "./pages/BillingPendingPage";
+import CompanyUsersPage from "./pages/CompanyUsersPage";
 import CrmPage from "./pages/CrmPage";
 import DashboardPage from "./pages/DashboardPage";
 import FirstWarehouseSetupPage from "./pages/FirstWarehouseSetupPage";
@@ -144,6 +145,10 @@ export default function App() {
             <Route path="ordenes-trabajo" element={<WorkOrdersPage />} />
             <Route path="reportes" element={<InventoryReportsPage />} />
           </Route>
+          <Route
+            path="/empresa/usuarios"
+            element={<CompanyUsersPage />}
+          />
           <Route
             path="/pos"
             element={

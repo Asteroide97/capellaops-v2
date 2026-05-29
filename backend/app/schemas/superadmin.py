@@ -2,6 +2,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.schemas.common import CompanyLimitsSummary
+
 
 class SuperadminPlanCounts(BaseModel):
     basico: int
@@ -35,6 +37,8 @@ class SuperadminAuditLogItem(BaseModel):
 class SuperadminCompanyListItem(BaseModel):
     id: str
     nombre: str
+    razon_social: str | None = None
+    rfc: str | None = None
     plan_code: str
     access_status: str
     trial_ends_at: datetime
@@ -42,6 +46,8 @@ class SuperadminCompanyListItem(BaseModel):
     usuarios_count: int
     almacenes_count: int
     materiales_count: int
+    max_usuarios: int | None = None
+    max_almacenes: int | None = None
     ultimo_login_at: datetime | None = None
     estado_pago: str | None = None
 
@@ -52,6 +58,7 @@ class SuperadminCompanyListResponse(BaseModel):
 
 
 class SuperadminCompanyUserItem(BaseModel):
+    membership_id: str
     usuario_id: str
     nombre_completo: str
     email: str
@@ -79,11 +86,22 @@ class SuperadminCompanyDetailResponse(BaseModel):
     id: str
     nombre: str
     slug: str
+    razon_social: str | None = None
+    rfc: str | None = None
+    giro: str | None = None
+    telefono: str | None = None
+    email_contacto: str | None = None
+    pais: str | None = None
+    estado: str | None = None
+    ciudad: str | None = None
+    direccion: str | None = None
     plan_code: str
     access_status: str
     trial_ends_at: datetime
     created_at: datetime
+    is_trial: bool = False
     estado_pago: str | None = None
+    limits: CompanyLimitsSummary
     users: list[SuperadminCompanyUserItem]
     modules: list[SuperadminCompanyModuleItem]
     inventory_counts: SuperadminInventoryCounts
@@ -94,6 +112,7 @@ class SuperadminUserCompanyItem(BaseModel):
     empresa_id: str
     empresa_nombre: str
     role: str
+    is_active: bool = True
     plan_code: str
     access_status: str
 

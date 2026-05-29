@@ -629,6 +629,40 @@ export function getPosTicket({ saleId, token, empresaId }) {
 }
 
 
+export function getCompanyUsers({ token, empresaId }) {
+  return apiRequest("/company/users", { token, empresaId });
+}
+
+
+export function inviteCompanyUser({ token, empresaId, payload }) {
+  return apiRequest("/company/users/invite", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateCompanyUser({ membershipId, token, empresaId, payload }) {
+  return apiRequest(`/company/users/${membershipId}`, {
+    method: "PATCH",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivateCompanyUser({ membershipId, token, empresaId }) {
+  return apiRequest(`/company/users/${membershipId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
 export function getSuppliers({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);

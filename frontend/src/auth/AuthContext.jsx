@@ -33,6 +33,7 @@ export function AuthProvider({ children }) {
   const [membership, setMembership] = useState(null);
   const [empresas, setEmpresas] = useState([]);
   const [modules, setModules] = useState([]);
+  const [limits, setLimits] = useState(null);
   const [impersonation, setImpersonation] = useState(false);
   const [impersonatedBy, setImpersonatedBy] = useState(null);
   const [impersonationEndsAt, setImpersonationEndsAt] = useState(null);
@@ -68,6 +69,7 @@ export function AuthProvider({ children }) {
     setMembership(null);
     setEmpresas([]);
     setModules([]);
+    setLimits(null);
     setImpersonation(false);
     setImpersonatedBy(null);
     setImpersonationEndsAt(null);
@@ -76,28 +78,23 @@ export function AuthProvider({ children }) {
   }
 
   async function hydrateSession(activeToken, activeEmpresaId) {
-    const [me, moduleResponse] = await Promise.all([
-      apiRequest("/me", {
-        token: activeToken,
-        empresaId: activeEmpresaId,
-      }),
-      apiRequest("/modules", {
-        token: activeToken,
-        empresaId: activeEmpresaId,
-      }),
-    ]);
+    const me = await apiRequest("/me", {
+      token: activeToken,
+      empresaId: activeEmpresaId,
+    });
 
     setUser(me.user);
     setEmpresa(me.empresa);
     setMembership(me.membership);
     setEmpresas(me.empresas);
-    setModules(moduleResponse.modules);
+    setModules(me.modules ?? []);
+    setLimits(me.limits ?? null);
     setImpersonation(Boolean(me.impersonation));
     setImpersonatedBy(me.impersonated_by ?? null);
     setImpersonationEndsAt(me.impersonation_ends_at ?? null);
     setInventoryOnboarding(buildOnboardingState());
 
-    const inventoryModule = moduleResponse.modules.find(
+    const inventoryModule = (me.modules ?? []).find(
       (module) => module.name === "inventory" && module.enabled,
     );
     const shouldCheckOnboarding = Boolean(inventoryModule) && !me.user.is_superadmin;
@@ -133,6 +130,15 @@ export function AuthProvider({ children }) {
   async function registerStart(payload) {
     const requestBody = {
       empresa_nombre: payload.empresa_nombre,
+      empresa_razon_social: payload.empresa_razon_social,
+      empresa_rfc: payload.empresa_rfc,
+      empresa_giro: payload.empresa_giro,
+      empresa_telefono: payload.empresa_telefono,
+      empresa_email_contacto: payload.empresa_email_contacto,
+      empresa_pais: payload.empresa_pais,
+      empresa_estado: payload.empresa_estado,
+      empresa_ciudad: payload.empresa_ciudad,
+      empresa_direccion: payload.empresa_direccion,
       nombre_completo: payload.nombre_completo,
       email: payload.email,
       country_code: payload.country_code,
@@ -253,6 +259,7 @@ export function AuthProvider({ children }) {
     membership,
     empresas,
     modules,
+    limits,
     ready,
     impersonation,
     impersonatedBy,

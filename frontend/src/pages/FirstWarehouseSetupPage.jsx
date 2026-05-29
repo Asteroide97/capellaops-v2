@@ -7,14 +7,18 @@ import { useAuth } from "../auth/AuthContext";
 
 export default function FirstWarehouseSetupPage() {
   const navigate = useNavigate();
-  const { token, empresaId, refreshSession, onboardingMessage } = useAuth();
+  const { token, empresaId, limits, refreshSession, onboardingMessage, warehousesCount } = useAuth();
   const [form, setForm] = useState({
     nombre: "Principal",
     codigo: "PRINCIPAL",
-    descripcion: "Almacén principal",
+    descripcion: "Almacen principal",
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  const maxWarehouses = limits?.max_almacenes ?? null;
+  const currentWarehouses = limits?.almacenes_actuales ?? warehousesCount ?? 0;
+  const isWarehouseLimitReached = maxWarehouses !== null && currentWarehouses >= maxWarehouses;
 
   async function handleSubmit(event) {
     event.preventDefault();
@@ -34,7 +38,7 @@ export default function FirstWarehouseSetupPage() {
       await refreshSession();
       navigate("/", { replace: true });
     } catch (requestError) {
-      setError(requestError.message || "No se pudo crear el almacén inicial.");
+      setError(requestError.message || "No se pudo crear el almacen inicial.");
     } finally {
       setLoading(false);
     }
@@ -45,20 +49,27 @@ export default function FirstWarehouseSetupPage() {
       <form className="auth-card setup-card" onSubmit={handleSubmit}>
         <div>
           <p className="eyebrow">Setup inicial</p>
-          <h2>Configura tu primer almacén</h2>
+          <h2>Configura tu primer almacen</h2>
           <p>
-            Antes de comenzar, crea el almacén principal donde controlarás tus productos y
-            existencias.
+            El registro crea la empresa y tu usuario owner. El siguiente paso es crear
+            el primer almacen para comenzar a operar inventario.
           </p>
         </div>
 
         <div className="security-note">
           <strong>Inventario</strong>
-          <span>{onboardingMessage || "Crea tu primer almacén para comenzar."}</span>
+          <span>{onboardingMessage || "Crea tu primer almacen para comenzar."}</span>
+        </div>
+
+        <div className="security-note">
+          <strong>Limite del plan</strong>
+          <span>
+            Almacenes: {currentWarehouses} / {maxWarehouses ?? "Ilimitado"}
+          </span>
         </div>
 
         <label>
-          Nombre del almacén
+          Nombre del almacen
           <input
             onChange={(event) => setForm((current) => ({ ...current, nombre: event.target.value }))}
             required
@@ -68,7 +79,7 @@ export default function FirstWarehouseSetupPage() {
         </label>
 
         <label>
-          Código
+          Codigo
           <input
             onChange={(event) =>
               setForm((current) => ({ ...current, codigo: event.target.value.toUpperCase() }))
@@ -80,7 +91,7 @@ export default function FirstWarehouseSetupPage() {
         </label>
 
         <label>
-          Descripción opcional
+          Descripcion opcional
           <textarea
             onChange={(event) =>
               setForm((current) => ({ ...current, descripcion: event.target.value }))
@@ -91,9 +102,14 @@ export default function FirstWarehouseSetupPage() {
         </label>
 
         {error ? <p className="form-error">{error}</p> : null}
+        {isWarehouseLimitReached ? (
+          <p className="form-error">
+            Tu plan permite hasta {maxWarehouses} almacen(es). Actualiza tu plan para agregar mas.
+          </p>
+        ) : null}
 
-        <button className="primary-button" disabled={loading} type="submit">
-          {loading ? "Creando..." : "Crear almacén y continuar"}
+        <button className="primary-button" disabled={loading || isWarehouseLimitReached} type="submit">
+          {loading ? "Creando..." : "Crear almacen y continuar"}
         </button>
       </form>
     </div>

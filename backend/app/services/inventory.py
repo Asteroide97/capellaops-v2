@@ -33,6 +33,7 @@ from app.schemas.inventory import (
     WarehouseItem,
 )
 from app.services.access import can_access_module
+from app.services.company import ensure_within_company_warehouse_limit
 
 
 ZERO = Decimal("0")
@@ -459,6 +460,9 @@ def create_warehouse_record(
             status_code=status.HTTP_409_CONFLICT,
             detail="La empresa ya tiene un almacén configurado.",
         )
+
+    if activo:
+        ensure_within_company_warehouse_limit(db, empresa)
 
     existing = db.scalar(
         select(Almacen.id).where(

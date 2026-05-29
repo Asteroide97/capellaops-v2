@@ -647,6 +647,28 @@ export default function SuperadminPage() {
                   </p>
                 </div>
 
+                <div className="module-board">
+                  <article className="mini-card">
+                    <span className="eyebrow">Empresa</span>
+                    <strong>{selectedCompanyDetail.razon_social || "Sin razon social"}</strong>
+                    <p>{selectedCompanyDetail.rfc || "Sin RFC"}</p>
+                  </article>
+                  <article className="mini-card">
+                    <span className="eyebrow">Contacto</span>
+                    <strong>{selectedCompanyDetail.email_contacto || "-"}</strong>
+                    <p>{selectedCompanyDetail.telefono || "-"}</p>
+                  </article>
+                  <article className="mini-card">
+                    <span className="eyebrow">Limites</span>
+                    <strong>
+                      Usuarios {selectedCompanyDetail.limits.usuarios_actuales} / {selectedCompanyDetail.limits.max_usuarios ?? "Ilimitado"}
+                    </strong>
+                    <p>
+                      Almacenes {selectedCompanyDetail.limits.almacenes_actuales} / {selectedCompanyDetail.limits.max_almacenes ?? "Ilimitado"}
+                    </p>
+                  </article>
+                </div>
+
                 <form className="inventory-form-grid" onSubmit={handleUpdateCompanyAccess}>
                   <label>
                     Plan
