@@ -668,6 +668,194 @@ export function deactivateCompanyUser({ membershipId, token, empresaId }) {
 }
 
 
+export function getPmConfig({ token, empresaId }) {
+  return apiRequest("/pm/config", { token, empresaId });
+}
+
+
+export function getPmDashboard({ token, empresaId }) {
+  return apiRequest("/pm/dashboard", { token, empresaId });
+}
+
+
+export function listPmProjects({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "prioridad", filters.prioridad);
+  appendQueryValue(query, "activo", filters.activo);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pm/projects${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createPmProject({ token, empresaId, payload }) {
+  return apiRequest("/pm/projects", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmProject({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}`, { token, empresaId });
+}
+
+
+export function updatePmProject({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmProject({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmProjectMembers({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/members`, { token, empresaId });
+}
+
+
+export function addPmProjectMember({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/members`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmProjectMember({ projectId, memberId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/members/${memberId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmTasks({ projectId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "prioridad", filters.prioridad);
+  appendQueryValue(query, "activo", filters.activo);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pm/projects/${projectId}/tasks${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createPmTask({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/tasks`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmTask({ taskId, token, empresaId }) {
+  return apiRequest(`/pm/tasks/${taskId}`, { token, empresaId });
+}
+
+
+export function updatePmTask({ taskId, token, empresaId, payload }) {
+  return apiRequest(`/pm/tasks/${taskId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmTask({ taskId, token, empresaId }) {
+  return apiRequest(`/pm/tasks/${taskId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmSubtask({ taskId, token, empresaId, payload }) {
+  return apiRequest(`/pm/tasks/${taskId}/subtasks`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmSubtask({ subtaskId, token, empresaId, payload }) {
+  return apiRequest(`/pm/subtasks/${subtaskId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmChecklistItem({ taskId, token, empresaId, payload }) {
+  return apiRequest(`/pm/tasks/${taskId}/checklist`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmChecklistItem({ itemId, token, empresaId, payload }) {
+  return apiRequest(`/pm/checklist/${itemId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmProjectComment({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/comments`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmTaskComment({ taskId, token, empresaId, payload }) {
+  return apiRequest(`/pm/tasks/${taskId}/comments`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function getSuppliers({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);

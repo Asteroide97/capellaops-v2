@@ -15,7 +15,7 @@ MODULE_DEFINITIONS = {
         "description": "Clientes, oportunidades y seguimiento comercial.",
     },
     "pm": {
-        "label": "PM",
+        "label": "Gestion de Proyectos",
         "route": "/pm",
         "description": "Gestión de proyectos y tareas.",
     },
@@ -40,4 +40,3 @@ PLAN_CATALOG = {
 ALLOWED_PLAN_CODES = set(PLAN_CATALOG.keys())
 ALLOWED_ACCESS_STATUSES = {"trial", "active", "past_due", "suspended", "cancelled"}
 ACTIVE_COMPANY_STATUSES = {"trial", "active", "past_due"}
-

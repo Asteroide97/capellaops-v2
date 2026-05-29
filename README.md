@@ -12,6 +12,7 @@ Monorepo para un SaaS multiempresa con Azure SQL, FastAPI y React + Vite.
 - Inventario Fase 1.2 operativo
 - Compras Fase 1 operativa dentro del dominio de Inventario
 - POS Fase 1 operativo
+- PM Core Fase 1 operativo
 - Dashboard operativo en `Inventario > Resumen`
 
 ## Stack
@@ -257,6 +258,30 @@ npm run dev
 - `POST /pos/sales/{id}/cancel`
 - `GET /pos/ticket/{id}`
 
+### PM Core Fase 1
+
+- `GET /pm/config`
+- `GET /pm/dashboard`
+- `GET /pm/projects`
+- `POST /pm/projects`
+- `GET /pm/projects/{project_id}`
+- `PUT /pm/projects/{project_id}`
+- `POST /pm/projects/{project_id}/deactivate`
+- `GET /pm/projects/{project_id}/members`
+- `POST /pm/projects/{project_id}/members`
+- `POST /pm/projects/{project_id}/members/{member_id}/deactivate`
+- `GET /pm/projects/{project_id}/tasks`
+- `POST /pm/projects/{project_id}/tasks`
+- `GET /pm/tasks/{task_id}`
+- `PUT /pm/tasks/{task_id}`
+- `POST /pm/tasks/{task_id}/deactivate`
+- `POST /pm/tasks/{task_id}/subtasks`
+- `PUT /pm/subtasks/{subtask_id}`
+- `POST /pm/tasks/{task_id}/checklist`
+- `PUT /pm/checklist/{item_id}`
+- `POST /pm/projects/{project_id}/comments`
+- `POST /pm/tasks/{task_id}/comments`
+
 ### Superadmin
 
 - `GET /superadmin/overview`
@@ -431,6 +456,82 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Acavike
 - Tiendanube
 - Facturacion via POS / CFDI
+
+## PM Core Fase 1
+
+- El modulo PM ya vive en `/pm` y queda habilitado solo para empresas con el modulo `pm` activo.
+- El acceso se valida con contexto multiempresa por `empresa_id` y `can_access_module`.
+- Si la empresa tiene PM habilitado pero aun no tiene configuracion, `GET /pm/config` crea `EmpresaPMConfig` con defaults seguros.
+
+### Incluye en esta fase
+
+- Configuracion PM por empresa:
+  - `pm_enabled`
+  - `pm_tareas_enabled`
+  - `pm_materiales_enabled`
+  - `pm_tiempo_enabled`
+  - `pm_templates_enabled`
+  - `pm_comercial_enabled`
+  - `pm_portal_enabled`
+- CRUD base de proyectos
+- Miembros de proyecto
+- CRUD base de tareas
+- Subtareas simples
+- Checklist simple
+- Comentarios de proyecto y de tarea
+- Dashboard PM basico
+- UI inicial:
+  - `Gestion de Proyectos` dashboard
+  - listado de proyectos
+  - detalle de proyecto con tabs
+  - kanban simple por estatus
+
+### Modelos principales
+
+- `EmpresaPMConfig`
+- `PMProyecto`
+- `PMProyectoMiembro`
+- `PMTarea`
+- `PMSubtarea`
+- `PMChecklistItem`
+- `PMComentario`
+
+### Reglas operativas
+
+- Todo filtra por `empresa_id`.
+- No se confia en `empresa_id` enviado por frontend.
+- Los proyectos usan `activo=false` para desactivacion logica.
+- `PMProyecto.codigo` es unico por empresa cuando se captura.
+- El avance de proyecto se recalcula desde sus tareas activas:
+  - tareas completadas / tareas activas * 100
+- Si no hay tareas activas, el proyecto conserva su `porcentaje_avance` manual.
+- Al completar una tarea se llena `fecha_completada` si no existe.
+
+### Dashboard PM
+
+`GET /pm/dashboard` devuelve:
+
+- `proyectos_activos`
+- `proyectos_atrasados`
+- `tareas_vencidas`
+- `tareas_pendientes`
+- `tareas_en_progreso`
+- `tareas_completadas`
+- distribucion de proyectos por estatus
+- distribucion de tareas por estatus
+- proximos vencimientos de proyectos y tareas
+
+### Pendientes de PM
+
+- Materiales PM reales
+- Reservas y consumos de inventario
+- Tiempos, costos y tarifas
+- Portal externo y documentos reales
+- Gantt y calendario
+- Ruta critica
+- Aprobaciones
+- Snapshots y automatizaciones
+- Vinculos comerciales con ventas, facturas y cobranza
 
 ## Inventario Fase 1.2
 

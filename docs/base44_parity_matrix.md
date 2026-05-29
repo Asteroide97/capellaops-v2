@@ -132,15 +132,17 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | CRM | CRMProveedorMaterial | Pendiente | Media | CRM / Compras F2 | La vinculacion comercial proveedor-material sigue manual via `proveedor_principal_id`. | Analitica comercial limitada sobre abastecimiento. |
 | CRM | Automatizaciones | Pendiente | Media | CRM F3 | No implementado. | Trabajo manual repetitivo. |
 | CRM | Logs de automatizacion | Pendiente | Media | CRM F3 | No implementado. | Automatizaciones sin trazabilidad. |
-| PM | Proyectos | Pendiente | Alta | PM F1 | No implementado. | Sin gestion formal de ejecucion. |
-| PM | Tareas | Pendiente | Alta | PM F1 | No implementado. | Seguimiento operativo incompleto. |
-| PM | Tiempos | Pendiente | Media | PM F2 | No implementado. | Productividad opaca. |
-| PM | Costos por usuario / rol | Pendiente | Media | PM F2 | No implementado. | Rentabilidad dificil de medir. |
-| PM | Materiales usados en proyecto | Pendiente | Alta | PM F2 | No implementado. | Consumo sin centro de costo. |
-| PM | Documentos | Pendiente | Media | PM F2 | No implementado. | Informacion dispersa. |
+| PM | PM Core proyectos | Implementado | Alta | PM F1 | CRUD base, dashboard, detalle de proyecto, miembros y desactivacion logica ya existen en `/pm`. | Sin gestion formal de ejecucion. |
+| PM | PM tareas basicas | Implementado | Alta | PM F1 | Tareas, subtareas, checklist, comentarios y actualizacion de avance ya operan dentro del proyecto. | Seguimiento operativo incompleto. |
+| PM | Kanban simple | Parcial | Media | PM F1 | El detalle de proyecto ya muestra columnas simples por estatus, sin drag and drop ni reglas avanzadas. | Visualizacion operativa menos agil. |
+| PM | Calendario / Gantt | Pendiente | Media | PM F2 | No implementado. | Planeacion temporal limitada. |
+| PM | Materiales PM | Pendiente | Alta | PM F2 | Solo existe placeholder en el detalle de proyecto; no hay reservas ni consumos reales. | Consumo sin trazabilidad por proyecto. |
+| PM | Tiempo / costos / tarifas | Pendiente | Media | PM F2 | No existe captura de horas, tarifas, costo por usuario ni tablero de costo real. | Dificil medir productividad, margen o desviaciones. |
+| PM | Documentos | Pendiente | Media | PM F2 | Solo existe placeholder de UI; no hay almacenamiento ni flujos documentales. | Informacion dispersa. |
 | PM | Portal externo | Pendiente | Baja | PM F3 | No implementado. | Experiencia limitada para clientes externos. |
-| PM | Snapshots comerciales | Pendiente | Media | PM F3 | No implementado. | Se pierde contexto comercial en ejecucion. |
-| PM | Relacion con ventas / facturas / cobranza | Pendiente | Alta | PM F3 | No implementado. | Flujo comercial-operativo desconectado. |
+| PM | Vinculos comerciales | Pendiente | Alta | PM F3 | No existe enlace operativo real con ventas, facturas o cobranza. | Flujo comercial-operativo desconectado. |
+| PM | Automatizaciones / snapshots | Pendiente | Media | PM F3 | No implementado. | Se pierde contexto historico y trabajo repetitivo sigue manual. |
+| PM | Feature flags PM | Implementado | Media | PM F1 | Existe `EmpresaPMConfig` por empresa y el modulo PM sigue gated por plan y `can_access_module`. | Empresas sin acceso correcto o con banderas inconsistentes. |
 | QA / Admin | Paginas QA | Pendiente | Media | Admin F2 | No implementado. | Validacion mas lenta. |
 | QA / Admin | Diagnosticos | Parcial | Media | Admin F1 | Ya existen utilidades como `debug_db`, pero no portal formal. | Soporte tecnico mas manual. |
 | QA / Admin | Logs | Parcial | Alta | Admin F1 | Hay audit logs y logs tecnicos, sin observabilidad integral todavia. | Investigacion lenta de incidentes. |

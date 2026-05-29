@@ -10,10 +10,12 @@ import DashboardPage from "./pages/DashboardPage";
 import FirstWarehouseSetupPage from "./pages/FirstWarehouseSetupPage";
 import LoginPage from "./pages/LoginPage";
 import NotFoundPage from "./pages/NotFoundPage";
-import PmPage from "./pages/PmPage";
 import PosPage from "./pages/PosPage";
 import RegisterPage from "./pages/RegisterPage";
 import SuperadminPage from "./pages/SuperadminPage";
+import PMDashboardPage from "./pages/pm/PMDashboardPage";
+import PMProjectDetailPage from "./pages/pm/PMProjectDetailPage";
+import PMProjectsPage from "./pages/pm/PMProjectsPage";
 import AssetsPage from "./pages/inventory/AssetsPage";
 import InventoryLayout from "./pages/inventory/InventoryLayout";
 import InventoryReportsPage from "./pages/inventory/InventoryReportsPage";
@@ -169,7 +171,23 @@ export default function App() {
             path="/pm"
             element={
               <ModuleRoute moduleName="pm">
-                <PmPage />
+                <PMDashboardPage />
+              </ModuleRoute>
+            }
+          />
+          <Route
+            path="/pm/projects"
+            element={
+              <ModuleRoute moduleName="pm">
+                <PMProjectsPage />
+              </ModuleRoute>
+            }
+          />
+          <Route
+            path="/pm/projects/:id"
+            element={
+              <ModuleRoute moduleName="pm">
+                <PMProjectDetailPage />
               </ModuleRoute>
             }
           />

@@ -12,6 +12,15 @@ from app.models.inventory import (
     TransferenciaInventarioDetalle,
 )
 from app.models.pos import Venta, VentaDetalle
+from app.models.pm import (
+    EmpresaPMConfig,
+    PMChecklistItem,
+    PMComentario,
+    PMProyecto,
+    PMProyectoMiembro,
+    PMSubtarea,
+    PMTarea,
+)
 from app.models.procurement import (
     OrdenCompra,
     OrdenCompraDetalle,
@@ -28,12 +37,19 @@ __all__ = [
     "ConteoInventario",
     "ConteoInventarioDetalle",
     "Empresa",
+    "EmpresaPMConfig",
     "EmpresaModulo",
     "EmpresaUsuario",
     "EmpresaUsuarioInvitacion",
     "Existencia",
     "Material",
     "MovimientoInventario",
+    "PMChecklistItem",
+    "PMComentario",
+    "PMProyecto",
+    "PMProyectoMiembro",
+    "PMSubtarea",
+    "PMTarea",
     "PendingRegistration",
     "Plan",
     "Proveedor",
