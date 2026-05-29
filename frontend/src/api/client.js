@@ -1009,10 +1009,17 @@ export function getPurchaseOrders({ token, empresaId, filters = {} }) {
   appendQueryValue(query, "estatus", filters.estatus);
   appendQueryValue(query, "proveedor_id", filters.proveedor_id);
   appendQueryValue(query, "almacen_destino_id", filters.almacen_destino_id);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
   appendQueryValue(query, "limit", filters.limit);
   appendQueryValue(query, "offset", filters.offset);
   const suffix = query.toString();
   return apiRequest(`/inventory/purchase-orders${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function listPurchaseOrders({ token, empresaId, filters = {} }) {
+  return getPurchaseOrders({ token, empresaId, filters });
 }
 
 
@@ -1072,6 +1079,15 @@ export function deletePurchaseOrderDetail({ orderId, detailId, token, empresaId 
 
 export function issuePurchaseOrder({ orderId, token, empresaId }) {
   return apiRequest(`/inventory/purchase-orders/${orderId}/issue`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelPurchaseOrder({ orderId, token, empresaId }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}/cancel`, {
     method: "POST",
     token,
     empresaId,

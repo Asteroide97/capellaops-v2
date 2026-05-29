@@ -247,6 +247,7 @@ npm run dev
 - `PUT /inventory/purchase-orders/{id}/details/{detail_id}`
 - `DELETE /inventory/purchase-orders/{id}/details/{detail_id}`
 - `POST /inventory/purchase-orders/{id}/issue`
+- `POST /inventory/purchase-orders/{id}/cancel`
 - `POST /inventory/purchase-orders/{id}/receive`
 
 ### POS Fase 1
@@ -677,6 +678,86 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Historial formal de recepciones por documento
 - Cuentas por pagar
 - Integración fiscal
+
+## Ã“rdenes de compra operativas
+
+Las Ã³rdenes de compra ya siguen el flujo base:
+
+`RequisiciÃ³n -> AprobaciÃ³n -> OC -> EmisiÃ³n -> RecepciÃ³n parcial/total -> Entrada a inventario`
+
+### Estados de OC
+
+- `borrador`
+- `emitida`
+- `recibida_parcial`
+- `recibida`
+- `cancelada`
+
+### Reglas actuales
+
+- `borrador`
+  - se puede editar
+  - se pueden agregar o quitar renglones
+  - se puede emitir
+  - no afecta inventario
+- `emitida`
+  - permite recepciÃ³n
+  - ya no se edita libremente
+  - no afecta inventario hasta recibir
+- `recibida_parcial`
+  - permite recibir faltantes
+  - bloquea sobre-recepciÃ³n
+- `recibida`
+  - cierra la orden
+  - no permite recibir mÃ¡s
+- `cancelada`
+  - no permite emitir ni recibir
+  - la cancelaciÃ³n bÃ¡sica solo opera si no hubo recepciÃ³n previa
+
+### Endpoints operativos
+
+- `POST /inventory/purchase-orders`
+- `POST /inventory/purchase-orders/{id}/details`
+- `PUT /inventory/purchase-orders/{id}/details/{detail_id}`
+- `DELETE /inventory/purchase-orders/{id}/details/{detail_id}`
+- `POST /inventory/purchase-orders/{id}/issue`
+- `POST /inventory/purchase-orders/{id}/cancel`
+- `POST /inventory/purchase-orders/{id}/receive`
+
+### RecepciÃ³n
+
+- soporta recepciÃ³n parcial y total por renglÃ³n
+- bloquea recibir mÃ¡s de lo pendiente
+- acepta `documento_referencia` y `notas`
+- crea movimientos tipo `entrada`
+- aumenta `existencias`
+- actualiza `cantidad_recibida` por renglÃ³n
+- cambia estatus a `recibida_parcial` o `recibida`
+
+### Trazabilidad
+
+- la recepciÃ³n queda trazada en `movimientos_inventario`
+- los movimientos guardan:
+  - `referencia_tipo = purchase_order_receive`
+  - `referencia_id = <order_id>`
+  - `documento_referencia` cuando se captura
+- Kardex refleja estas entradas porque se construye desde movimientos reales
+
+### VÃ­nculo con requisiciones
+
+- `POST /inventory/requisitions/{id}/create-purchase-order`
+- solo opera con requisiciones `aprobada`
+- crea la OC en `borrador`
+- copia renglones y enlaza `requisiciones.orden_compra_id`
+
+### Pendientes de ordenes de compra
+
+- PDF de OC
+- envÃ­o por email al proveedor
+- historial formal de recepciones
+- cancelaciÃ³n avanzada con reversa de inventario
+- cuentas por pagar
+- adjuntos y remisiones
 
 ## POS Fase 1
 

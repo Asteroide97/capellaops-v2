@@ -88,8 +88,17 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Inventario | Proveedores UX avanzado | Parcial | Media | Inventario UX/UI Parity | La vista y modal de proveedores ya se acercan a V1 y ahora comparten la misma base tipografica e iconografica del modulo. | Experiencia de compras todavia menos madura que la referencia. |
 | Inventario | Requisiciones | Parcial | Alta | Compras F1 | Borrador, envio, aprobacion, rechazo, cancelacion y sugerencia desde bajo stock. `surtida` aun no tiene flujo completo. | Solicitudes internas incompletas. |
 | Inventario | Requisicion -> orden de compra | Implementado | Alta | Compras F1 | Una requisicion aprobada ya puede crear una OC en borrador con detalles copiados y enlace persistido para evitar duplicados. | Flujo compras-inventario fragmentado. |
-| Inventario | Ordenes de compra | Parcial | Alta | Compras F1 | Borrador, detalle, emision, recepcion y creacion desde requisicion. Faltan cancelaciones avanzadas e historial formal de recepciones. | Compras operables pero aun limitadas. |
-| Inventario | Recepcion de compras conectada a inventario | Implementado | Alta | Compras F1 | La recepcion crea entradas y aumenta existencias. | Stock no conectado al documento fuente. |
+| Inventario | OC CRUD | Implementado | Alta | Compras F1 | La pantalla y el backend ya soportan borrador, detalle, consulta y edicion segura de OC en borrador. | Compras operables pero aun limitadas. |
+| Inventario | OC emision | Implementado | Alta | Compras F1 | La OC se puede emitir solo con renglones validos y cambia a `emitida` sin afectar inventario. | Flujo documental incompleto hacia proveedor. |
+| Inventario | OC recepcion parcial | Implementado | Alta | Compras F1 | Ya soporta recibir cantidades parciales por renglón, actualiza pendientes y evita sobre-recepcion. | Recepciones manuales o inconsistentes. |
+| Inventario | OC recepcion total | Implementado | Alta | Compras F1 | Ya cierra la orden como `recibida` cuando todo el documento fue recibido. | Cierre operativo incompleto. |
+| Inventario | OC -> Inventario | Implementado | Alta | Compras F1 | La recepcion crea entradas y aumenta existencias desde backend transaccional. | Stock no conectado al documento fuente. |
+| Inventario | OC -> Kardex / movimientos | Parcial | Alta | Compras F1 | La trazabilidad ya existe por `movimientos_inventario` con `purchase_order_receive`, pero aun no hay historial formal de recepciones separado. | Auditoria documental menos clara. |
+| Inventario | PDF OC | Pendiente | Media | Compras F2 | No implementado. | Envio manual o externo del documento. |
+| Inventario | Email proveedor | Pendiente | Media | Compras F2 | No implementado. | Seguimiento manual con el proveedor. |
+| Inventario | Historial formal de recepciones | Pendiente | Media | Compras F2 | La trazabilidad vive en movimientos, no en una bitacora documental propia de recepciones. | Revision historica menos directa. |
+| Inventario | Cancelacion avanzada de OC | Pendiente | Media | Compras F2 | Solo existe cancelacion basica sin recepcion previa; no hay reversa de inventario para recepciones parciales. | Flujo de excepciones incompleto. |
+| Inventario | Cuentas por pagar | Pendiente | Alta | Compras F3 | No implementado. | Seguimiento financiero fuera del sistema. |
 | Inventario | Conexion con POS | Implementado | Critica | POS F1 | POS ya descuenta inventario automaticamente y la cancelacion devuelve stock. | Ventas sin salida automatica. |
 | Inventario | Conexion con compras | Parcial | Alta | Compras F1 | La recepcion ya impacta stock y ahora existe enlace requisicion -> OC; faltan automatismos mas amplios y cierre documental completo. | Flujo compra-inventario incompleto. |
 | Inventario | Conexion con PM / proyectos | Parcial | Media | PM F2 | Movimientos y kardex ya aceptan referencia manual de proyecto sin FK real ni modulo PM activo. | Consumo sin trazabilidad fuerte por proyecto. |

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -18,16 +18,17 @@ from app.models import (
     RequisicionDetalle,
     Usuario,
 )
+from app.models.inventory import Existencia, Material, MovimientoInventario
 from app.schemas.procurement import (
     PurchaseOrderDetailItem,
     PurchaseOrderItem,
+    PurchaseOrderMovementTraceItem,
     PurchaseOrderResponse,
     RequisitionDetailItem,
     RequisitionItem,
     RequisitionResponse,
     SupplierItem,
 )
-from app.models.inventory import Existencia
 from app.services.inventory import (
     ZERO,
     apply_inventory_movement,
@@ -787,7 +788,68 @@ def ensure_active_destination_warehouse(db: Session, empresa_id: str, warehouse_
     return warehouse
 
 
+def to_start_of_day(value: date) -> datetime:
+    return datetime.combine(value, time.min, tzinfo=timezone.utc)
+
+
+def to_end_of_day(value: date) -> datetime:
+    return datetime.combine(value, time.max, tzinfo=timezone.utc)
+
+
+def get_linked_purchase_requisition(order: OrdenCompra) -> Requisicion | None:
+    if not order.requisiciones:
+        return None
+    return sorted(order.requisiciones, key=lambda item: (item.created_at, item.id))[0]
+
+
+def get_purchase_order_line_state(detail: OrdenCompraDetalle) -> str:
+    ordered = Decimal(detail.cantidad or ZERO)
+    received = Decimal(detail.cantidad_recibida or ZERO)
+    if received <= ZERO:
+        return "pendiente"
+    if received >= ordered:
+        return "completa"
+    return "parcial"
+
+
+def build_purchase_order_movement_trace_item(
+    movement: MovimientoInventario,
+    material: Material,
+    user: Usuario | None,
+) -> PurchaseOrderMovementTraceItem:
+    return PurchaseOrderMovementTraceItem(
+        id=movement.id,
+        created_at=movement.created_at,
+        tipo=movement.tipo,
+        material_id=movement.material_id,
+        material_sku=material.sku,
+        material_nombre=material.nombre,
+        cantidad=movement.cantidad,
+        documento_referencia=movement.documento_referencia,
+        notas=movement.notas,
+        recibido_por=movement.recibido_por,
+        created_by_nombre=user.full_name if user else None,
+    )
+
+
+def list_purchase_order_movements(db: Session, empresa_id: str, order_id: str) -> list[PurchaseOrderMovementTraceItem]:
+    rows = db.execute(
+        select(MovimientoInventario, Material, Usuario)
+        .join(Material, MovimientoInventario.material_id == Material.id)
+        .join(Usuario, MovimientoInventario.created_by == Usuario.id)
+        .where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.referencia_tipo == "purchase_order_receive",
+            MovimientoInventario.referencia_id == order_id,
+        )
+        .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
+    ).all()
+    return [build_purchase_order_movement_trace_item(movement, material, user) for movement, material, user in rows]
+
+
 def serialize_purchase_order_detail(detail: OrdenCompraDetalle) -> PurchaseOrderDetailItem:
+    cantidad = Decimal(detail.cantidad or ZERO)
+    cantidad_recibida = Decimal(detail.cantidad_recibida or ZERO)
     return PurchaseOrderDetailItem(
         id=detail.id,
         orden_compra_id=detail.orden_compra_id,
@@ -795,15 +857,26 @@ def serialize_purchase_order_detail(detail: OrdenCompraDetalle) -> PurchaseOrder
         material_sku=detail.material.sku,
         material_nombre=detail.material.nombre,
         material_unidad=detail.material.unidad,
-        cantidad=detail.cantidad,
-        cantidad_recibida=detail.cantidad_recibida,
+        cantidad=cantidad,
+        cantidad_recibida=cantidad_recibida,
+        cantidad_pendiente=max(cantidad - cantidad_recibida, ZERO),
         costo_unitario=detail.costo_unitario,
         subtotal_linea=detail.subtotal_linea,
         total_linea=detail.total_linea,
+        estado_linea=get_purchase_order_line_state(detail),
     )
 
 
-def build_purchase_order_item(order: OrdenCompra, details_count: int) -> PurchaseOrderItem:
+def build_purchase_order_item(
+    order: OrdenCompra,
+    details_count: int,
+    *,
+    cantidad_total_ordenada: Decimal = ZERO,
+    cantidad_total_recibida: Decimal = ZERO,
+    requisicion_id: str | None = None,
+    requisicion_folio: str | None = None,
+) -> PurchaseOrderItem:
+    cantidad_total_pendiente = max(Decimal(cantidad_total_ordenada) - Decimal(cantidad_total_recibida), ZERO)
     return PurchaseOrderItem(
         id=order.id,
         empresa_id=order.empresa_id,
@@ -823,6 +896,12 @@ def build_purchase_order_item(order: OrdenCompra, details_count: int) -> Purchas
         created_at=order.created_at,
         updated_at=order.updated_at,
         details_count=details_count,
+        cantidad_renglones=details_count,
+        cantidad_total_ordenada=Decimal(cantidad_total_ordenada),
+        cantidad_total_recibida=Decimal(cantidad_total_recibida),
+        cantidad_total_pendiente=cantidad_total_pendiente,
+        requisicion_id=requisicion_id,
+        requisicion_folio=requisicion_folio,
     )
 
 
@@ -832,10 +911,21 @@ def serialize_purchase_order_response(db: Session, order: OrdenCompra) -> Purcha
         .where(OrdenCompraDetalle.orden_compra_id == order.id)
         .order_by(OrdenCompraDetalle.id.asc())
     ).all()
-    summary = build_purchase_order_item(order, len(details))
+    total_ordenada = sum((Decimal(item.cantidad or ZERO) for item in details), start=ZERO)
+    total_recibida = sum((Decimal(item.cantidad_recibida or ZERO) for item in details), start=ZERO)
+    requisition = get_linked_purchase_requisition(order)
+    summary = build_purchase_order_item(
+        order,
+        len(details),
+        cantidad_total_ordenada=total_ordenada,
+        cantidad_total_recibida=total_recibida,
+        requisicion_id=requisition.id if requisition else None,
+        requisicion_folio=requisition.folio if requisition else None,
+    )
     return PurchaseOrderResponse(
         **summary.model_dump(),
         details=[serialize_purchase_order_detail(item) for item in details],
+        movements=list_purchase_order_movements(db, order.empresa_id, order.id),
     )
 
 
@@ -859,6 +949,8 @@ def list_purchase_orders(
     estatus: str | None = None,
     proveedor_id: str | None = None,
     almacen_destino_id: str | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
     limit: int = 25,
     offset: int = 0,
 ) -> tuple[int, list[PurchaseOrderItem]]:
@@ -870,6 +962,10 @@ def list_purchase_orders(
         id_query = id_query.where(OrdenCompra.proveedor_id == proveedor_id)
     if almacen_destino_id:
         id_query = id_query.where(OrdenCompra.almacen_destino_id == almacen_destino_id)
+    if fecha_desde:
+        id_query = id_query.where(OrdenCompra.created_at >= to_start_of_day(fecha_desde))
+    if fecha_hasta:
+        id_query = id_query.where(OrdenCompra.created_at <= to_end_of_day(fecha_hasta))
 
     total = count_rows(db, id_query)
     page_ids = db.scalars(
@@ -882,9 +978,25 @@ def list_purchase_orders(
         select(
             OrdenCompraDetalle.orden_compra_id.label("orden_compra_id"),
             func.count(OrdenCompraDetalle.id).label("detail_count"),
+            func.coalesce(func.sum(OrdenCompraDetalle.cantidad), 0).label("ordered_quantity"),
+            func.coalesce(func.sum(OrdenCompraDetalle.cantidad_recibida), 0).label("received_quantity"),
         )
         .where(OrdenCompraDetalle.orden_compra_id.in_(page_ids))
         .group_by(OrdenCompraDetalle.orden_compra_id)
+        .subquery()
+    )
+
+    requisition_subquery = (
+        select(
+            Requisicion.orden_compra_id.label("orden_compra_id"),
+            func.min(Requisicion.id).label("requisicion_id"),
+            func.min(Requisicion.folio).label("requisicion_folio"),
+        )
+        .where(
+            Requisicion.empresa_id == empresa_id,
+            Requisicion.orden_compra_id.in_(page_ids),
+        )
+        .group_by(Requisicion.orden_compra_id)
         .subquery()
     )
 
@@ -892,12 +1004,27 @@ def list_purchase_orders(
         select(
             OrdenCompra,
             func.coalesce(details_count_subquery.c.detail_count, 0).label("detail_count"),
+            func.coalesce(details_count_subquery.c.ordered_quantity, 0).label("ordered_quantity"),
+            func.coalesce(details_count_subquery.c.received_quantity, 0).label("received_quantity"),
+            requisition_subquery.c.requisicion_id,
+            requisition_subquery.c.requisicion_folio,
         )
         .outerjoin(details_count_subquery, details_count_subquery.c.orden_compra_id == OrdenCompra.id)
+        .outerjoin(requisition_subquery, requisition_subquery.c.orden_compra_id == OrdenCompra.id)
         .where(OrdenCompra.id.in_(page_ids))
         .order_by(desc(OrdenCompra.created_at), desc(OrdenCompra.id))
     ).all()
-    return total, [build_purchase_order_item(item, int(detail_count)) for item, detail_count in rows]
+    return total, [
+        build_purchase_order_item(
+            item,
+            int(detail_count),
+            cantidad_total_ordenada=Decimal(ordered_quantity or ZERO),
+            cantidad_total_recibida=Decimal(received_quantity or ZERO),
+            requisicion_id=requisicion_id,
+            requisicion_folio=requisicion_folio,
+        )
+        for item, detail_count, ordered_quantity, received_quantity, requisicion_id, requisicion_folio in rows
+    ]
 
 
 def ensure_unique_purchase_order_folio(db: Session, empresa_id: str, folio: str, order_id: str | None = None) -> None:
@@ -1270,6 +1397,54 @@ def issue_purchase_order(
     return serialize_purchase_order_response(db, order)
 
 
+def cancel_purchase_order(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    order_id: str,
+    ip_address: str | None,
+) -> PurchaseOrderResponse:
+    order = get_purchase_order_for_company(db, empresa.id, order_id, for_update=True)
+    if order.estatus == "cancelada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La orden de compra ya esta cancelada.",
+        )
+    if order.estatus not in {"borrador", "emitida"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo se pueden cancelar ordenes en borrador o emitidas sin recepcion.",
+        )
+
+    received_lines = db.scalar(
+        select(func.count(OrdenCompraDetalle.id)).where(
+            OrdenCompraDetalle.orden_compra_id == order.id,
+            OrdenCompraDetalle.cantidad_recibida > ZERO,
+        )
+    ) or 0
+    if received_lines > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se puede cancelar una orden que ya tiene recepciones aplicadas.",
+        )
+
+    order.estatus = "cancelada"
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="inventory.purchase_order.cancel",
+        entity_name="orden_compra",
+        entity_id=order.id,
+        ip_address=ip_address,
+        metadata_json={"estatus": order.estatus},
+    )
+    db.flush()
+    db.refresh(order)
+    return serialize_purchase_order_response(db, order)
+
+
 def receive_purchase_order(
     db: Session,
     *,
@@ -1277,6 +1452,8 @@ def receive_purchase_order(
     user: Usuario,
     order_id: str,
     items: list,
+    documento_referencia: str | None,
+    notas_recepcion: str | None,
     ip_address: str | None,
 ) -> PurchaseOrderResponse:
     order = get_purchase_order_for_company(db, empresa.id, order_id, for_update=True)
@@ -1318,6 +1495,14 @@ def receive_purchase_order(
         if receive_quantity <= ZERO:
             continue
 
+        movement_notes = "\n".join(
+            part
+            for part in [
+                f"Recepcion de orden {order.folio}",
+                normalize_optional_text(notas_recepcion),
+            ]
+            if part
+        )
         apply_inventory_movement(
             db,
             user=user,
@@ -1329,8 +1514,11 @@ def receive_purchase_order(
             cantidad_nueva=None,
             referencia_tipo="purchase_order_receive",
             referencia_id=order.id,
-            notas=f"Recepcion de orden {order.folio}",
+            notas=movement_notes or None,
             ip_address=ip_address,
+            motivo="Recepcion de compra",
+            recibido_por=user.full_name,
+            documento_referencia=documento_referencia,
             costo_unitario=detail.costo_unitario,
         )
         detail.cantidad_recibida = Decimal(detail.cantidad_recibida) + receive_quantity

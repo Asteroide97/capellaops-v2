@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
 import {
@@ -51,6 +51,7 @@ const defaultPurchaseOrderForm = {
 
 export default function RequisitionsPage() {
   const { token, empresaId } = useAuth();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -352,7 +353,12 @@ export default function RequisitionsPage() {
       });
       closePurchaseOrderModal();
       await Promise.all([loadRequisitionDocument(selectedRequisition.id), loadRequisitionList(filters)]);
-      setSuccess(`OC ${order.folio} creada en borrador.`);
+      navigate("/inventario/ordenes-compra", {
+        state: {
+          openOrderId: order.id,
+          successMessage: `OC ${order.folio} creada desde la requisición ${selectedRequisition.folio}.`,
+        },
+      });
     } catch (requestError) {
       setError(requestError.message || "No se pudo crear la orden de compra.");
     } finally {

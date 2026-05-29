@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 from typing import Callable, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -31,6 +32,7 @@ from app.services.inventory import get_warehouse_for_company, validate_inventory
 from app.services.procurement import (
     add_purchase_order_detail,
     add_requisition_detail,
+    cancel_purchase_order,
     change_requisition_status,
     create_purchase_order,
     create_purchase_order_from_requisition,
@@ -447,6 +449,8 @@ def get_purchase_orders(
     estatus: Literal["borrador", "emitida", "recibida_parcial", "recibida", "cancelada"] | None = None,
     proveedor_id: str | None = None,
     almacen_destino_id: str | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantContext = Depends(get_inventory_context),
@@ -463,6 +467,8 @@ def get_purchase_orders(
         estatus=estatus,
         proveedor_id=proveedor_id,
         almacen_destino_id=almacen_destino_id,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
         limit=limit,
         offset=offset,
     )
@@ -619,6 +625,26 @@ def issue_purchase_order_endpoint(
     )
 
 
+@router.post("/purchase-orders/{order_id}/cancel", response_model=PurchaseOrderResponse)
+def cancel_purchase_order_endpoint(
+    order_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> PurchaseOrderResponse:
+    return run_inventory_write(
+        db,
+        "cancel_purchase_order",
+        lambda: cancel_purchase_order(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            order_id=order_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
 @router.post("/purchase-orders/{order_id}/receive", response_model=PurchaseOrderResponse)
 def receive_purchase_order_endpoint(
     order_id: str,
@@ -636,6 +662,8 @@ def receive_purchase_order_endpoint(
             user=context.user,
             order_id=order_id,
             items=payload.items,
+            documento_referencia=payload.documento_referencia,
+            notas_recepcion=payload.notas,
             ip_address=request.client.host if request.client else None,
         ),
     )

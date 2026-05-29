@@ -151,6 +151,8 @@ class PurchaseOrderReceiveLineRequest(BaseModel):
 
 
 class PurchaseOrderReceiveRequest(BaseModel):
+    documento_referencia: str | None = Field(default=None, max_length=160)
+    notas: str | None = Field(default=None, max_length=2000)
     items: list[PurchaseOrderReceiveLineRequest] = Field(min_length=1)
 
 
@@ -163,9 +165,25 @@ class PurchaseOrderDetailItem(BaseModel):
     material_unidad: str
     cantidad: Decimal
     cantidad_recibida: Decimal
+    cantidad_pendiente: Decimal
     costo_unitario: Decimal
     subtotal_linea: Decimal
     total_linea: Decimal
+    estado_linea: str
+
+
+class PurchaseOrderMovementTraceItem(BaseModel):
+    id: str
+    created_at: datetime
+    tipo: str
+    material_id: str
+    material_sku: str
+    material_nombre: str
+    cantidad: Decimal
+    documento_referencia: str | None = None
+    notas: str | None = None
+    recibido_por: str | None = None
+    created_by_nombre: str | None = None
 
 
 class PurchaseOrderItem(BaseModel):
@@ -187,10 +205,17 @@ class PurchaseOrderItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     details_count: int
+    cantidad_renglones: int
+    cantidad_total_ordenada: Decimal
+    cantidad_total_recibida: Decimal
+    cantidad_total_pendiente: Decimal
+    requisicion_id: str | None = None
+    requisicion_folio: str | None = None
 
 
 class PurchaseOrderResponse(PurchaseOrderItem):
     details: list[PurchaseOrderDetailItem]
+    movements: list[PurchaseOrderMovementTraceItem]
 
 
 class PurchaseOrderListResponse(BaseModel):
