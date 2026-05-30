@@ -38,7 +38,7 @@ class Requisicion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         UniqueConstraint("empresa_id", "folio", name="uq_requisicion_empresa_folio"),
         CheckConstraint(
-            "estatus IN ('borrador', 'enviada', 'aprobada', 'rechazada', 'surtida', 'cancelada')",
+            "estatus IN ('borrador', 'enviada', 'aprobada', 'rechazada', 'cancelada', 'parcial', 'surtida', 'convertida_a_oc')",
             name="ck_requisicion_estatus",
         ),
     )
@@ -48,6 +48,9 @@ class Requisicion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     solicitante_user_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
     proveedor_sugerido_id: Mapped[str | None] = mapped_column(ForeignKey("proveedores.id"), nullable=True, index=True)
     orden_compra_id: Mapped[str | None] = mapped_column(ForeignKey("ordenes_compra.id"), nullable=True, index=True)
+    es_proyecto: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    proyecto_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    proyecto_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
     estatus: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -68,11 +71,18 @@ class RequisicionDetalle(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "requisiciones_detalles"
     __table_args__ = (
         CheckConstraint("cantidad > 0", name="ck_requisicion_detalle_cantidad_positive"),
+        CheckConstraint("cantidad_surtida >= 0", name="ck_requisicion_detalle_surtida_nonnegative"),
     )
 
     requisicion_id: Mapped[str] = mapped_column(ForeignKey("requisiciones.id"), nullable=False, index=True)
     material_id: Mapped[str] = mapped_column(ForeignKey("materiales.id"), nullable=False, index=True)
     cantidad: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    cantidad_surtida: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     requisicion = relationship("Requisicion", back_populates="detalles")

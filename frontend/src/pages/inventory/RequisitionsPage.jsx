@@ -1,7 +1,17 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import {
+  Boxes,
+  CheckCircle2,
+  Eye,
+  PackageCheck,
+  Pencil,
+  Plus,
+  Send,
+  ShoppingCart,
+  XCircle,
+} from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
 
-import { useAuth } from "../../auth/AuthContext";
 import {
   addRequisitionDetail,
   approveRequisition,
@@ -9,73 +19,263 @@ import {
   createPurchaseOrderFromRequisition,
   createRequisition,
   deleteRequisitionDetail,
+  fulfillRequisition,
   getMaterials,
   getRequisitionDetail,
-  getRequisitions,
   getSuppliers,
   getWarehouses,
+  listPmProjects,
+  listRequisitions,
   rejectRequisition,
   submitRequisition,
   updateRequisition,
   updateRequisitionDetail,
 } from "../../api/client";
+import { useAuth } from "../../auth/AuthContext";
 import {
   ActionButton,
+  DataCard,
+  DataTable,
   DEFAULT_PAGE_SIZE,
-  Field,
-  FormGrid,
   EmptyState,
-  formatDateTime,
-  formatNumber,
+  Field,
+  FilterCard,
+  FormGrid,
+  MetricCard,
   ModalShell,
-  normalizeDecimalInput,
+  PageHeader,
   PaginationControls,
   ResultMeta,
+  SearchInput,
   StatusBadge,
+  formatDate,
+  formatDateTime,
+  formatNumber,
+  normalizeDecimalInput,
+  safeDisplayText,
 } from "./shared";
 
 
 const defaultFilters = {
   q: "",
   estatus: "",
+  proveedor_sugerido_id: "",
+  proyecto: "",
+  fecha_desde: "",
+  fecha_hasta: "",
   limit: DEFAULT_PAGE_SIZE,
   offset: 0,
 };
 
-const defaultPurchaseOrderForm = {
+const emptyRequisitionForm = {
+  id: "",
+  folio: "",
+  notas: "",
+  proveedor_sugerido_id: "",
+  es_proyecto: false,
+  proyecto_id: "",
+  proyecto_nombre_snapshot: "",
+};
+
+const emptyPurchaseOrderForm = {
   proveedor_id: "",
   almacen_destino_id: "",
   folio: "",
 };
 
 
+function createLineId() {
+  return `line-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+
+function createEmptyLine(materialId = "") {
+  return {
+    clientId: createLineId(),
+    id: "",
+    material_id: materialId,
+    cantidad: "1",
+    notas: "",
+  };
+}
+
+
+function requisitionToForm(requisition) {
+  if (!requisition) {
+    return emptyRequisitionForm;
+  }
+
+  return {
+    id: requisition.id,
+    folio: requisition.folio ?? "",
+    notas: requisition.notas ?? "",
+    proveedor_sugerido_id: requisition.proveedor_sugerido_id ?? "",
+    es_proyecto: Boolean(requisition.es_proyecto),
+    proyecto_id: requisition.proyecto_id ?? "",
+    proyecto_nombre_snapshot: requisition.proyecto_nombre_snapshot ?? "",
+  };
+}
+
+
+function requisitionToLines(requisition) {
+  if (!requisition?.details?.length) {
+    return [];
+  }
+
+  return requisition.details.map((detail) => ({
+    clientId: createLineId(),
+    id: detail.id,
+    material_id: detail.material_id,
+    cantidad: String(detail.cantidad ?? ""),
+    notas: detail.notas ?? "",
+  }));
+}
+
+
+function getRequisitionStatusTone(status) {
+  const normalized = String(status ?? "").toLowerCase();
+  if (normalized === "aprobada") return "success";
+  if (normalized === "surtida") return "success";
+  if (normalized === "convertida_a_oc") return "info";
+  if (normalized === "enviada") return "info";
+  if (normalized === "parcial") return "warning";
+  if (normalized === "rechazada" || normalized === "cancelada") return "danger";
+  return "neutral";
+}
+
+
+function getRequisitionStatusLabel(status) {
+  const labels = {
+    borrador: "Borrador",
+    enviada: "Enviada",
+    aprobada: "Aprobada",
+    rechazada: "Rechazada",
+    cancelada: "Cancelada",
+    parcial: "Parcial",
+    surtida: "Surtida",
+    convertida_a_oc: "Convertida a OC",
+  };
+  return labels[status] ?? safeDisplayText(status);
+}
+
+
+function getLineStateLabel(status) {
+  const labels = {
+    pendiente: "Pendiente",
+    parcial: "Parcial",
+    surtido: "Surtido",
+  };
+  return labels[status] ?? safeDisplayText(status);
+}
+
+
+function getDetailPending(detail) {
+  return Number(detail?.cantidad_pendiente ?? 0);
+}
+
+
+function canSubmitRequisition(requisition) {
+  return requisition?.estatus === "borrador";
+}
+
+
+function canApproveRequisition(requisition) {
+  return requisition?.estatus === "enviada";
+}
+
+
+function canRejectRequisition(requisition) {
+  return requisition?.estatus === "enviada";
+}
+
+
+function canCancelRequisition(requisition) {
+  if (!requisition) {
+    return false;
+  }
+
+  if (!["borrador", "enviada", "aprobada"].includes(requisition.estatus)) {
+    return false;
+  }
+
+  return Number(requisition.cantidad_total_surtida ?? 0) <= 0 && !requisition.orden_compra_id;
+}
+
+
+function canFulfillRequisition(requisition) {
+  if (!requisition) {
+    return false;
+  }
+  return ["aprobada", "parcial"].includes(requisition.estatus) && !requisition.orden_compra_id && Number(requisition.cantidad_total_pendiente ?? 0) > 0;
+}
+
+
+function canCreatePurchaseOrder(requisition) {
+  if (!requisition) {
+    return false;
+  }
+  return ["aprobada", "parcial"].includes(requisition.estatus) && !requisition.orden_compra_id && Number(requisition.cantidad_total_pendiente ?? 0) > 0;
+}
+
+
+function getWarehouseStock(detail, warehouseId) {
+  const match = detail?.stock_por_almacen?.find((item) => item.almacen_id === warehouseId);
+  return Number(match?.stock_actual ?? 0);
+}
+
+
+function buildDefaultFulfillItems(details, warehouseId) {
+  const mapped = {};
+  for (const detail of details ?? []) {
+    const pending = Number(detail.cantidad_pendiente ?? 0);
+    const available = getWarehouseStock(detail, warehouseId);
+    const suggested = pending > 0 ? Math.min(pending, available) : 0;
+    mapped[detail.id] = suggested > 0 ? String(suggested) : "";
+  }
+  return mapped;
+}
+
+
+function formatCompactNumber(value) {
+  return formatNumber(Number(value ?? 0));
+}
+
+
 export default function RequisitionsPage() {
-  const { token, empresaId } = useAuth();
+  const location = useLocation();
   const navigate = useNavigate();
+  const { token, empresaId, membership } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [filters, setFilters] = useState(defaultFilters);
+  const [requisitions, setRequisitions] = useState([]);
+  const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
   const [materials, setMaterials] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
-  const [requisitions, setRequisitions] = useState([]);
-  const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
-  const [filters, setFilters] = useState(defaultFilters);
+  const [projects, setProjects] = useState([]);
+  const [projectLookupAvailable, setProjectLookupAvailable] = useState(false);
   const [selectedRequisition, setSelectedRequisition] = useState(null);
-  const [purchaseOrderModalOpen, setPurchaseOrderModalOpen] = useState(false);
-  const [purchaseOrderForm, setPurchaseOrderForm] = useState(defaultPurchaseOrderForm);
-  const [form, setForm] = useState({
-    id: "",
-    folio: "",
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [fulfillOpen, setFulfillOpen] = useState(false);
+  const [purchaseOrderOpen, setPurchaseOrderOpen] = useState(false);
+  const [form, setForm] = useState(emptyRequisitionForm);
+  const [lines, setLines] = useState([]);
+  const [materialSearch, setMaterialSearch] = useState("");
+  const [purchaseOrderForm, setPurchaseOrderForm] = useState(emptyPurchaseOrderForm);
+  const [fulfillForm, setFulfillForm] = useState({
+    almacen_id: "",
+    documento_referencia: "",
     notas: "",
+    proyecto_id: "",
+    proyecto_nombre_snapshot: "",
+    items: {},
   });
-  const [detailForm, setDetailForm] = useState({
-    id: "",
-    material_id: "",
-    cantidad: "",
-    notas: "",
-  });
+
+  const isManager = ["owner", "admin"].includes(membership?.role ?? "");
 
   async function loadOptions() {
     const [materialResponse, supplierResponse, warehouseResponse] = await Promise.all([
@@ -95,59 +295,77 @@ export default function RequisitionsPage() {
         filters: { activo: true, limit: 100, offset: 0 },
       }),
     ]);
-    setMaterials(materialResponse.items);
-    setSuppliers(supplierResponse.items);
-    setWarehouses(warehouseResponse.items);
-    return {
-      materialItems: materialResponse.items,
-      supplierItems: supplierResponse.items,
-      warehouseItems: warehouseResponse.items,
-    };
+
+    setMaterials(materialResponse.items ?? []);
+    setSuppliers(supplierResponse.items ?? []);
+    setWarehouses(warehouseResponse.items ?? []);
+
+    try {
+      const projectResponse = await listPmProjects({
+        token,
+        empresaId,
+        filters: { activo: true, estatus: "activo", limit: 100, offset: 0 },
+      });
+      setProjects(projectResponse.items ?? []);
+      setProjectLookupAvailable(true);
+    } catch {
+      setProjects([]);
+      setProjectLookupAvailable(false);
+    }
   }
 
   async function loadRequisitionList(nextFilters = filters) {
-    const response = await getRequisitions({ token, empresaId, filters: nextFilters });
-    setRequisitions(response.items);
+    const response = await listRequisitions({ token, empresaId, filters: nextFilters });
+    setRequisitions(response.items ?? []);
     setMeta({
-      total: response.total,
-      limit: response.limit,
-      offset: response.offset,
+      total: response.total ?? 0,
+      limit: response.limit ?? nextFilters.limit,
+      offset: response.offset ?? nextFilters.offset,
     });
+    return response.items ?? [];
   }
 
   async function loadRequisitionDocument(requisitionId) {
     const response = await getRequisitionDetail({ requisitionId, token, empresaId });
     setSelectedRequisition(response);
-    setForm({
-      id: response.id,
-      folio: response.folio,
-      notas: response.notas || "",
-    });
     return response;
   }
 
-  function resetForm() {
-    setForm({
-      id: "",
-      folio: "",
-      notas: "",
-    });
-    setSelectedRequisition(null);
-    resetDetailForm();
+  function resetFeedback() {
+    setError("");
+    setSuccess("");
   }
 
-  function closePurchaseOrderModal() {
-    setPurchaseOrderModalOpen(false);
-    setPurchaseOrderForm(defaultPurchaseOrderForm);
+  function resetEditorState() {
+    setForm(emptyRequisitionForm);
+    setLines([]);
+    setMaterialSearch("");
   }
 
-  function resetDetailForm() {
-    setDetailForm({
-      id: "",
-      material_id: materials[0]?.id || "",
-      cantidad: "",
+  function closeEditor() {
+    setEditorOpen(false);
+    resetEditorState();
+  }
+
+  function closeDetail() {
+    setDetailOpen(false);
+  }
+
+  function closeFulfill() {
+    setFulfillOpen(false);
+    setFulfillForm({
+      almacen_id: "",
+      documento_referencia: "",
       notas: "",
+      proyecto_id: "",
+      proyecto_nombre_snapshot: "",
+      items: {},
     });
+  }
+
+  function closePurchaseOrder() {
+    setPurchaseOrderOpen(false);
+    setPurchaseOrderForm(emptyPurchaseOrderForm);
   }
 
   useEffect(() => {
@@ -157,17 +375,9 @@ export default function RequisitionsPage() {
       }
 
       setLoading(true);
-      setError("");
+      resetFeedback();
       try {
-        const options = await loadOptions();
-        if (options.materialItems.length > 0) {
-          setDetailForm((current) => ({ ...current, material_id: current.material_id || options.materialItems[0].id }));
-        }
-        setPurchaseOrderForm((current) => ({
-          ...current,
-          proveedor_id: current.proveedor_id || options.supplierItems[0]?.id || "",
-          almacen_destino_id: current.almacen_destino_id || options.warehouseItems[0]?.id || "",
-        }));
+        await loadOptions();
         await loadRequisitionList(defaultFilters);
       } catch (requestError) {
         setError(requestError.message || "No se pudieron cargar las requisiciones.");
@@ -179,157 +389,314 @@ export default function RequisitionsPage() {
     bootstrap();
   }, [token, empresaId]);
 
-  async function handleSubmit(event) {
-    event.preventDefault();
-    setSubmitting(true);
-    setError("");
-    setSuccess("");
+  useEffect(() => {
+    const openRequisitionId = location.state?.openRequisitionId;
+    const successMessage = location.state?.successMessage;
+    if (!openRequisitionId || !token || !empresaId) {
+      return;
+    }
+
+    async function openFromNavigation() {
+      try {
+        const document = await loadRequisitionDocument(openRequisitionId);
+        setSelectedRequisition(document);
+        setDetailOpen(true);
+        if (successMessage) {
+          setSuccess(successMessage);
+        }
+      } catch (requestError) {
+        setError(requestError.message || "No se pudo abrir la requisicion.");
+      } finally {
+        navigate(location.pathname, { replace: true, state: null });
+      }
+    }
+
+    openFromNavigation();
+  }, [location.state, token, empresaId, navigate, location.pathname]);
+
+  const filteredMaterials = useMemo(() => {
+    const normalized = materialSearch.trim().toLowerCase();
+    const selectedMaterialIds = new Set(lines.map((line) => line.material_id));
+    return materials.filter((material) => {
+      if (!material.activo) {
+        return false;
+      }
+      const matchesSearch =
+        !normalized ||
+        [material.nombre, material.sku, material.codigo_barras, material.categoria]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(normalized));
+      if (!matchesSearch) {
+        return false;
+      }
+      return !selectedMaterialIds.has(material.id);
+    });
+  }, [lines, materialSearch, materials]);
+
+  const requisitionCounts = useMemo(() => {
+    const counts = {
+      borrador: 0,
+      enviada: 0,
+      aprobada: 0,
+      parcial: 0,
+      surtida: 0,
+      convertida_a_oc: 0,
+    };
+    for (const requisition of requisitions) {
+      if (counts[requisition.estatus] !== undefined) {
+        counts[requisition.estatus] += 1;
+      }
+    }
+    return counts;
+  }, [requisitions]);
+
+  const totalPending = useMemo(
+    () => requisitions.reduce((accumulator, item) => accumulator + Number(item.cantidad_total_pendiente ?? 0), 0),
+    [requisitions],
+  );
+
+  function addLineFromMaterial(materialId) {
+    if (!materialId) {
+      return;
+    }
+    setLines((current) => [...current, createEmptyLine(materialId)]);
+    setMaterialSearch("");
+  }
+
+  function updateLine(clientId, field, value) {
+    setLines((current) =>
+      current.map((line) => (line.clientId === clientId ? { ...line, [field]: value } : line)),
+    );
+  }
+
+  function removeLine(clientId) {
+    setLines((current) => current.filter((line) => line.clientId !== clientId));
+  }
+
+  function openCreateEditor() {
+    resetFeedback();
+    resetEditorState();
+    setForm({
+      ...emptyRequisitionForm,
+      proveedor_sugerido_id: suppliers[0]?.id ?? "",
+    });
+    setEditorOpen(true);
+  }
+
+  async function openEditEditor(requisitionId) {
+    resetFeedback();
+    setSaving(true);
     try {
+      const document = await loadRequisitionDocument(requisitionId);
+      setForm(requisitionToForm(document));
+      setLines(requisitionToLines(document));
+      setEditorOpen(true);
+      setDetailOpen(false);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo cargar la requisicion para edicion.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openDetailModal(requisitionId) {
+    resetFeedback();
+    setSaving(true);
+    try {
+      const document = await loadRequisitionDocument(requisitionId);
+      setSelectedRequisition(document);
+      setDetailOpen(true);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo cargar el detalle de la requisicion.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function syncRequisitionLines(requisitionId, currentDetails, nextLines) {
+    const existingIds = new Set((currentDetails ?? []).map((detail) => detail.id));
+    const nextExistingIds = new Set(nextLines.filter((line) => line.id).map((line) => line.id));
+
+    for (const detail of currentDetails ?? []) {
+      if (!nextExistingIds.has(detail.id)) {
+        await deleteRequisitionDetail({
+          requisitionId,
+          detailId: detail.id,
+          token,
+          empresaId,
+        });
+      }
+    }
+
+    for (const line of nextLines) {
       const payload = {
-        folio: form.folio || null,
-        notas: form.notas || null,
+        material_id: line.material_id,
+        cantidad: Number(line.cantidad),
+        notas: line.notas.trim() || null,
       };
-      const response = form.id
-        ? await updateRequisition({ requisitionId: form.id, token, empresaId, payload })
-        : await createRequisition({ token, empresaId, payload });
-      setSelectedRequisition(response);
-      setForm({
-        id: response.id,
-        folio: response.folio,
-        notas: response.notas || "",
-      });
-      await loadRequisitionList(filters);
-      setSuccess(form.id ? "Requisición actualizada." : "Requisición creada en borrador.");
-      resetDetailForm();
-    } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar la requisición.");
-    } finally {
-      setSubmitting(false);
+
+      if (line.id && existingIds.has(line.id)) {
+        await updateRequisitionDetail({
+          requisitionId,
+          detailId: line.id,
+          token,
+          empresaId,
+          payload,
+        });
+      } else {
+        await addRequisitionDetail({
+          requisitionId,
+          token,
+          empresaId,
+          payload,
+        });
+      }
     }
   }
 
-  async function handleDetailSubmit(event) {
-    event.preventDefault();
-    if (!selectedRequisition) {
-      setError("Primero crea o selecciona una requisición.");
+  function buildHeaderPayload() {
+    return {
+      folio: form.folio.trim() || null,
+      notas: form.notas.trim() || null,
+      proveedor_sugerido_id: form.proveedor_sugerido_id || "",
+      es_proyecto: Boolean(form.es_proyecto),
+      proyecto_id: form.es_proyecto ? form.proyecto_id || "" : "",
+      proyecto_nombre_snapshot: form.es_proyecto ? form.proyecto_nombre_snapshot.trim() || "" : "",
+    };
+  }
+
+  async function handleSave(mode = "draft") {
+    const invalidLine = lines.find(
+      (line) => !line.material_id || Number(line.cantidad) <= 0 || Number.isNaN(Number(line.cantidad)),
+    );
+    if (invalidLine) {
+      setError("Cada renglon debe tener material y una cantidad valida.");
+      return;
+    }
+    if (mode === "submit" && lines.length === 0) {
+      setError("Debes agregar al menos un material antes de enviar la requisicion.");
       return;
     }
 
-    setSubmitting(true);
-    setError("");
-    setSuccess("");
+    setSaving(true);
+    resetFeedback();
+    let requisitionId = form.id;
     try {
-      const payload = {
-        material_id: detailForm.material_id,
-        cantidad: detailForm.cantidad,
-        notas: detailForm.notas || null,
+      let headerResponse;
+      const payload = buildHeaderPayload();
+
+      if (form.id) {
+        headerResponse = await updateRequisition({
+          requisitionId: form.id,
+          token,
+          empresaId,
+          payload,
+        });
+      } else {
+        headerResponse = await createRequisition({
+          token,
+          empresaId,
+          payload,
+        });
+        requisitionId = headerResponse.id;
+      }
+
+      await syncRequisitionLines(requisitionId, headerResponse.details ?? [], lines);
+
+      if (mode === "submit") {
+        await submitRequisition({ requisitionId, token, empresaId });
+      }
+
+      const refreshed = await loadRequisitionDocument(requisitionId);
+      setSelectedRequisition(refreshed);
+      setDetailOpen(true);
+      closeEditor();
+      await loadRequisitionList(filters);
+      setSuccess(mode === "submit" ? "Requisicion registrada y enviada." : form.id ? "Requisicion actualizada." : "Requisicion creada en borrador.");
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo guardar la requisicion.");
+      if (requisitionId) {
+        try {
+          const partial = await loadRequisitionDocument(requisitionId);
+          setSelectedRequisition(partial);
+        } catch {
+          // noop
+        }
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleStatusChange(action, requisitionId) {
+    setSaving(true);
+    resetFeedback();
+    try {
+      const handlers = {
+        submit: submitRequisition,
+        approve: approveRequisition,
+        reject: rejectRequisition,
+        cancel: cancelRequisition,
       };
-      const response = detailForm.id
-        ? await updateRequisitionDetail({
-            requisitionId: selectedRequisition.id,
-            detailId: detailForm.id,
-            token,
-            empresaId,
-            payload,
-          })
-        : await addRequisitionDetail({
-            requisitionId: selectedRequisition.id,
-            token,
-            empresaId,
-            payload,
-          });
+      const response = await handlers[action]({ requisitionId, token, empresaId });
       setSelectedRequisition(response);
-      await loadRequisitionList(filters);
-      setSuccess(detailForm.id ? "Detalle actualizado." : "Detalle agregado.");
-      resetDetailForm();
-    } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar el detalle.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleDeleteDetail(detailId) {
-    if (!selectedRequisition) {
-      return;
-    }
-
-    setSubmitting(true);
-    setError("");
-    setSuccess("");
-    try {
-      const response = await deleteRequisitionDetail({
-        requisitionId: selectedRequisition.id,
-        detailId,
-        token,
-        empresaId,
-      });
-      setSelectedRequisition(response);
-      await loadRequisitionList(filters);
-      setSuccess("Detalle eliminado.");
-      resetDetailForm();
-    } catch (requestError) {
-      setError(requestError.message || "No se pudo eliminar el detalle.");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function handleStatusAction(action) {
-    if (!selectedRequisition) {
-      return;
-    }
-
-    setSubmitting(true);
-    setError("");
-    setSuccess("");
-    try {
-      const handler =
-        action === "submit"
-          ? submitRequisition
-          : action === "approve"
-            ? approveRequisition
-            : action === "reject"
-              ? rejectRequisition
-              : cancelRequisition;
-
-      const response = await handler({
-        requisitionId: selectedRequisition.id,
-        token,
-        empresaId,
-      });
-      setSelectedRequisition(response);
+      if (detailOpen && selectedRequisition?.id === requisitionId) {
+        setSelectedRequisition(response);
+      }
       await loadRequisitionList(filters);
       setSuccess(
         action === "submit"
-          ? "Requisición enviada."
+          ? "Requisicion enviada."
           : action === "approve"
-            ? "Requisición aprobada."
+            ? "Requisicion aprobada."
             : action === "reject"
-              ? "Requisición rechazada."
-              : "Requisición cancelada.",
+              ? "Requisicion rechazada."
+              : "Requisicion cancelada.",
       );
+      return response;
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cambiar el estatus.");
+      setError(requestError.message || "No se pudo cambiar el estatus de la requisicion.");
+      return null;
     } finally {
-      setSubmitting(false);
+      setSaving(false);
     }
   }
 
-  function openPurchaseOrderModal() {
-    if (!selectedRequisition) {
-      return;
-    }
-
+  function openPurchaseOrderModal(requisition) {
+    resetFeedback();
+    setSelectedRequisition(requisition);
     setPurchaseOrderForm({
-      proveedor_id:
-        selectedRequisition.proveedor_sugerido_id || suppliers[0]?.id || "",
+      proveedor_id: requisition.proveedor_sugerido_id || suppliers[0]?.id || "",
       almacen_destino_id: warehouses[0]?.id || "",
       folio: "",
     });
-    setPurchaseOrderModalOpen(true);
-    setError("");
-    setSuccess("");
+    setPurchaseOrderOpen(true);
+  }
+
+  async function openFulfillFromList(requisitionId) {
+    setSaving(true);
+    resetFeedback();
+    try {
+      const document = await loadRequisitionDocument(requisitionId);
+      openFulfillModal(document);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo preparar el surtido.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function openPurchaseOrderFromList(requisitionId) {
+    setSaving(true);
+    resetFeedback();
+    try {
+      const document = await loadRequisitionDocument(requisitionId);
+      openPurchaseOrderModal(document);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo preparar la orden de compra.");
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function handleCreatePurchaseOrder() {
@@ -337,9 +704,8 @@ export default function RequisitionsPage() {
       return;
     }
 
-    setSubmitting(true);
-    setError("");
-    setSuccess("");
+    setSaving(true);
+    resetFeedback();
     try {
       const order = await createPurchaseOrderFromRequisition({
         requisitionId: selectedRequisition.id,
@@ -348,21 +714,133 @@ export default function RequisitionsPage() {
         payload: {
           proveedor_id: purchaseOrderForm.proveedor_id,
           almacen_destino_id: purchaseOrderForm.almacen_destino_id,
-          folio: purchaseOrderForm.folio || null,
+          folio: purchaseOrderForm.folio.trim() || null,
         },
       });
-      closePurchaseOrderModal();
+      closePurchaseOrder();
       await Promise.all([loadRequisitionDocument(selectedRequisition.id), loadRequisitionList(filters)]);
       navigate("/inventario/ordenes-compra", {
         state: {
           openOrderId: order.id,
-          successMessage: `OC ${order.folio} creada desde la requisición ${selectedRequisition.folio}.`,
+          successMessage: `OC ${order.folio} creada desde la requisicion ${selectedRequisition.folio}.`,
         },
       });
     } catch (requestError) {
       setError(requestError.message || "No se pudo crear la orden de compra.");
     } finally {
-      setSubmitting(false);
+      setSaving(false);
+    }
+  }
+
+  function openFulfillModal(requisition) {
+    const defaultWarehouseId = warehouses[0]?.id || "";
+    setSelectedRequisition(requisition);
+    setFulfillForm({
+      almacen_id: defaultWarehouseId,
+      documento_referencia: "",
+      notas: "",
+      proyecto_id: requisition.proyecto_id || "",
+      proyecto_nombre_snapshot: requisition.proyecto_nombre_snapshot || "",
+      items: buildDefaultFulfillItems(requisition.details ?? [], defaultWarehouseId),
+    });
+    setFulfillOpen(true);
+  }
+
+  async function handleApproveAndFulfill(requisition) {
+    const approved = await handleStatusChange("approve", requisition.id);
+    if (approved) {
+      openFulfillModal(approved);
+    }
+  }
+
+  async function handleFulfillSubmit() {
+    if (!selectedRequisition) {
+      return;
+    }
+
+    const payloadItems = (selectedRequisition.details ?? [])
+      .map((detail) => {
+        const quantity = Number(fulfillForm.items[detail.id] ?? 0);
+        const pending = Number(detail.cantidad_pendiente ?? 0);
+        const available = getWarehouseStock(detail, fulfillForm.almacen_id);
+        return {
+          detail,
+          quantity,
+          pending,
+          available,
+        };
+      })
+      .filter((entry) => entry.quantity > 0);
+
+    if (!fulfillForm.almacen_id) {
+      setError("Selecciona un almacen origen para surtir.");
+      return;
+    }
+    if (payloadItems.length === 0) {
+      setError("Debes capturar al menos una cantidad valida para surtir.");
+      return;
+    }
+
+    const invalid = payloadItems.find(
+      (entry) => entry.quantity > entry.pending || entry.quantity > entry.available,
+    );
+    if (invalid) {
+      setError("Una o mas cantidades exceden lo pendiente o el stock disponible.");
+      return;
+    }
+
+    setSaving(true);
+    resetFeedback();
+    try {
+      const response = await fulfillRequisition({
+        requisitionId: selectedRequisition.id,
+        token,
+        empresaId,
+        payload: {
+          almacen_id: fulfillForm.almacen_id,
+          documento_referencia: fulfillForm.documento_referencia.trim() || null,
+          notas: fulfillForm.notas.trim() || null,
+          proyecto_id: fulfillForm.proyecto_id.trim() || null,
+          proyecto_nombre_snapshot: fulfillForm.proyecto_nombre_snapshot.trim() || null,
+          items: payloadItems.map((entry) => ({
+            detail_id: entry.detail.id,
+            cantidad_surtir: entry.quantity,
+          })),
+        },
+      });
+      setSelectedRequisition(response);
+      closeFulfill();
+      setDetailOpen(true);
+      await loadRequisitionList(filters);
+      setSuccess("Requisicion surtida e inventario actualizado.");
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo surtir la requisicion.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleFilterSubmit(event) {
+    event.preventDefault();
+    const nextFilters = { ...filters, offset: 0 };
+    setFilters(nextFilters);
+    try {
+      await loadRequisitionList(nextFilters);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudieron aplicar los filtros.");
+    }
+  }
+
+  async function handlePaginate(direction) {
+    const nextFilters = {
+      ...filters,
+      offset: direction === "next" ? meta.offset + meta.limit : Math.max(0, meta.offset - meta.limit),
+    };
+    setFilters(nextFilters);
+    try {
+      await loadRequisitionList(nextFilters);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo cambiar la pagina.");
     }
   }
 
@@ -370,402 +848,70 @@ export default function RequisitionsPage() {
     return <div className="screen-center">Cargando requisiciones...</div>;
   }
 
-  const selectedIsDraft = selectedRequisition?.estatus === "borrador";
-  const selectedIsSent = selectedRequisition?.estatus === "enviada";
-
   return (
-    <div className="inventory-grid">
-      <div className="inventory-kardex-stack">
-        <form className="feature-card inventory-form-card" onSubmit={handleSubmit}>
-          <div className="feature-header">
-            <p className="eyebrow">Compras internas</p>
-            <h2>{form.id ? "Editar requisición" : "Crear requisición"}</h2>
-            <p>Documenta solicitudes internas antes de convertirlas en compra o surtido.</p>
-          </div>
+    <div className="inventory-shell inventory-screen">
+      <PageHeader
+        eyebrow="Inventario operativo"
+        title="Requisiciones"
+        subtitle="Solicitudes internas de materiales para surtido o compra."
+        actions={
+          <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateEditor} tone="primary" type="button">
+            Nueva requisicion
+          </ActionButton>
+        }
+      />
 
-          {error ? <p className="form-error">{error}</p> : null}
-          {success ? <p className="form-success">{success}</p> : null}
-
-          <div className="inventory-form-grid">
-            <label>
-              Folio
-              <input
-                onChange={(event) => setForm((current) => ({ ...current, folio: event.target.value.toUpperCase() }))}
-                placeholder="Auto"
-                type="text"
-                value={form.folio}
-              />
-            </label>
-
-            <label>
-              Estatus
-              <input disabled type="text" value={selectedRequisition?.estatus || "borrador"} />
-            </label>
-
-            <label className="inventory-form-span-2">
-              Notas
-              <textarea
-                onChange={(event) => setForm((current) => ({ ...current, notas: event.target.value }))}
-                rows={3}
-                value={form.notas}
-              />
-            </label>
-          </div>
-
-          <div className="inventory-actions">
-            <button className="primary-button" disabled={submitting} type="submit">
-              {submitting ? "Guardando..." : form.id ? "Actualizar requisición" : "Crear requisición"}
-            </button>
-            <button className="ghost-button" onClick={resetForm} type="button">
-              Nueva requisición
-            </button>
-            {selectedRequisition && selectedIsDraft ? (
-              <button className="ghost-button" disabled={submitting} onClick={() => handleStatusAction("submit")} type="button">
-                Enviar
-              </button>
-            ) : null}
-            {selectedRequisition && selectedIsSent ? (
-              <>
-                <button className="ghost-button" disabled={submitting} onClick={() => handleStatusAction("approve")} type="button">
-                  Aprobar
-                </button>
-                <button className="ghost-button" disabled={submitting} onClick={() => handleStatusAction("reject")} type="button">
-                  Rechazar
-                </button>
-              </>
-            ) : null}
-            {selectedRequisition && ["borrador", "enviada", "aprobada"].includes(selectedRequisition.estatus) ? (
-              <button className="ghost-button" disabled={submitting} onClick={() => handleStatusAction("cancel")} type="button">
-                Cancelar
-              </button>
-            ) : null}
-            {selectedRequisition?.estatus === "aprobada" && !selectedRequisition?.orden_compra_id ? (
-              <button className="ghost-button" disabled={submitting} onClick={openPurchaseOrderModal} type="button">
-                Crear OC
-              </button>
-            ) : null}
-            {selectedRequisition?.orden_compra_folio ? (
-              <Link className="ghost-button inventory-button inventory-button-ghost inventory-button-sm" to="/inventario/ordenes-compra">
-                OC creada
-              </Link>
-            ) : null}
-          </div>
-          {selectedRequisition?.proveedor_sugerido_nombre ? (
-            <p className="table-note">Proveedor sugerido: {selectedRequisition.proveedor_sugerido_nombre}</p>
-          ) : null}
-          {selectedRequisition?.orden_compra_folio ? (
-            <p className="table-note">Orden vinculada: {selectedRequisition.orden_compra_folio}</p>
-          ) : null}
-        </form>
-
-        <div className="feature-card inventory-table-card">
-          <div className="feature-header">
-            <p className="eyebrow">Detalle</p>
-            <h2>Materiales solicitados</h2>
-            {selectedRequisition ? <p className="table-note">{selectedRequisition.folio}</p> : null}
-          </div>
-
-          {!selectedRequisition ? (
-            <EmptyState
-              title="Sin requisición activa."
-              note="Crea una requisición o abre un borrador para agregar materiales."
-            />
-          ) : (
-            <>
-              {selectedIsDraft ? (
-                <form className="inventory-filter-grid" onSubmit={handleDetailSubmit}>
-                  <label>
-                    Material
-                    <select
-                      onChange={(event) => setDetailForm((current) => ({ ...current, material_id: event.target.value }))}
-                      required
-                      value={detailForm.material_id}
-                    >
-                      {materials.map((material) => (
-                        <option key={material.id} value={material.id}>
-                          {material.sku} - {material.nombre}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-
-                  <label>
-                    Cantidad
-                    <input
-                      min="0.0001"
-                      onChange={(event) =>
-                        setDetailForm((current) => ({
-                          ...current,
-                          cantidad: normalizeDecimalInput(event.target.value),
-                        }))
-                      }
-                      required
-                      step="0.0001"
-                      type="number"
-                      value={detailForm.cantidad}
-                    />
-                  </label>
-
-                  <label className="inventory-form-span-2">
-                    Notas
-                    <textarea
-                      onChange={(event) => setDetailForm((current) => ({ ...current, notas: event.target.value }))}
-                      rows={2}
-                      value={detailForm.notas}
-                    />
-                  </label>
-
-                  <div className="inventory-actions">
-                    <button className="ghost-button" disabled={submitting} type="submit">
-                      {detailForm.id ? "Actualizar detalle" : "Agregar material"}
-                    </button>
-                    {detailForm.id ? (
-                      <button className="ghost-button" onClick={resetDetailForm} type="button">
-                        Cancelar edición
-                      </button>
-                    ) : null}
-                  </div>
-                </form>
-              ) : (
-                <EmptyState
-                  title="Requisición cerrada."
-                  note="En esta fase solo se permite editar requisiciones en borrador."
-                />
-              )}
-
-              {selectedRequisition.details.length === 0 ? (
-                <EmptyState
-                  title="Sin materiales."
-                  note="Agrega al menos un material antes de enviar la requisición."
-                />
-              ) : (
-                <div className="table-wrap">
-                  <table className="inventory-table">
-                    <thead>
-                      <tr>
-                        <th>SKU</th>
-                        <th>Material</th>
-                        <th>Cantidad</th>
-                        <th>Notas</th>
-                        <th>Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {selectedRequisition.details.map((detail) => (
-                        <tr key={detail.id}>
-                          <td>{detail.material_sku}</td>
-                          <td>
-                            <strong>{detail.material_nombre}</strong>
-                            <div className="table-note">{detail.material_unidad}</div>
-                          </td>
-                          <td>{formatNumber(detail.cantidad)}</td>
-                          <td>{detail.notas || "Sin notas"}</td>
-                          <td className="inventory-row-actions">
-                            {selectedIsDraft ? (
-                              <>
-                                <button
-                                  className="link-button"
-                                  onClick={() =>
-                                    setDetailForm({
-                                      id: detail.id,
-                                      material_id: detail.material_id,
-                                      cantidad: String(detail.cantidad),
-                                      notas: detail.notas || "",
-                                    })
-                                  }
-                                  type="button"
-                                >
-                                  Editar
-                                </button>
-                                <button className="link-button" onClick={() => handleDeleteDetail(detail.id)} type="button">
-                                  Eliminar
-                                </button>
-                              </>
-                            ) : (
-                              <span className="table-note">Solo lectura</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </>
-          )}
+      {(error || success) && (
+        <div className={`inventory-form-note ${error ? "inventory-form-note-danger" : "inventory-form-note-success"}`}>
+          <strong>{error ? "No se pudo completar la operacion" : "Operacion completada"}</strong>
+          <p className="table-note">{error || success}</p>
         </div>
-      </div>
+      )}
 
-      <div className="feature-card inventory-table-card">
-        <div className="feature-header">
-          <p className="eyebrow">Listado</p>
-          <h2>Requisiciones registradas</h2>
-          <ResultMeta label="requisiciones" loaded={requisitions.length} total={meta.total} />
-        </div>
+      <section className="inventory-metric-grid inventory-metric-grid-4">
+        <MetricCard icon={<ClipboardListIcon />} label="Borradores" meta="Pendientes de enviar" tone="neutral" value={requisitionCounts.borrador} />
+        <MetricCard icon={<Send size={18} strokeWidth={1.9} />} label="Pendientes de aprobacion" meta="Enviadas" tone="info" value={requisitionCounts.enviada} />
+        <MetricCard icon={<CheckCircle2 size={18} strokeWidth={1.9} />} label="Aprobadas" meta="Listas para surtir u OC" tone="success" value={requisitionCounts.aprobada} />
+        <MetricCard icon={<PackageCheck size={18} strokeWidth={1.9} />} label="Parciales" meta="Surtido parcial" tone="warning" value={requisitionCounts.parcial} />
+        <MetricCard icon={<Boxes size={18} strokeWidth={1.9} />} label="Surtidas" meta="Cerradas desde inventario" tone="success" value={requisitionCounts.surtida} />
+        <MetricCard icon={<ShoppingCart size={18} strokeWidth={1.9} />} label="Convertidas a OC" meta="Con compra vinculada" tone="info" value={requisitionCounts.convertida_a_oc} />
+        <MetricCard icon={<Boxes size={18} strokeWidth={1.9} />} label="Pendiente" meta="Unidades aun sin surtir" tone="warning" value={formatCompactNumber(totalPending)} />
+      </section>
 
-        <form
-          className="inventory-filter-grid"
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const nextFilters = { ...filters, offset: 0 };
-            setFilters(nextFilters);
-            try {
-              await loadRequisitionList(nextFilters);
-            } catch (requestError) {
-              setError(requestError.message || "No se pudieron filtrar las requisiciones.");
-            }
-          }}
-        >
-          <label>
-            Buscar
-            <input
+      <FilterCard title="Filtros" subtitle="Busqueda operativa de solicitudes.">
+        <form className="inventory-filter-toolbar" onSubmit={handleFilterSubmit}>
+          <div className="inventory-toolbar-grid">
+            <SearchInput
+              action={
+                <ActionButton size="sm" tone="primary" type="submit">
+                  Buscar
+                </ActionButton>
+              }
+              hint="Busca por folio o notas."
+              label="Buscar"
               onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
               placeholder="Folio o notas"
-              type="text"
               value={filters.q}
             />
-          </label>
-
-          <label>
-            Estatus
-            <select
-              onChange={(event) => setFilters((current) => ({ ...current, estatus: event.target.value }))}
-              value={filters.estatus}
-            >
-              <option value="">Todos</option>
-              <option value="borrador">Borrador</option>
-              <option value="enviada">Enviada</option>
-              <option value="aprobada">Aprobada</option>
-              <option value="rechazada">Rechazada</option>
-              <option value="surtida">Surtida</option>
-              <option value="cancelada">Cancelada</option>
-            </select>
-          </label>
-
-          <div className="inventory-actions">
-            <button className="ghost-button" type="submit">
-              Aplicar filtros
-            </button>
-            <button
-              className="ghost-button"
-              onClick={async () => {
-                setFilters(defaultFilters);
-                try {
-                  await loadRequisitionList(defaultFilters);
-                } catch (requestError) {
-                  setError(requestError.message || "No se pudieron reiniciar los filtros.");
-                }
-              }}
-              type="button"
-            >
-              Limpiar
-            </button>
-            <button
-              className="ghost-button"
-              onClick={async () => {
-                try {
-                  await loadRequisitionList(filters);
-                } catch (requestError) {
-                  setError(requestError.message || "No se pudo actualizar el listado.");
-                }
-              }}
-              type="button"
-            >
-              Actualizar
-            </button>
-          </div>
-        </form>
-
-        {requisitions.length === 0 ? (
-          <EmptyState
-            title="No hay requisiciones."
-            note="Crea la primera requisición para comenzar el flujo interno de compras."
-          />
-        ) : (
-          <>
-            <div className="table-wrap">
-              <table className="inventory-table">
-                <thead>
-                  <tr>
-                    <th>Folio</th>
-                    <th>Solicitante</th>
-                    <th>Estatus</th>
-                    <th>Detalles</th>
-                    <th>Fecha</th>
-                    <th>Acciones</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {requisitions.map((requisition) => (
-                    <tr key={requisition.id}>
-                      <td>{requisition.folio}</td>
-                      <td>{requisition.solicitante_nombre}</td>
-                      <td>
-                        <span className={`status-badge ${requisition.estatus === "aprobada" ? "enabled" : "pending"}`}>
-                          {requisition.estatus}
-                        </span>
-                      </td>
-                      <td>{requisition.details_count}</td>
-                      <td>{formatDateTime(requisition.created_at)}</td>
-                      <td className="inventory-row-actions">
-                        <button className="link-button" onClick={() => loadRequisitionDocument(requisition.id)} type="button">
-                          Ver detalle
-                        </button>
-                        {requisition.orden_compra_folio ? (
-                          <StatusBadge tone="info">{requisition.orden_compra_folio}</StatusBadge>
-                        ) : null}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <PaginationControls
-              meta={meta}
-              onNext={async () => {
-                const nextFilters = { ...filters, offset: meta.offset + meta.limit };
-                setFilters(nextFilters);
-                try {
-                  await loadRequisitionList(nextFilters);
-                } catch (requestError) {
-                  setError(requestError.message || "No se pudo cambiar la página.");
-                }
-              }}
-              onPrevious={async () => {
-                const nextFilters = { ...filters, offset: Math.max(0, meta.offset - meta.limit) };
-                setFilters(nextFilters);
-                try {
-                  await loadRequisitionList(nextFilters);
-                } catch (requestError) {
-                  setError(requestError.message || "No se pudo cambiar la página.");
-                }
-              }}
-            />
-          </>
-        )}
-      </div>
-
-      <ModalShell
-        onClose={closePurchaseOrderModal}
-        open={purchaseOrderModalOpen}
-        size="medium"
-        subtitle="La requisicion se mantiene aprobada hasta que la orden avance en el flujo de compras."
-        title="Crear orden de compra"
-      >
-        <div className="inventory-modal-form">
-          <FormGrid>
-            <Field label="Proveedor">
+            <Field label="Estatus">
               <select
-                onChange={(event) =>
-                  setPurchaseOrderForm((current) => ({
-                    ...current,
-                    proveedor_id: event.target.value,
-                  }))
-                }
-                value={purchaseOrderForm.proveedor_id}
+                onChange={(event) => setFilters((current) => ({ ...current, estatus: event.target.value }))}
+                value={filters.estatus}
               >
-                <option value="">Selecciona un proveedor</option>
+                <option value="">Todos</option>
+                {["borrador", "enviada", "aprobada", "parcial", "surtida", "convertida_a_oc", "rechazada", "cancelada"].map((status) => (
+                  <option key={status} value={status}>
+                    {getRequisitionStatusLabel(status)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Proveedor sugerido">
+              <select
+                onChange={(event) => setFilters((current) => ({ ...current, proveedor_sugerido_id: event.target.value }))}
+                value={filters.proveedor_sugerido_id}
+              >
+                <option value="">Todos</option>
                 {suppliers.map((supplier) => (
                   <option key={supplier.id} value={supplier.id}>
                     {supplier.nombre}
@@ -773,56 +919,674 @@ export default function RequisitionsPage() {
                 ))}
               </select>
             </Field>
-
-            <Field label="Almacen destino">
-              <select
-                onChange={(event) =>
-                  setPurchaseOrderForm((current) => ({
-                    ...current,
-                    almacen_destino_id: event.target.value,
-                  }))
-                }
-                value={purchaseOrderForm.almacen_destino_id}
-              >
-                <option value="">Selecciona un almacen</option>
-                {warehouses.map((warehouse) => (
-                  <option key={warehouse.id} value={warehouse.id}>
-                    {warehouse.nombre} ({warehouse.codigo})
-                  </option>
-                ))}
-              </select>
-            </Field>
-
-            <Field hint="Opcional" label="Folio de la OC">
+            <Field label="Proyecto">
               <input
-                onChange={(event) =>
-                  setPurchaseOrderForm((current) => ({
-                    ...current,
-                    folio: event.target.value.toUpperCase(),
-                  }))
-                }
-                placeholder="Auto"
+                onChange={(event) => setFilters((current) => ({ ...current, proyecto: event.target.value }))}
+                placeholder="Nombre o referencia"
                 type="text"
-                value={purchaseOrderForm.folio}
+                value={filters.proyecto}
               />
             </Field>
-          </FormGrid>
+            <Field label="Fecha desde">
+              <input
+                onChange={(event) => setFilters((current) => ({ ...current, fecha_desde: event.target.value }))}
+                type="date"
+                value={filters.fecha_desde}
+              />
+            </Field>
+            <Field label="Fecha hasta">
+              <input
+                onChange={(event) => setFilters((current) => ({ ...current, fecha_hasta: event.target.value }))}
+                type="date"
+                value={filters.fecha_hasta}
+              />
+            </Field>
+            <div className="inventory-actions inventory-actions-end">
+              <ActionButton type="submit">Aplicar filtros</ActionButton>
+              <ActionButton
+                onClick={() => {
+                  setFilters(defaultFilters);
+                  loadRequisitionList(defaultFilters);
+                }}
+                type="button"
+              >
+                Limpiar
+              </ActionButton>
+              <ActionButton onClick={() => loadRequisitionList(filters)} type="button">
+                Actualizar
+              </ActionButton>
+            </div>
+          </div>
+        </form>
+      </FilterCard>
 
-          <div className="inventory-actions inventory-actions-end">
+      <DataCard subtitle="Solicitudes internas registradas por empresa." title="Requisiciones">
+        <ResultMeta label="requisiciones" loaded={requisitions.length} total={meta.total} />
+        {requisitions.length === 0 ? (
+          <EmptyState
+            action={
+              <ActionButton onClick={openCreateEditor} tone="primary" type="button">
+                Nueva requisicion
+              </ActionButton>
+            }
+            note="Crea la primera solicitud para comenzar el flujo de surtido o compra."
+            title="No hay requisiciones."
+          />
+        ) : (
+          <>
+            <DataTable columns={["Folio", "Tipo", "Proyecto", "Estatus", "Renglones", "Solicitado", "Surtido", "Pendiente", "OC vinculada", "Fecha", "Acciones"]}>
+              <tbody>
+                {requisitions.map((requisition) => (
+                  <tr key={requisition.id}>
+                    <td>
+                      <div className="inventory-cell-main">{safeDisplayText(requisition.folio)}</div>
+                      <div className="inventory-cell-sub">{safeDisplayText(requisition.notas, "Sin notas")}</div>
+                    </td>
+                    <td>
+                      <StatusBadge tone={requisition.es_proyecto ? "info" : "neutral"}>
+                        {requisition.es_proyecto ? "Proyecto" : "General"}
+                      </StatusBadge>
+                    </td>
+                    <td>{safeDisplayText(requisition.proyecto_nombre_snapshot, "—")}</td>
+                    <td>
+                      <StatusBadge tone={getRequisitionStatusTone(requisition.estatus)}>
+                        {getRequisitionStatusLabel(requisition.estatus)}
+                      </StatusBadge>
+                    </td>
+                    <td>{formatCompactNumber(requisition.total_renglones ?? requisition.details_count ?? 0)}</td>
+                    <td>{formatCompactNumber(requisition.cantidad_total_solicitada)}</td>
+                    <td>{formatCompactNumber(requisition.cantidad_total_surtida)}</td>
+                    <td>{formatCompactNumber(requisition.cantidad_total_pendiente)}</td>
+                    <td>
+                      {requisition.orden_compra_folio ? (
+                        <StatusBadge tone="info">{requisition.orden_compra_folio}</StatusBadge>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td>{formatDateTime(requisition.created_at)}</td>
+                    <td>
+                      <div className="inventory-actions">
+                        <ActionButton icon={<Eye size={14} strokeWidth={1.9} />} onClick={() => openDetailModal(requisition.id)} size="sm" type="button">
+                          Ver
+                        </ActionButton>
+                        {requisition.estatus === "borrador" ? (
+                          <ActionButton icon={<Pencil size={14} strokeWidth={1.9} />} onClick={() => openEditEditor(requisition.id)} size="sm" type="button">
+                            Editar
+                          </ActionButton>
+                        ) : null}
+                        {canSubmitRequisition(requisition) ? (
+                          <ActionButton onClick={() => handleStatusChange("submit", requisition.id)} size="sm" type="button">
+                            Enviar
+                          </ActionButton>
+                        ) : null}
+                        {canApproveRequisition(requisition) ? (
+                          <ActionButton onClick={() => handleStatusChange("approve", requisition.id)} size="sm" type="button">
+                            Aprobar
+                          </ActionButton>
+                        ) : null}
+                        {canRejectRequisition(requisition) ? (
+                          <ActionButton onClick={() => handleStatusChange("reject", requisition.id)} size="sm" tone="danger" type="button">
+                            Rechazar
+                          </ActionButton>
+                        ) : null}
+                        {canFulfillRequisition(requisition) ? (
+                          <ActionButton onClick={() => openFulfillFromList(requisition.id)} size="sm" tone="primary" type="button">
+                            Surtir
+                          </ActionButton>
+                        ) : null}
+                        {canCreatePurchaseOrder(requisition) ? (
+                          <ActionButton onClick={() => openPurchaseOrderFromList(requisition.id)} size="sm" type="button">
+                            Crear OC
+                          </ActionButton>
+                        ) : null}
+                        {canCancelRequisition(requisition) ? (
+                          <ActionButton onClick={() => handleStatusChange("cancel", requisition.id)} size="sm" tone="danger" type="button">
+                            Cancelar
+                          </ActionButton>
+                        ) : null}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+            <PaginationControls meta={meta} onNext={() => handlePaginate("next")} onPrevious={() => handlePaginate("previous")} />
+          </>
+        )}
+      </DataCard>
+
+      <ModalShell
+        footer={
+          <div className="inventory-actions inventory-actions-wrap">
+            <ActionButton disabled={saving} onClick={closeEditor} type="button">
+              Cancelar
+            </ActionButton>
+            <ActionButton disabled={saving} onClick={() => handleSave("draft")} type="button">
+              {saving ? "Guardando..." : "Guardar borrador"}
+            </ActionButton>
+            <ActionButton disabled={saving} onClick={() => handleSave("submit")} tone="primary" type="button">
+              {saving ? "Enviando..." : "Guardar y enviar"}
+            </ActionButton>
+          </div>
+        }
+        onClose={closeEditor}
+        open={editorOpen}
+        size="xl"
+        subtitle="Solicitudes internas de materiales antes de surtir o convertir a orden de compra."
+        title={form.id ? "Editar requisicion" : "Nueva requisicion"}
+      >
+        <div className="inventory-modal-form">
+          <div className="inventory-form-section">
+            <strong>Cabecera</strong>
+            <FormGrid>
+              <Field hint="Opcional" label="Folio">
+                <input
+                  onChange={(event) => setForm((current) => ({ ...current, folio: event.target.value.toUpperCase() }))}
+                  placeholder="Auto"
+                  type="text"
+                  value={form.folio}
+                />
+              </Field>
+              <Field label="Tipo">
+                <select
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      es_proyecto: event.target.value === "proyecto",
+                      proyecto_id: event.target.value === "proyecto" ? current.proyecto_id : "",
+                      proyecto_nombre_snapshot: event.target.value === "proyecto" ? current.proyecto_nombre_snapshot : "",
+                    }))
+                  }
+                  value={form.es_proyecto ? "proyecto" : "general"}
+                >
+                  <option value="general">General</option>
+                  <option value="proyecto">Proyecto</option>
+                </select>
+              </Field>
+              <Field label="Proveedor sugerido">
+                <select
+                  onChange={(event) => setForm((current) => ({ ...current, proveedor_sugerido_id: event.target.value }))}
+                  value={form.proveedor_sugerido_id}
+                >
+                  <option value="">Sin proveedor sugerido</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.nombre}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {form.es_proyecto ? (
+                <>
+                  {projectLookupAvailable ? (
+                    <Field hint="Selecciona un proyecto activo si PM esta habilitado." label="Proyecto">
+                      <select
+                        onChange={(event) => {
+                          const project = projects.find((item) => item.id === event.target.value);
+                          setForm((current) => ({
+                            ...current,
+                            proyecto_id: event.target.value,
+                            proyecto_nombre_snapshot: project?.nombre ?? current.proyecto_nombre_snapshot,
+                          }));
+                        }}
+                        value={form.proyecto_id}
+                      >
+                        <option value="">Selecciona un proyecto</option>
+                        {projects.map((project) => (
+                          <option key={project.id} value={project.id}>
+                            {project.nombre}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                  ) : null}
+                  <Field hint="Se guarda como snapshot para trazabilidad." label={projectLookupAvailable ? "Nombre visible del proyecto" : "Proyecto"}>
+                    <input
+                      onChange={(event) =>
+                        setForm((current) => ({ ...current, proyecto_nombre_snapshot: event.target.value }))
+                      }
+                      placeholder="Nombre o referencia del proyecto"
+                      type="text"
+                      value={form.proyecto_nombre_snapshot}
+                    />
+                  </Field>
+                </>
+              ) : null}
+              <Field label="Notas / motivo" span={2}>
+                <textarea
+                  onChange={(event) => setForm((current) => ({ ...current, notas: event.target.value }))}
+                  rows={4}
+                  value={form.notas}
+                />
+              </Field>
+            </FormGrid>
+          </div>
+
+          <div className="inventory-form-section">
+            <strong>Renglones</strong>
+            <div className="inventory-material-picker">
+              <SearchInput
+                hint="Busca por nombre, SKU, codigo de barras o categoria."
+                label="Buscar material"
+                onChange={(event) => setMaterialSearch(event.target.value)}
+                placeholder="Buscar material..."
+                value={materialSearch}
+              />
+              {filteredMaterials.length > 0 ? (
+                <div className="inventory-actions inventory-actions-wrap">
+                  {filteredMaterials.slice(0, 6).map((material) => (
+                    <ActionButton key={material.id} onClick={() => addLineFromMaterial(material.id)} size="sm" type="button">
+                      {material.sku} · {material.nombre}
+                    </ActionButton>
+                  ))}
+                </div>
+              ) : (
+                <p className="table-note">No hay materiales adicionales para agregar con ese filtro.</p>
+              )}
+            </div>
+
+            {lines.length === 0 ? (
+              <EmptyState compact note="Agrega al menos un material antes de enviar la requisicion." title="Sin renglones" />
+            ) : (
+              <DataTable columns={["Material", "Cantidad solicitada", "Stock actual", "Proveedor sugerido", "Notas", "Acciones"]}>
+                <tbody>
+                  {lines.map((line) => {
+                    const material = materials.find((item) => item.id === line.material_id);
+                    return (
+                      <tr key={line.clientId}>
+                        <td>
+                          <div className="inventory-cell-main">{safeDisplayText(material?.nombre, "Material")}</div>
+                          <div className="inventory-cell-sub">
+                            {safeDisplayText(material?.sku, "Sin SKU")} · {safeDisplayText(material?.unidad, "Sin unidad")}
+                          </div>
+                        </td>
+                        <td>
+                          <input
+                            min="0.0001"
+                            onChange={(event) => updateLine(line.clientId, "cantidad", normalizeDecimalInput(event.target.value))}
+                            step="0.0001"
+                            type="number"
+                            value={line.cantidad}
+                          />
+                        </td>
+                        <td>{formatCompactNumber(material?.stock_total ?? 0)}</td>
+                        <td>{safeDisplayText(material?.proveedor_principal_nombre, "—")}</td>
+                        <td>
+                          <input
+                            onChange={(event) => updateLine(line.clientId, "notas", event.target.value)}
+                            placeholder="Notas del renglon"
+                            type="text"
+                            value={line.notas}
+                          />
+                        </td>
+                        <td>
+                          <ActionButton icon={<XCircle size={14} strokeWidth={1.9} />} onClick={() => removeLine(line.clientId)} size="sm" tone="danger" type="button">
+                            Quitar
+                          </ActionButton>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </DataTable>
+            )}
+          </div>
+        </div>
+      </ModalShell>
+
+      <ModalShell
+        footer={
+          <div className="inventory-actions inventory-actions-wrap">
+            {selectedRequisition?.estatus === "borrador" ? (
+              <>
+                <ActionButton disabled={saving} onClick={() => openEditEditor(selectedRequisition.id)} type="button">
+                  Editar
+                </ActionButton>
+                <ActionButton disabled={saving} onClick={() => handleStatusChange("submit", selectedRequisition.id)} type="button">
+                  Enviar
+                </ActionButton>
+              </>
+            ) : null}
+            {canApproveRequisition(selectedRequisition) ? (
+              <ActionButton disabled={saving} onClick={() => handleStatusChange("approve", selectedRequisition.id)} type="button">
+                Aprobar
+              </ActionButton>
+            ) : null}
+            {canApproveRequisition(selectedRequisition) && selectedRequisition?.es_proyecto && isManager ? (
+              <ActionButton disabled={saving} onClick={() => handleApproveAndFulfill(selectedRequisition)} type="button">
+                Aprobar y surtir
+              </ActionButton>
+            ) : null}
+            {canRejectRequisition(selectedRequisition) ? (
+              <ActionButton disabled={saving} onClick={() => handleStatusChange("reject", selectedRequisition.id)} tone="danger" type="button">
+                Rechazar
+              </ActionButton>
+            ) : null}
+            {canFulfillRequisition(selectedRequisition) ? (
+              <ActionButton disabled={saving} onClick={() => openFulfillModal(selectedRequisition)} tone="primary" type="button">
+                Surtir
+              </ActionButton>
+            ) : null}
+            {canCreatePurchaseOrder(selectedRequisition) ? (
+              <ActionButton disabled={saving} onClick={() => openPurchaseOrderModal(selectedRequisition)} type="button">
+                Crear OC
+              </ActionButton>
+            ) : null}
+            {canCancelRequisition(selectedRequisition) ? (
+              <ActionButton disabled={saving} onClick={() => handleStatusChange("cancel", selectedRequisition.id)} tone="danger" type="button">
+                Cancelar
+              </ActionButton>
+            ) : null}
+            <ActionButton onClick={closeDetail} type="button">
+              Cerrar
+            </ActionButton>
+          </div>
+        }
+        onClose={closeDetail}
+        open={detailOpen}
+        size="xl"
+        subtitle="Detalle operativo de la solicitud, su surtido y el vinculo con compras."
+        title={selectedRequisition ? `Requisicion ${selectedRequisition.folio}` : "Detalle de requisicion"}
+      >
+        {selectedRequisition ? (
+          <div className="inventory-modal-form">
+            <div className="inventory-detail-grid">
+              <div className="inventory-form-note">
+                <strong>Estatus</strong>
+                <p className="table-note">
+                  <StatusBadge tone={getRequisitionStatusTone(selectedRequisition.estatus)}>
+                    {getRequisitionStatusLabel(selectedRequisition.estatus)}
+                  </StatusBadge>
+                </p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Tipo</strong>
+                <p className="table-note">{selectedRequisition.es_proyecto ? "Proyecto" : "General"}</p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Proyecto</strong>
+                <p className="table-note">{safeDisplayText(selectedRequisition.proyecto_nombre_snapshot, "—")}</p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Proveedor sugerido</strong>
+                <p className="table-note">{safeDisplayText(selectedRequisition.proveedor_sugerido_nombre, "—")}</p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Orden vinculada</strong>
+                <p className="table-note">{safeDisplayText(selectedRequisition.orden_compra_folio, "—")}</p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Fechas</strong>
+                <p className="table-note">
+                  Creada: {formatDateTime(selectedRequisition.created_at)}
+                  <br />
+                  Actualizada: {formatDateTime(selectedRequisition.updated_at)}
+                </p>
+              </div>
+            </div>
+
+            <div className="inventory-metric-grid inventory-metric-grid-4">
+              <MetricCard label="Renglones" tone="neutral" value={formatCompactNumber(selectedRequisition.total_renglones)} />
+              <MetricCard label="Solicitado" tone="info" value={formatCompactNumber(selectedRequisition.cantidad_total_solicitada)} />
+              <MetricCard label="Surtido" tone="success" value={formatCompactNumber(selectedRequisition.cantidad_total_surtida)} />
+              <MetricCard label="Pendiente" tone="warning" value={formatCompactNumber(selectedRequisition.cantidad_total_pendiente)} />
+            </div>
+
+            <DataCard subtitle={selectedRequisition.notas || "Sin notas adicionales."} title="Renglones">
+              {selectedRequisition.details?.length ? (
+                <DataTable columns={["Material", "Solicitado", "Surtido", "Pendiente", "Stock total", "Proveedor", "Estado"]}>
+                  <tbody>
+                    {selectedRequisition.details.map((detail) => (
+                      <tr key={detail.id}>
+                        <td>
+                          <div className="inventory-cell-main">{safeDisplayText(detail.material_nombre)}</div>
+                          <div className="inventory-cell-sub">{safeDisplayText(detail.material_sku)} · {safeDisplayText(detail.material_unidad)}</div>
+                        </td>
+                        <td>{formatCompactNumber(detail.cantidad)}</td>
+                        <td>{formatCompactNumber(detail.cantidad_surtida)}</td>
+                        <td>{formatCompactNumber(detail.cantidad_pendiente)}</td>
+                        <td>{formatCompactNumber(detail.stock_total)}</td>
+                        <td>{safeDisplayText(detail.proveedor_sugerido_nombre, "—")}</td>
+                        <td>
+                          <StatusBadge tone={detail.estado_linea === "surtido" ? "success" : detail.estado_linea === "parcial" ? "warning" : "neutral"}>
+                            {getLineStateLabel(detail.estado_linea)}
+                          </StatusBadge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </DataTable>
+              ) : (
+                <EmptyState compact note="La requisicion no tiene materiales cargados." title="Sin renglones" />
+              )}
+            </DataCard>
+
+            <DataCard title="Trazabilidad">
+              {selectedRequisition.movements?.length ? (
+                <DataTable columns={["Fecha", "Almacen", "Material", "Cantidad", "Documento", "Proyecto", "Usuario"]}>
+                  <tbody>
+                    {selectedRequisition.movements.map((movement) => (
+                      <tr key={movement.id}>
+                        <td>{formatDateTime(movement.created_at)}</td>
+                        <td>{safeDisplayText(movement.almacen_nombre)}</td>
+                        <td>
+                          <div className="inventory-cell-main">{safeDisplayText(movement.material_nombre)}</div>
+                          <div className="inventory-cell-sub">{safeDisplayText(movement.material_sku)}</div>
+                        </td>
+                        <td>{formatCompactNumber(movement.cantidad)}</td>
+                        <td>{safeDisplayText(movement.documento_referencia, "—")}</td>
+                        <td>{safeDisplayText(movement.proyecto_nombre_snapshot || movement.proyecto_id, "—")}</td>
+                        <td>{safeDisplayText(movement.created_by_nombre, "—")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </DataTable>
+              ) : (
+                <EmptyState
+                  compact
+                  note={selectedRequisition.orden_compra_id ? "La salida no se ha surtido desde inventario. La trazabilidad continua desde la orden de compra vinculada." : "Los surtidos desde inventario apareceran aqui cuando se registren."}
+                  title="Sin movimientos relacionados"
+                />
+              )}
+            </DataCard>
+          </div>
+        ) : null}
+      </ModalShell>
+
+      <ModalShell
+        footer={
+          <div className="inventory-actions inventory-actions-wrap">
+            <ActionButton disabled={saving} onClick={closeFulfill} type="button">
+              Cancelar
+            </ActionButton>
+            <ActionButton disabled={saving} onClick={handleFulfillSubmit} tone="primary" type="button">
+              {saving ? "Registrando..." : "Confirmar surtido"}
+            </ActionButton>
+          </div>
+        }
+        onClose={closeFulfill}
+        open={fulfillOpen}
+        size="xl"
+        subtitle="Esta accion descontara inventario del almacen seleccionado."
+        title={selectedRequisition ? `Surtir requisicion ${selectedRequisition.folio}` : "Surtir requisicion"}
+      >
+        {selectedRequisition ? (
+          <div className="inventory-modal-form">
+            <div className="inventory-form-section">
+              <strong>Cabecera de surtido</strong>
+              <FormGrid>
+                <Field label="Almacen origen">
+                  <select
+                    onChange={(event) =>
+                      setFulfillForm((current) => ({
+                        ...current,
+                        almacen_id: event.target.value,
+                        items: buildDefaultFulfillItems(selectedRequisition.details ?? [], event.target.value),
+                      }))
+                    }
+                    value={fulfillForm.almacen_id}
+                  >
+                    <option value="">Selecciona un almacen</option>
+                    {warehouses.map((warehouse) => (
+                      <option key={warehouse.id} value={warehouse.id}>
+                        {warehouse.nombre} ({warehouse.codigo})
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Documento / referencia">
+                  <input
+                    onChange={(event) => setFulfillForm((current) => ({ ...current, documento_referencia: event.target.value }))}
+                    placeholder="Remision, ticket interno, etc."
+                    type="text"
+                    value={fulfillForm.documento_referencia}
+                  />
+                </Field>
+                <Field label="Notas" span={2}>
+                  <textarea
+                    onChange={(event) => setFulfillForm((current) => ({ ...current, notas: event.target.value }))}
+                    rows={3}
+                    value={fulfillForm.notas}
+                  />
+                </Field>
+                {selectedRequisition.es_proyecto ? (
+                  <>
+                    <Field label="Proyecto ID">
+                      <input
+                        onChange={(event) => setFulfillForm((current) => ({ ...current, proyecto_id: event.target.value }))}
+                        type="text"
+                        value={fulfillForm.proyecto_id}
+                      />
+                    </Field>
+                    <Field label="Proyecto">
+                      <input
+                        onChange={(event) => setFulfillForm((current) => ({ ...current, proyecto_nombre_snapshot: event.target.value }))}
+                        type="text"
+                        value={fulfillForm.proyecto_nombre_snapshot}
+                      />
+                    </Field>
+                  </>
+                ) : null}
+              </FormGrid>
+            </div>
+
+            <DataCard title="Renglones pendientes">
+              <DataTable columns={["Material", "Solicitado", "Surtido", "Pendiente", "Stock en almacen", "Cantidad a surtir"]}>
+                <tbody>
+                  {selectedRequisition.details
+                    .filter((detail) => Number(detail.cantidad_pendiente ?? 0) > 0)
+                    .map((detail) => {
+                      const available = getWarehouseStock(detail, fulfillForm.almacen_id);
+                      const pending = Number(detail.cantidad_pendiente ?? 0);
+                      const hasShortage = available < pending;
+                      return (
+                        <tr key={detail.id}>
+                          <td>
+                            <div className="inventory-cell-main">{safeDisplayText(detail.material_nombre)}</div>
+                            <div className="inventory-cell-sub">{safeDisplayText(detail.material_sku)}</div>
+                          </td>
+                          <td>{formatCompactNumber(detail.cantidad)}</td>
+                          <td>{formatCompactNumber(detail.cantidad_surtida)}</td>
+                          <td>{formatCompactNumber(pending)}</td>
+                          <td>
+                            <div className="inventory-cell-main">{formatCompactNumber(available)}</div>
+                            {hasShortage ? <div className="inventory-cell-sub">Stock insuficiente para surtir todo.</div> : null}
+                          </td>
+                          <td>
+                            <input
+                              max={Math.max(0, Math.min(pending, available))}
+                              min="0"
+                              onChange={(event) =>
+                                setFulfillForm((current) => ({
+                                  ...current,
+                                  items: {
+                                    ...current.items,
+                                    [detail.id]: normalizeDecimalInput(event.target.value),
+                                  },
+                                }))
+                              }
+                              step="0.0001"
+                              type="number"
+                              value={fulfillForm.items[detail.id] ?? ""}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                </tbody>
+              </DataTable>
+            </DataCard>
+          </div>
+        ) : null}
+      </ModalShell>
+
+      <ModalShell
+        footer={
+          <div className="inventory-actions inventory-actions-wrap">
+            <ActionButton disabled={saving} onClick={closePurchaseOrder} type="button">
+              Cancelar
+            </ActionButton>
             <ActionButton
-              disabled={submitting || !purchaseOrderForm.proveedor_id || !purchaseOrderForm.almacen_destino_id}
+              disabled={saving || !purchaseOrderForm.proveedor_id || !purchaseOrderForm.almacen_destino_id}
               onClick={handleCreatePurchaseOrder}
               tone="primary"
               type="button"
             >
-              {submitting ? "Creando..." : "Crear OC"}
-            </ActionButton>
-            <ActionButton onClick={closePurchaseOrderModal} type="button">
-              Cancelar
+              {saving ? "Creando..." : "Crear OC"}
             </ActionButton>
           </div>
-        </div>
+        }
+        onClose={closePurchaseOrder}
+        open={purchaseOrderOpen}
+        size="medium"
+        subtitle="La requisicion quedara vinculada a la orden de compra creada."
+        title="Crear orden de compra"
+      >
+        <FormGrid>
+          <Field label="Proveedor">
+            <select
+              onChange={(event) => setPurchaseOrderForm((current) => ({ ...current, proveedor_id: event.target.value }))}
+              value={purchaseOrderForm.proveedor_id}
+            >
+              <option value="">Selecciona un proveedor</option>
+              {suppliers.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.nombre}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Almacen destino">
+            <select
+              onChange={(event) =>
+                setPurchaseOrderForm((current) => ({ ...current, almacen_destino_id: event.target.value }))
+              }
+              value={purchaseOrderForm.almacen_destino_id}
+            >
+              <option value="">Selecciona un almacen</option>
+              {warehouses.map((warehouse) => (
+                <option key={warehouse.id} value={warehouse.id}>
+                  {warehouse.nombre} ({warehouse.codigo})
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field hint="Opcional" label="Folio OC">
+            <input
+              onChange={(event) => setPurchaseOrderForm((current) => ({ ...current, folio: event.target.value.toUpperCase() }))}
+              placeholder="Auto"
+              type="text"
+              value={purchaseOrderForm.folio}
+            />
+          </Field>
+        </FormGrid>
       </ModalShell>
     </div>
   );
+}
+
+
+function ClipboardListIcon() {
+  return <ShoppingCart size={18} strokeWidth={1.9} />;
 }

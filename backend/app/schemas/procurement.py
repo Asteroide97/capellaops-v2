@@ -55,11 +55,19 @@ class SupplierListResponse(BaseModel):
 class RequisitionCreateRequest(BaseModel):
     folio: str | None = Field(default=None, max_length=60)
     notas: str | None = Field(default=None, max_length=2000)
+    proveedor_sugerido_id: str | None = Field(default=None, max_length=64)
+    es_proyecto: bool = False
+    proyecto_id: str | None = Field(default=None, max_length=64)
+    proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
 
 
 class RequisitionUpdateRequest(BaseModel):
     folio: str | None = Field(default=None, min_length=1, max_length=60)
     notas: str | None = Field(default=None, max_length=2000)
+    proveedor_sugerido_id: str | None = Field(default=None, max_length=64)
+    es_proyecto: bool | None = None
+    proyecto_id: str | None = Field(default=None, max_length=64)
+    proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
 
 
 class RequisitionDetailCreateRequest(BaseModel):
@@ -74,6 +82,12 @@ class RequisitionDetailUpdateRequest(BaseModel):
     notas: str | None = Field(default=None, max_length=2000)
 
 
+class RequisitionDetailStockItem(BaseModel):
+    almacen_id: str
+    almacen_nombre: str
+    stock_actual: Decimal
+
+
 class RequisitionDetailItem(BaseModel):
     id: str
     requisicion_id: str
@@ -82,7 +96,31 @@ class RequisitionDetailItem(BaseModel):
     material_nombre: str
     material_unidad: str
     cantidad: Decimal
+    cantidad_surtida: Decimal
+    cantidad_pendiente: Decimal
+    estado_linea: str
+    stock_total: Decimal
+    proveedor_sugerido_id: str | None = None
+    proveedor_sugerido_nombre: str | None = None
+    stock_por_almacen: list[RequisitionDetailStockItem] = Field(default_factory=list)
     notas: str | None = None
+
+
+class RequisitionMovementTraceItem(BaseModel):
+    id: str
+    created_at: datetime
+    almacen_id: str
+    almacen_nombre: str
+    tipo: str
+    material_id: str
+    material_sku: str
+    material_nombre: str
+    cantidad: Decimal
+    documento_referencia: str | None = None
+    notas: str | None = None
+    proyecto_id: str | None = None
+    proyecto_nombre_snapshot: str | None = None
+    created_by_nombre: str | None = None
 
 
 class RequisitionItem(BaseModel):
@@ -95,7 +133,14 @@ class RequisitionItem(BaseModel):
     proveedor_sugerido_nombre: str | None = None
     orden_compra_id: str | None = None
     orden_compra_folio: str | None = None
+    es_proyecto: bool = False
+    proyecto_id: str | None = None
+    proyecto_nombre_snapshot: str | None = None
     estatus: str
+    total_renglones: int
+    cantidad_total_solicitada: Decimal
+    cantidad_total_surtida: Decimal
+    cantidad_total_pendiente: Decimal
     notas: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -104,6 +149,7 @@ class RequisitionItem(BaseModel):
 
 class RequisitionResponse(RequisitionItem):
     details: list[RequisitionDetailItem]
+    movements: list[RequisitionMovementTraceItem] = Field(default_factory=list)
 
 
 class RequisitionListResponse(BaseModel):
@@ -117,6 +163,20 @@ class RequisitionCreatePurchaseOrderRequest(BaseModel):
     proveedor_id: str = Field(min_length=1, max_length=64)
     almacen_destino_id: str = Field(min_length=1, max_length=64)
     folio: str | None = Field(default=None, max_length=60)
+
+
+class RequisitionFulfillLineRequest(BaseModel):
+    detail_id: str = Field(min_length=1, max_length=64)
+    cantidad_surtir: Decimal = Field(gt=0)
+
+
+class RequisitionFulfillRequest(BaseModel):
+    almacen_id: str = Field(min_length=1, max_length=64)
+    documento_referencia: str | None = Field(default=None, max_length=160)
+    notas: str | None = Field(default=None, max_length=2000)
+    proyecto_id: str | None = Field(default=None, max_length=64)
+    proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    items: list[RequisitionFulfillLineRequest] = Field(min_length=1)
 
 
 class PurchaseOrderCreateRequest(BaseModel):

@@ -423,11 +423,47 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 ### Requisicion -> Orden de compra
 
 - `POST /inventory/requisitions/{id}/create-purchase-order`
-- Solo opera con requisiciones `aprobada`.
+- Opera con requisiciones `aprobada` o `parcial`.
 - Requiere `proveedor_id` y `almacen_destino_id`.
-- Crea la OC en `borrador`, copia detalles y calcula totales en backend.
+- Crea la OC en `borrador`, copia solo cantidades pendientes y calcula totales en backend.
 - Guarda `requisiciones.orden_compra_id` para evitar duplicados.
-- La requisicion se mantiene `aprobada` hasta que la OC avance en compras.
+- La requisicion pasa a `convertida_a_oc` cuando queda vinculada.
+
+### Requisiciones operativas
+
+- Estados operativos:
+  - `borrador`
+  - `enviada`
+  - `aprobada`
+  - `parcial`
+  - `surtida`
+  - `convertida_a_oc`
+  - `rechazada`
+  - `cancelada`
+- Flujo general:
+  - una requisicion se crea en `borrador`
+  - puede enviarse para aprobacion
+  - una requisicion `aprobada` o `parcial` puede surtirse desde inventario o convertirse en OC
+- Surtido desde inventario:
+  - `POST /inventory/requisitions/{id}/fulfill`
+  - valida stock por almacen
+  - no permite surtir mas que la cantidad pendiente
+  - crea movimientos `salida` y descuenta existencias en una sola transaccion
+  - actualiza `cantidad_surtida` por renglon
+  - cambia la requisicion a `parcial` o `surtida`
+- Requisicion para proyecto:
+  - soporta `es_proyecto`, `proyecto_id` y `proyecto_nombre_snapshot`
+  - los movimientos de surtido heredan esa referencia para que Kardex y Movimientos muestren el proyecto
+  - la conexion con PM es preparatoria; no existe consumo formal de PM en esta fase
+- Trazabilidad:
+  - el surtido queda rastreable por `movimientos_inventario`
+  - la OC vinculada queda visible desde la requisicion
+- Pendientes:
+  - aprobacion avanzada por rol
+  - consumo formal PM
+  - requisiciones automaticas desde PM
+  - historial formal de surtidos
+  - email y notificaciones
 
 ### Bajo stock -> requisicion sugerida
 

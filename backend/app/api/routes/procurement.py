@@ -20,6 +20,7 @@ from app.schemas.procurement import (
     RequisitionCreateRequest,
     RequisitionDetailCreateRequest,
     RequisitionDetailUpdateRequest,
+    RequisitionFulfillRequest,
     RequisitionListResponse,
     RequisitionResponse,
     RequisitionUpdateRequest,
@@ -40,6 +41,7 @@ from app.services.procurement import (
     create_supplier,
     delete_purchase_order_detail,
     delete_requisition_detail,
+    fulfill_requisition,
     get_purchase_order_for_company,
     get_requisition_for_company,
     get_supplier_for_company,
@@ -184,17 +186,27 @@ def update_supplier_endpoint(
 @router.get("/requisitions", response_model=RequisitionListResponse)
 def get_requisitions(
     q: str | None = None,
-    estatus: Literal["borrador", "enviada", "aprobada", "rechazada", "surtida", "cancelada"] | None = None,
+    estatus: str | None = None,
+    proveedor_sugerido_id: str | None = None,
+    proyecto: str | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> RequisitionListResponse:
+    if proveedor_sugerido_id:
+        get_supplier_for_company(db, context.empresa.id, proveedor_sugerido_id)
     total, items = list_requisitions(
         db,
         context.empresa.id,
         q=q,
         estatus=estatus,
+        proveedor_sugerido_id=proveedor_sugerido_id,
+        proyecto=proyecto,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
         limit=limit,
         offset=offset,
     )
@@ -217,6 +229,10 @@ def create_requisition_endpoint(
             user=context.user,
             folio=payload.folio,
             notas=payload.notas,
+            proveedor_sugerido_id=payload.proveedor_sugerido_id,
+            es_proyecto=payload.es_proyecto,
+            proyecto_id=payload.proyecto_id,
+            proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -250,6 +266,10 @@ def update_requisition_endpoint(
             requisition_id=requisition_id,
             folio=payload.folio,
             notas=payload.notas,
+            proveedor_sugerido_id=payload.proveedor_sugerido_id,
+            es_proyecto=payload.es_proyecto,
+            proyecto_id=payload.proyecto_id,
+            proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -414,6 +434,34 @@ def cancel_requisition_endpoint(
             next_status="cancelada",
             allowed_current_statuses={"borrador", "enviada", "aprobada"},
             action="inventory.requisition.cancel",
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/requisitions/{requisition_id}/fulfill", response_model=RequisitionResponse)
+def fulfill_requisition_endpoint(
+    requisition_id: str,
+    payload: RequisitionFulfillRequest,
+    request: Request,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> RequisitionResponse:
+    get_warehouse_for_company(db, context.empresa.id, payload.almacen_id)
+    return run_inventory_write(
+        db,
+        "fulfill_requisition",
+        lambda: fulfill_requisition(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            requisition_id=requisition_id,
+            almacen_id=payload.almacen_id,
+            items=payload.items,
+            documento_referencia=payload.documento_referencia,
+            notas=payload.notas,
+            proyecto_id=payload.proyecto_id,
+            proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
             ip_address=request.client.host if request.client else None,
         ),
     )

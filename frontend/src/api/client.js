@@ -896,10 +896,19 @@ export function getRequisitions({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);
   appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "proveedor_sugerido_id", filters.proveedor_sugerido_id);
+  appendQueryValue(query, "proyecto", filters.proyecto);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
   appendQueryValue(query, "limit", filters.limit);
   appendQueryValue(query, "offset", filters.offset);
   const suffix = query.toString();
   return apiRequest(`/inventory/requisitions${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function listRequisitions({ token, empresaId, filters = {} }) {
+  return getRequisitions({ token, empresaId, filters });
 }
 
 
@@ -987,6 +996,16 @@ export function rejectRequisition({ requisitionId, token, empresaId }) {
 export function cancelRequisition({ requisitionId, token, empresaId }) {
   return apiRequest(`/inventory/requisitions/${requisitionId}/cancel`, {
     method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function fulfillRequisition({ requisitionId, token, empresaId, payload }) {
+  return apiRequest(`/inventory/requisitions/${requisitionId}/fulfill`, {
+    method: "POST",
+    body: payload,
     token,
     empresaId,
   });
