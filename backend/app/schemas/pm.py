@@ -299,6 +299,10 @@ class PMDashboardKpis(BaseModel):
     costo_materiales_estimado_total: Decimal = Decimal("0")
     costo_materiales_real_total: Decimal = Decimal("0")
     variacion_materiales_total: Decimal = Decimal("0")
+    horas_totales: Decimal = Decimal("0")
+    costo_horas_real: Decimal = Decimal("0")
+    horas_sin_tarifa: Decimal = Decimal("0")
+    costo_total_real: Decimal = Decimal("0")
 
 
 class PMDashboardProjectCostItem(BaseModel):
@@ -306,9 +310,20 @@ class PMDashboardProjectCostItem(BaseModel):
     proyecto_nombre: str
     costo_materiales_real: Decimal = Decimal("0")
     costo_materiales_estimado: Decimal = Decimal("0")
+    costo_horas_real: Decimal = Decimal("0")
+    horas_totales: Decimal = Decimal("0")
+    costo_total_real: Decimal = Decimal("0")
     variacion_materiales: Decimal = Decimal("0")
     presupuesto_estimado: Decimal = Decimal("0")
     variacion_presupuesto: Decimal = Decimal("0")
+
+
+class PMDashboardUserMetricItem(BaseModel):
+    usuario_id: str | None = None
+    usuario_email: str | None = None
+    usuario_nombre: str | None = None
+    horas_totales: Decimal = Decimal("0")
+    costo_total: Decimal = Decimal("0")
 
 
 class PMDashboardOut(BaseModel):
@@ -320,6 +335,10 @@ class PMDashboardOut(BaseModel):
     tareas_vencidas_items: list[PMDashboardDueItem] = Field(default_factory=list)
     top_proyectos_por_costo_materiales: list[PMDashboardProjectCostItem] = Field(default_factory=list)
     proyectos_sobre_presupuesto_materiales: list[PMDashboardProjectCostItem] = Field(default_factory=list)
+    top_proyectos_por_costo_total: list[PMDashboardProjectCostItem] = Field(default_factory=list)
+    proyectos_sobre_presupuesto: list[PMDashboardProjectCostItem] = Field(default_factory=list)
+    top_usuarios_por_horas: list[PMDashboardUserMetricItem] = Field(default_factory=list)
+    top_usuarios_por_costo: list[PMDashboardUserMetricItem] = Field(default_factory=list)
 
 
 class PMProjectMembersListResponse(BaseModel):
@@ -423,11 +442,155 @@ class PMCreateProjectRequisitionRequest(BaseModel):
 
 
 class PMProjectCostsOut(BaseModel):
-    materiales_estimado: Decimal = Decimal("0")
-    materiales_real: Decimal = Decimal("0")
+    costo_materiales_estimado: Decimal = Decimal("0")
+    costo_materiales_real: Decimal = Decimal("0")
     variacion_materiales: Decimal = Decimal("0")
     compras_estimado: Decimal = Decimal("0")
-    horas_real: Decimal = Decimal("0")
-    total_real: Decimal = Decimal("0")
+    costo_horas_real: Decimal = Decimal("0")
+    horas_totales: Decimal = Decimal("0")
+    horas_sin_tarifa: Decimal = Decimal("0")
+    costo_total_real: Decimal = Decimal("0")
     presupuesto_estimado: Decimal = Decimal("0")
     variacion_presupuesto: Decimal = Decimal("0")
+    margen_estimado: Decimal | None = None
+
+
+class PMTimeEntryCreate(BaseModel):
+    tarea_id: str | None = None
+    usuario_id: str | None = None
+    usuario_email_snapshot: EmailStr | None = None
+    usuario_nombre_snapshot: str | None = Field(default=None, max_length=160)
+    fecha: date
+    horas: Decimal = Field(gt=0, le=24)
+    descripcion: str | None = None
+    moneda: str = Field(default="MXN", min_length=3, max_length=8)
+
+
+class PMTimeEntryUpdate(BaseModel):
+    tarea_id: str | None = None
+    usuario_id: str | None = None
+    usuario_email_snapshot: EmailStr | None = None
+    usuario_nombre_snapshot: str | None = Field(default=None, max_length=160)
+    fecha: date | None = None
+    horas: Decimal | None = Field(default=None, gt=0, le=24)
+    descripcion: str | None = None
+    moneda: str | None = Field(default=None, min_length=3, max_length=8)
+    activo: bool | None = None
+
+
+class PMTimeEntryOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    tarea_id: str | None = None
+    tarea_titulo: str | None = None
+    usuario_id: str | None = None
+    usuario_email_snapshot: str | None = None
+    usuario_nombre_snapshot: str | None = None
+    fecha: date
+    horas: Decimal = Decimal("0")
+    descripcion: str | None = None
+    costo_hora_aplicado_snapshot: Decimal = Decimal("0")
+    costo_total_snapshot: Decimal = Decimal("0")
+    fuente_tarifa: str
+    moneda: str = "MXN"
+    activo: bool
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMTimeEntryListResponse(BaseModel):
+    items: list[PMTimeEntryOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class PMTarifaHoraUsuarioCreate(BaseModel):
+    usuario_id: str | None = None
+    usuario_email: EmailStr
+    usuario_nombre_snapshot: str | None = Field(default=None, max_length=160)
+    tarifa_hora: Decimal = Field(ge=0)
+    moneda: str = Field(default="MXN", min_length=3, max_length=8)
+    effective_from: date | None = None
+    effective_to: date | None = None
+    notas: str | None = None
+
+
+class PMTarifaHoraUsuarioUpdate(BaseModel):
+    usuario_id: str | None = None
+    usuario_email: EmailStr | None = None
+    usuario_nombre_snapshot: str | None = Field(default=None, max_length=160)
+    tarifa_hora: Decimal | None = Field(default=None, ge=0)
+    moneda: str | None = Field(default=None, min_length=3, max_length=8)
+    effective_from: date | None = None
+    effective_to: date | None = None
+    activa: bool | None = None
+    notas: str | None = None
+
+
+class PMTarifaHoraUsuarioOut(BaseModel):
+    id: str
+    empresa_id: str
+    usuario_id: str | None = None
+    usuario_email: str
+    usuario_nombre_snapshot: str | None = None
+    tarifa_hora: Decimal = Decimal("0")
+    moneda: str = "MXN"
+    effective_from: date | None = None
+    effective_to: date | None = None
+    activa: bool
+    notas: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMTarifaHoraUsuarioListResponse(BaseModel):
+    items: list[PMTarifaHoraUsuarioOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class PMTarifaHoraRolCreate(BaseModel):
+    rol: str = Field(min_length=4, max_length=40)
+    tarifa_hora: Decimal = Field(ge=0)
+    moneda: str = Field(default="MXN", min_length=3, max_length=8)
+    effective_from: date | None = None
+    effective_to: date | None = None
+    notas: str | None = None
+
+
+class PMTarifaHoraRolUpdate(BaseModel):
+    rol: str | None = Field(default=None, min_length=4, max_length=40)
+    tarifa_hora: Decimal | None = Field(default=None, ge=0)
+    moneda: str | None = Field(default=None, min_length=3, max_length=8)
+    effective_from: date | None = None
+    effective_to: date | None = None
+    activa: bool | None = None
+    notas: str | None = None
+
+
+class PMTarifaHoraRolOut(BaseModel):
+    id: str
+    empresa_id: str
+    rol: str
+    tarifa_hora: Decimal = Decimal("0")
+    moneda: str = "MXN"
+    effective_from: date | None = None
+    effective_to: date | None = None
+    activa: bool
+    notas: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMTarifaHoraRolListResponse(BaseModel):
+    items: list[PMTarifaHoraRolOut]
+    total: int
+    limit: int
+    offset: int

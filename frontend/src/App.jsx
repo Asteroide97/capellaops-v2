@@ -16,6 +16,7 @@ import SuperadminPage from "./pages/SuperadminPage";
 import PMDashboardPage from "./pages/pm/PMDashboardPage";
 import PMProjectDetailPage from "./pages/pm/PMProjectDetailPage";
 import PMProjectsPage from "./pages/pm/PMProjectsPage";
+import PMRatesPage from "./pages/pm/PMRatesPage";
 import AssetsPage from "./pages/inventory/AssetsPage";
 import InventoryLayout from "./pages/inventory/InventoryLayout";
 import InventoryReportsPage from "./pages/inventory/InventoryReportsPage";
@@ -188,6 +189,14 @@ export default function App() {
             element={
               <ModuleRoute moduleName="pm">
                 <PMProjectDetailPage />
+              </ModuleRoute>
+            }
+          />
+          <Route
+            path="/pm/rates"
+            element={
+              <ModuleRoute moduleName="pm">
+                <PMRatesPage />
               </ModuleRoute>
             }
           />

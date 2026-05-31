@@ -755,6 +755,138 @@ export function getPmProjectCosts({ projectId, token, empresaId }) {
 }
 
 
+export function refreshPmProjectCosts({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/costs/refresh`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmProjectTimeEntries({ projectId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "user_id", filters.user_id);
+  appendQueryValue(query, "task_id", filters.task_id);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "activo", filters.activo);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pm/projects/${projectId}/time-entries${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createPmProjectTimeEntry({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/time-entries`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmTimeEntry({ timeEntryId, token, empresaId, payload }) {
+  return apiRequest(`/pm/time-entries/${timeEntryId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmTimeEntry({ timeEntryId, token, empresaId }) {
+  return apiRequest(`/pm/time-entries/${timeEntryId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmUserRates({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "activa", filters.activa);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pm/rates/users${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createPmUserRate({ token, empresaId, payload }) {
+  return apiRequest("/pm/rates/users", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmUserRate({ rateId, token, empresaId, payload }) {
+  return apiRequest(`/pm/rates/users/${rateId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmUserRate({ rateId, token, empresaId }) {
+  return apiRequest(`/pm/rates/users/${rateId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmRoleRates({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "activa", filters.activa);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pm/rates/roles${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createPmRoleRate({ token, empresaId, payload }) {
+  return apiRequest("/pm/rates/roles", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmRoleRate({ rateId, token, empresaId, payload }) {
+  return apiRequest(`/pm/rates/roles/${rateId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmRoleRate({ rateId, token, empresaId }) {
+  return apiRequest(`/pm/rates/roles/${rateId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
 export function updatePmProject({ projectId, token, empresaId, payload }) {
   return apiRequest(`/pm/projects/${projectId}`, {
     method: "PUT",

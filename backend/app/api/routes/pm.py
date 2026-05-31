@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 from typing import Callable, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -28,6 +29,18 @@ from app.schemas.pm import (
     PMProyectoMiembroOut,
     PMProyectoOut,
     PMProyectoUpdate,
+    PMTarifaHoraRolCreate,
+    PMTarifaHoraRolListResponse,
+    PMTarifaHoraRolOut,
+    PMTarifaHoraRolUpdate,
+    PMTarifaHoraUsuarioCreate,
+    PMTarifaHoraUsuarioListResponse,
+    PMTarifaHoraUsuarioOut,
+    PMTarifaHoraUsuarioUpdate,
+    PMTimeEntryCreate,
+    PMTimeEntryListResponse,
+    PMTimeEntryOut,
+    PMTimeEntryUpdate,
     PMSubtareaCreate,
     PMSubtareaOut,
     PMSubtareaUpdate,
@@ -44,28 +57,41 @@ from app.services.pm import (
     create_checklist_item,
     create_project,
     create_project_comment,
+    create_project_time_entry,
+    create_role_hourly_rate,
     create_subtask,
     create_task,
     create_task_comment,
+    create_user_hourly_rate,
+    deactivate_project_time_entry,
     deactivate_project,
     deactivate_project_material_plan,
     deactivate_project_member,
+    deactivate_role_hourly_rate,
     deactivate_task,
+    deactivate_user_hourly_rate,
     get_pm_context,
     get_pm_dashboard,
     get_project,
     get_project_costs,
     get_task,
+    list_project_time_entries,
     list_project_material_plan,
     list_project_members,
     list_projects,
+    list_role_hourly_rates,
     list_tasks,
+    list_user_hourly_rates,
+    refresh_project_total_costs,
     serialize_pm_config,
+    update_project_time_entry,
     update_checklist_item,
     update_project,
     update_project_material_plan,
+    update_role_hourly_rate,
     update_subtask,
     update_task,
+    update_user_hourly_rate,
 )
 from app.schemas.procurement import RequisitionResponse
 
@@ -299,6 +325,310 @@ def get_project_costs_endpoint(
     db: Session = Depends(get_db),
 ) -> PMProjectCostsOut:
     return get_project_costs(db, pm_context, project_id)
+
+
+@router.post("/projects/{project_id}/costs/refresh", response_model=PMProjectCostsOut)
+def refresh_project_costs_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProjectCostsOut:
+    return run_pm_write(
+        db,
+        "refresh_project_costs",
+        lambda: refresh_project_total_costs(
+            db,
+            empresa_id=pm_context.empresa_id,
+            project_id=project_id,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/time-entries", response_model=PMTimeEntryListResponse)
+def list_project_time_entries_endpoint(
+    project_id: str,
+    user_id: str | None = None,
+    task_id: str | None = None,
+    fecha_desde: str | None = None,
+    fecha_hasta: str | None = None,
+    activo: bool | None = True,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTimeEntryListResponse:
+    parsed_fecha_desde = date.fromisoformat(fecha_desde) if fecha_desde else None
+    parsed_fecha_hasta = date.fromisoformat(fecha_hasta) if fecha_hasta else None
+    return list_project_time_entries(
+        db,
+        pm_context,
+        project_id=project_id,
+        user_id=user_id,
+        task_id=task_id,
+        fecha_desde=parsed_fecha_desde,
+        fecha_hasta=parsed_fecha_hasta,
+        activo=activo,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/projects/{project_id}/time-entries", response_model=PMTimeEntryOut, status_code=status.HTTP_201_CREATED)
+def create_project_time_entry_endpoint(
+    project_id: str,
+    payload: PMTimeEntryCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTimeEntryOut:
+    return run_pm_write(
+        db,
+        "create_project_time_entry",
+        lambda: create_project_time_entry(
+            db,
+            pm_context,
+            project_id=project_id,
+            tarea_id=payload.tarea_id,
+            usuario_id=payload.usuario_id,
+            usuario_email_snapshot=payload.usuario_email_snapshot,
+            usuario_nombre_snapshot=payload.usuario_nombre_snapshot,
+            fecha=payload.fecha,
+            horas=payload.horas,
+            descripcion=payload.descripcion,
+            moneda=payload.moneda,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/time-entries/{time_entry_id}", response_model=PMTimeEntryOut)
+def update_project_time_entry_endpoint(
+    time_entry_id: str,
+    payload: PMTimeEntryUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTimeEntryOut:
+    return run_pm_write(
+        db,
+        "update_project_time_entry",
+        lambda: update_project_time_entry(
+            db,
+            pm_context,
+            time_entry_id=time_entry_id,
+            tarea_id=payload.tarea_id,
+            usuario_id=payload.usuario_id,
+            usuario_email_snapshot=payload.usuario_email_snapshot,
+            usuario_nombre_snapshot=payload.usuario_nombre_snapshot,
+            fecha=payload.fecha,
+            horas=payload.horas,
+            descripcion=payload.descripcion,
+            moneda=payload.moneda,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/time-entries/{time_entry_id}/deactivate", response_model=PMTimeEntryOut)
+def deactivate_project_time_entry_endpoint(
+    time_entry_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTimeEntryOut:
+    return run_pm_write(
+        db,
+        "deactivate_project_time_entry",
+        lambda: deactivate_project_time_entry(
+            db,
+            pm_context,
+            time_entry_id=time_entry_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/rates/users", response_model=PMTarifaHoraUsuarioListResponse)
+def list_user_hourly_rates_endpoint(
+    q: str | None = None,
+    activa: bool | None = True,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTarifaHoraUsuarioListResponse:
+    return list_user_hourly_rates(
+        db,
+        pm_context,
+        q=q,
+        activa=activa,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/rates/users", response_model=PMTarifaHoraUsuarioOut, status_code=status.HTTP_201_CREATED)
+def create_user_hourly_rate_endpoint(
+    payload: PMTarifaHoraUsuarioCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTarifaHoraUsuarioOut:
+    return run_pm_write(
+        db,
+        "create_user_hourly_rate",
+        lambda: create_user_hourly_rate(
+            db,
+            pm_context,
+            usuario_id=payload.usuario_id,
+            usuario_email=payload.usuario_email,
+            usuario_nombre_snapshot=payload.usuario_nombre_snapshot,
+            tarifa_hora=payload.tarifa_hora,
+            moneda=payload.moneda,
+            effective_from=payload.effective_from,
+            effective_to=payload.effective_to,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/rates/users/{rate_id}", response_model=PMTarifaHoraUsuarioOut)
+def update_user_hourly_rate_endpoint(
+    rate_id: str,
+    payload: PMTarifaHoraUsuarioUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTarifaHoraUsuarioOut:
+    return run_pm_write(
+        db,
+        "update_user_hourly_rate",
+        lambda: update_user_hourly_rate(
+            db,
+            pm_context,
+            rate_id=rate_id,
+            usuario_id=payload.usuario_id,
+            usuario_email=payload.usuario_email,
+            usuario_nombre_snapshot=payload.usuario_nombre_snapshot,
+            tarifa_hora=payload.tarifa_hora,
+            moneda=payload.moneda,
+            effective_from=payload.effective_from,
+            effective_to=payload.effective_to,
+            activa=payload.activa,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/rates/users/{rate_id}/deactivate", response_model=PMTarifaHoraUsuarioOut)
+def deactivate_user_hourly_rate_endpoint(
+    rate_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTarifaHoraUsuarioOut:
+    return run_pm_write(
+        db,
+        "deactivate_user_hourly_rate",
+        lambda: deactivate_user_hourly_rate(
+            db,
+            pm_context,
+            rate_id=rate_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/rates/roles", response_model=PMTarifaHoraRolListResponse)
+def list_role_hourly_rates_endpoint(
+    q: str | None = None,
+    activa: bool | None = True,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTarifaHoraRolListResponse:
+    return list_role_hourly_rates(
+        db,
+        pm_context,
+        q=q,
+        activa=activa,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/rates/roles", response_model=PMTarifaHoraRolOut, status_code=status.HTTP_201_CREATED)
+def create_role_hourly_rate_endpoint(
+    payload: PMTarifaHoraRolCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTarifaHoraRolOut:
+    return run_pm_write(
+        db,
+        "create_role_hourly_rate",
+        lambda: create_role_hourly_rate(
+            db,
+            pm_context,
+            rol=payload.rol,
+            tarifa_hora=payload.tarifa_hora,
+            moneda=payload.moneda,
+            effective_from=payload.effective_from,
+            effective_to=payload.effective_to,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/rates/roles/{rate_id}", response_model=PMTarifaHoraRolOut)
+def update_role_hourly_rate_endpoint(
+    rate_id: str,
+    payload: PMTarifaHoraRolUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTarifaHoraRolOut:
+    return run_pm_write(
+        db,
+        "update_role_hourly_rate",
+        lambda: update_role_hourly_rate(
+            db,
+            pm_context,
+            rate_id=rate_id,
+            rol=payload.rol,
+            tarifa_hora=payload.tarifa_hora,
+            moneda=payload.moneda,
+            effective_from=payload.effective_from,
+            effective_to=payload.effective_to,
+            activa=payload.activa,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/rates/roles/{rate_id}/deactivate", response_model=PMTarifaHoraRolOut)
+def deactivate_role_hourly_rate_endpoint(
+    rate_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTarifaHoraRolOut:
+    return run_pm_write(
+        db,
+        "deactivate_role_hourly_rate",
+        lambda: deactivate_role_hourly_rate(
+            db,
+            pm_context,
+            rate_id=rate_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.put("/projects/{project_id}", response_model=PMProyectoOut)

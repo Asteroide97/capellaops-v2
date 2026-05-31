@@ -66,6 +66,7 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     comments = relationship("PMComentario", back_populates="proyecto", cascade="all, delete-orphan")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="proyecto", cascade="all, delete-orphan")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
+    time_entries = relationship("PMTimeEntry", back_populates="proyecto", cascade="all, delete-orphan")
     material_cost_summary = relationship(
         "PMProyectoCostoResumen",
         back_populates="proyecto",
@@ -159,6 +160,7 @@ class PMTarea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     comments = relationship("PMComentario", back_populates="tarea", cascade="all, delete-orphan")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="tarea")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="tarea")
+    time_entries = relationship("PMTimeEntry", back_populates="tarea")
 
 
 class PMSubtarea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -341,5 +343,97 @@ class PMProyectoCostoResumen(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     variacion_materiales: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     total_materiales_planeados: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
     total_materiales_consumidos: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    costo_horas_real: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    horas_totales: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    horas_sin_tarifa: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    costo_total_real: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    presupuesto_estimado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    variacion_presupuesto: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    margen_estimado: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
 
     proyecto = relationship("PMProyecto", back_populates="material_cost_summary")
+
+
+class PMTimeEntry(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_time_entries"
+    __table_args__ = (
+        Index("ix_pm_time_entries_empresa_id", "empresa_id"),
+        Index("ix_pm_time_entries_proyecto_id", "proyecto_id"),
+        Index("ix_pm_time_entries_tarea_id", "tarea_id"),
+        Index("ix_pm_time_entries_usuario_id", "usuario_id"),
+        Index("ix_pm_time_entries_fecha", "fecha"),
+        Index("ix_pm_time_entries_activo", "activo"),
+        CheckConstraint("horas > 0", name="ck_pm_time_entries_horas_positive"),
+        CheckConstraint("horas <= 24", name="ck_pm_time_entries_horas_max"),
+        CheckConstraint(
+            "costo_hora_aplicado_snapshot IS NULL OR costo_hora_aplicado_snapshot >= 0",
+            name="ck_pm_time_entries_rate_non_negative",
+        ),
+        CheckConstraint(
+            "costo_total_snapshot IS NULL OR costo_total_snapshot >= 0",
+            name="ck_pm_time_entries_total_non_negative",
+        ),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id"), nullable=True, index=True)
+    usuario_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    usuario_email_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    usuario_nombre_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    fecha: Mapped[date] = mapped_column(Date(), nullable=False, index=True)
+    horas: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    costo_hora_aplicado_snapshot: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    costo_total_snapshot: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    fuente_tarifa: Mapped[str] = mapped_column(String(20), nullable=False, default="sin_tarifa", server_default="sin_tarifa")
+    moneda: Mapped[str] = mapped_column(String(8), nullable=False, default="MXN", server_default="MXN")
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="time_entries")
+    tarea = relationship("PMTarea", back_populates="time_entries")
+
+
+class PMTarifaHoraUsuario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_tarifas_hora_usuario"
+    __table_args__ = (
+        Index("ix_pm_tarifa_usuario_empresa_id", "empresa_id"),
+        Index("ix_pm_tarifa_usuario_usuario_id", "usuario_id"),
+        Index("ix_pm_tarifa_usuario_email", "usuario_email"),
+        Index("ix_pm_tarifa_usuario_activa", "activa"),
+        CheckConstraint("tarifa_hora >= 0", name="ck_pm_tarifa_usuario_non_negative"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    usuario_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    usuario_email: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    usuario_nombre_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    tarifa_hora: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    moneda: Mapped[str] = mapped_column(String(8), nullable=False, default="MXN", server_default="MXN")
+    effective_from: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    effective_to: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    activa: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+
+class PMTarifaHoraRol(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_tarifas_hora_rol"
+    __table_args__ = (
+        Index("ix_pm_tarifa_rol_empresa_id", "empresa_id"),
+        Index("ix_pm_tarifa_rol_rol", "rol"),
+        Index("ix_pm_tarifa_rol_activa", "activa"),
+        CheckConstraint("tarifa_hora >= 0", name="ck_pm_tarifa_rol_non_negative"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    rol: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    tarifa_hora: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    moneda: Mapped[str] = mapped_column(String(8), nullable=False, default="MXN", server_default="MXN")
+    effective_from: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    effective_to: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    activa: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)

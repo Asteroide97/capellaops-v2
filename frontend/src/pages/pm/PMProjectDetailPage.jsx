@@ -38,6 +38,7 @@ import {
 } from "../inventory/shared";
 import PMTaskDetailModal from "./PMTaskDetailModal";
 import PMProjectMaterialsTab from "./PMProjectMaterialsTab";
+import PMProjectTimeCostsTab from "./PMProjectTimeCostsTab";
 import {
   formatPercent,
   getPriorityLabel,
@@ -58,7 +59,7 @@ const projectTabs = [
   { key: "comentarios", label: "Comentarios", icon: MessageSquare },
   { key: "materiales", label: "Materiales", icon: FolderKanban },
   { key: "compras", label: "Compras", icon: FolderKanban },
-  { key: "costos", label: "Costos", icon: Gauge },
+  { key: "costos", label: "Tiempo y costos", icon: Gauge },
   { key: "documentos", label: "Documentos", icon: FolderKanban },
 ];
 
@@ -564,7 +565,14 @@ export default function PMProjectDetailPage() {
         <PlaceholderTab note="Se conectara en PM <-> Compras Fase 4." title="Compras del proyecto" />
       ) : null}
       {activeTab === "costos" ? (
-        <PlaceholderTab note="Se conectara en PM Tiempo/Costos Fase 3." title="Costos y tiempo" />
+        <PMProjectTimeCostsTab
+          empresaId={empresaId}
+          members={members}
+          project={project}
+          projectId={id}
+          tasks={tasks}
+          token={token}
+        />
       ) : null}
       {activeTab === "documentos" ? (
         <PlaceholderTab note="Se conectara en Portal/Documentos Fase 5." title="Documentos" />

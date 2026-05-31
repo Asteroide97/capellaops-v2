@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, desc, func, or_, select
+from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import TenantContext
@@ -19,8 +19,11 @@ from app.models.pm import (
     PMProyectoMaterialPlan,
     PMProyecto,
     PMProyectoMiembro,
+    PMTarifaHoraRol,
+    PMTarifaHoraUsuario,
     PMSubtarea,
     PMTarea,
+    PMTimeEntry,
 )
 from app.schemas.pm import (
     PMChecklistItemOut,
@@ -30,6 +33,7 @@ from app.schemas.pm import (
     PMDashboardProjectCostItem,
     PMDashboardKpis,
     PMDashboardOut,
+    PMDashboardUserMetricItem,
     PMCreateProjectRequisitionRequest,
     PMProjectMembersListResponse,
     PMProjectCostsOut,
@@ -42,7 +46,13 @@ from app.schemas.pm import (
     PMProyectoListResponse,
     PMStatusCount,
     PMSubtareaOut,
+    PMTarifaHoraRolListResponse,
+    PMTarifaHoraRolOut,
+    PMTarifaHoraUsuarioListResponse,
+    PMTarifaHoraUsuarioOut,
     PMTaskStats,
+    PMTimeEntryListResponse,
+    PMTimeEntryOut,
     PMTareaListItem,
     PMTareaListResponse,
     PMTareaOut,
@@ -57,6 +67,9 @@ ALLOWED_MEMBER_ROLE = {"lider", "colaborador", "observador"}
 SUBTASK_STATUS = {"pendiente", "completada"}
 PM_MATERIAL_PLAN_STATUS = {"planeado", "parcial", "completo", "cancelado"}
 PM_MATERIAL_CONSUMPTION_ORIGIN = {"movimiento_manual", "requisicion_surtida", "ajuste_admin"}
+PM_RATE_SOURCE = {"usuario", "rol", "manual", "sin_tarifa"}
+PM_ALLOWED_RATE_ROLES = {"owner", "admin", "user", "almacenista", "lider", "colaborador", "observador"}
+PM_MANAGE_RATES_ROLES = {"owner", "admin"}
 ZERO = Decimal("0")
 
 
@@ -139,6 +152,28 @@ def normalize_subtask_status(value: str | None) -> str:
     return normalized
 
 
+def normalize_rate_source(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Fuente de tarifa").lower()
+    if normalized not in PM_RATE_SOURCE:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Fuente de tarifa invalida.")
+    return normalized
+
+
+def normalize_rate_role(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Rol").lower()
+    if normalized not in PM_ALLOWED_RATE_ROLES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Rol de tarifa invalido.")
+    return normalized
+
+
+def validate_effective_dates(effective_from: date | None, effective_to: date | None) -> None:
+    if effective_from and effective_to and effective_to < effective_from:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La vigencia final no puede ser menor que la vigencia inicial.",
+        )
+
+
 def quantize_percentage(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
@@ -158,7 +193,7 @@ def get_or_create_pm_config(db: Session, empresa_id: str) -> tuple[EmpresaPMConf
         pm_enabled=True,
         pm_tareas_enabled=True,
         pm_materiales_enabled=True,
-        pm_tiempo_enabled=False,
+        pm_tiempo_enabled=True,
         pm_templates_enabled=False,
         pm_comercial_enabled=False,
         pm_portal_enabled=False,
@@ -210,6 +245,33 @@ def ensure_pm_materials_enabled(pm_context: PMContext) -> None:
         )
 
 
+def ensure_pm_time_enabled(pm_context: PMContext) -> None:
+    if not pm_context.config.pm_tiempo_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="El registro de tiempo de PM esta deshabilitado para la empresa activa.",
+        )
+
+
+def ensure_pm_rates_manage_access(pm_context: PMContext) -> None:
+    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo owner o admin pueden configurar tarifas PM.",
+        )
+
+
+def ensure_can_manage_time_entry(pm_context: PMContext, entry: PMTimeEntry) -> None:
+    if pm_context.membership_role in PM_MANAGE_RATES_ROLES:
+        return
+    if entry.usuario_id == pm_context.user.id or entry.created_by == pm_context.user.id:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="No tienes permiso para modificar este registro de horas.",
+    )
+
+
 def is_pm_materials_enabled_for_company(db: Session, empresa_id: str) -> bool:
     module_enabled = db.scalar(
         select(EmpresaModulo.is_enabled).where(
@@ -225,6 +287,23 @@ def is_pm_materials_enabled_for_company(db: Session, empresa_id: str) -> bool:
         config.pm_materiales_enabled = True
         db.flush()
     return bool(config.pm_enabled and config.pm_materiales_enabled)
+
+
+def is_pm_time_enabled_for_company(db: Session, empresa_id: str) -> bool:
+    module_enabled = db.scalar(
+        select(EmpresaModulo.is_enabled).where(
+            EmpresaModulo.empresa_id == empresa_id,
+            EmpresaModulo.module_name == "pm",
+        )
+    )
+    if not module_enabled:
+        return False
+
+    config, created = get_or_create_pm_config(db, empresa_id)
+    if created:
+        config.pm_tiempo_enabled = True
+        db.flush()
+    return bool(config.pm_enabled and config.pm_tiempo_enabled)
 
 
 def get_company_member_by_user_id(db: Session, empresa_id: str, user_id: str | None) -> Usuario | None:
@@ -1408,6 +1487,76 @@ def get_project_material_consumption_for_company(
     return consumption
 
 
+def get_time_entry_for_company(db: Session, empresa_id: str, time_entry_id: str) -> PMTimeEntry:
+    entry = db.scalar(
+        select(PMTimeEntry).where(
+            PMTimeEntry.id == time_entry_id,
+            PMTimeEntry.empresa_id == empresa_id,
+        )
+    )
+    if not entry:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro de horas no encontrado.")
+    return entry
+
+
+def get_user_hourly_rate_for_company(db: Session, empresa_id: str, rate_id: str) -> PMTarifaHoraUsuario:
+    rate = db.scalar(
+        select(PMTarifaHoraUsuario).where(
+            PMTarifaHoraUsuario.id == rate_id,
+            PMTarifaHoraUsuario.empresa_id == empresa_id,
+        )
+    )
+    if not rate:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarifa por usuario no encontrada.")
+    return rate
+
+
+def get_role_hourly_rate_for_company(db: Session, empresa_id: str, rate_id: str) -> PMTarifaHoraRol:
+    rate = db.scalar(
+        select(PMTarifaHoraRol).where(
+            PMTarifaHoraRol.id == rate_id,
+            PMTarifaHoraRol.empresa_id == empresa_id,
+        )
+    )
+    if not rate:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarifa por rol no encontrada.")
+    return rate
+
+
+def build_time_entry_role_candidates(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    user_id: str | None,
+) -> list[str]:
+    if not user_id:
+        return []
+
+    roles: list[str] = []
+    project_role = db.scalar(
+        select(PMProyectoMiembro.rol_en_proyecto).where(
+            PMProyectoMiembro.empresa_id == empresa_id,
+            PMProyectoMiembro.proyecto_id == project_id,
+            PMProyectoMiembro.usuario_id == user_id,
+            PMProyectoMiembro.activo == True,
+        )
+    )
+    if project_role:
+        roles.append(str(project_role).lower())
+
+    company_role = db.scalar(
+        select(EmpresaUsuario.role).where(
+            EmpresaUsuario.empresa_id == empresa_id,
+            EmpresaUsuario.usuario_id == user_id,
+            EmpresaUsuario.is_active == True,
+        )
+    )
+    if company_role and str(company_role).lower() not in roles:
+        roles.append(str(company_role).lower())
+    return roles
+
+
 def normalize_material_consumption_origin(value: str | None) -> str:
     normalized = normalize_required_text(value or "", "Origen").lower()
     if normalized not in PM_MATERIAL_CONSUMPTION_ORIGIN:
@@ -1586,13 +1735,45 @@ def serialize_project_material_consumption(
     )
 
 
+def get_or_create_project_cost_summary_row(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> PMProyectoCostoResumen:
+    summary = db.scalar(
+        select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.empresa_id == empresa_id,
+            PMProyectoCostoResumen.proyecto_id == project_id,
+        )
+    )
+    if summary is None:
+        summary = PMProyectoCostoResumen(
+            empresa_id=empresa_id,
+            proyecto_id=project_id,
+        )
+        db.add(summary)
+        db.flush()
+    return summary
+
+
+def recalculate_project_cost_summary_totals(
+    project: PMProyecto,
+    summary: PMProyectoCostoResumen,
+) -> None:
+    presupuesto = decimal_or_zero(project.presupuesto_estimado)
+    summary.presupuesto_estimado = presupuesto
+    summary.costo_total_real = decimal_or_zero(summary.costo_materiales_real) + decimal_or_zero(summary.costo_horas_real)
+    summary.variacion_presupuesto = presupuesto - decimal_or_zero(summary.costo_total_real)
+
+
 def refresh_project_material_costs(
     db: Session,
     *,
     empresa_id: str,
     project_id: str,
 ) -> PMProyectoMaterialSummaryOut:
-    get_project_for_company(db, empresa_id, project_id)
+    project = get_project_for_company(db, empresa_id, project_id)
     plans = db.scalars(
         select(PMProyectoMaterialPlan).where(
             PMProyectoMaterialPlan.empresa_id == empresa_id,
@@ -1643,24 +1824,13 @@ def refresh_project_material_costs(
         total_real_cost += decimal_or_zero(consumption.costo_total_snapshot)
         total_consumed_quantity += decimal_or_zero(consumption.cantidad_consumida)
 
-    summary = db.scalar(
-        select(PMProyectoCostoResumen).where(
-            PMProyectoCostoResumen.empresa_id == empresa_id,
-            PMProyectoCostoResumen.proyecto_id == project_id,
-        )
-    )
-    if summary is None:
-        summary = PMProyectoCostoResumen(
-            empresa_id=empresa_id,
-            proyecto_id=project_id,
-        )
-        db.add(summary)
-
+    summary = get_or_create_project_cost_summary_row(db, empresa_id=empresa_id, project_id=project_id)
     summary.costo_materiales_estimado = total_estimated_cost
     summary.costo_materiales_real = total_real_cost
     summary.variacion_materiales = total_real_cost - total_estimated_cost
     summary.total_materiales_planeados = total_planned_quantity
     summary.total_materiales_consumidos = total_consumed_quantity
+    recalculate_project_cost_summary_totals(project, summary)
     db.flush()
 
     percentage_consumed = ZERO
@@ -2115,26 +2285,789 @@ def create_project_material_requisition(
     )
 
 
+def serialize_time_entry(db: Session, entry: PMTimeEntry) -> PMTimeEntryOut:
+    task_title = None
+    if entry.tarea_id:
+        task_title = db.scalar(select(PMTarea.titulo).where(PMTarea.id == entry.tarea_id))
+    return PMTimeEntryOut(
+        id=entry.id,
+        empresa_id=entry.empresa_id,
+        proyecto_id=entry.proyecto_id,
+        tarea_id=entry.tarea_id,
+        tarea_titulo=task_title,
+        usuario_id=entry.usuario_id,
+        usuario_email_snapshot=entry.usuario_email_snapshot,
+        usuario_nombre_snapshot=entry.usuario_nombre_snapshot,
+        fecha=entry.fecha,
+        horas=decimal_or_zero(entry.horas),
+        descripcion=entry.descripcion,
+        costo_hora_aplicado_snapshot=decimal_or_zero(entry.costo_hora_aplicado_snapshot),
+        costo_total_snapshot=decimal_or_zero(entry.costo_total_snapshot),
+        fuente_tarifa=entry.fuente_tarifa,
+        moneda=entry.moneda,
+        activo=entry.activo,
+        created_by=entry.created_by,
+        updated_by=entry.updated_by,
+        created_at=entry.created_at,
+        updated_at=entry.updated_at,
+    )
+
+
+def serialize_user_hourly_rate(rate: PMTarifaHoraUsuario) -> PMTarifaHoraUsuarioOut:
+    return PMTarifaHoraUsuarioOut(
+        id=rate.id,
+        empresa_id=rate.empresa_id,
+        usuario_id=rate.usuario_id,
+        usuario_email=rate.usuario_email,
+        usuario_nombre_snapshot=rate.usuario_nombre_snapshot,
+        tarifa_hora=decimal_or_zero(rate.tarifa_hora),
+        moneda=rate.moneda,
+        effective_from=rate.effective_from,
+        effective_to=rate.effective_to,
+        activa=rate.activa,
+        notas=rate.notas,
+        created_by=rate.created_by,
+        created_at=rate.created_at,
+        updated_at=rate.updated_at,
+    )
+
+
+def serialize_role_hourly_rate(rate: PMTarifaHoraRol) -> PMTarifaHoraRolOut:
+    return PMTarifaHoraRolOut(
+        id=rate.id,
+        empresa_id=rate.empresa_id,
+        rol=rate.rol,
+        tarifa_hora=decimal_or_zero(rate.tarifa_hora),
+        moneda=rate.moneda,
+        effective_from=rate.effective_from,
+        effective_to=rate.effective_to,
+        activa=rate.activa,
+        notas=rate.notas,
+        created_by=rate.created_by,
+        created_at=rate.created_at,
+        updated_at=rate.updated_at,
+    )
+
+
+def resolve_time_entry_user(
+    db: Session,
+    *,
+    empresa_id: str,
+    user_id: str | None,
+    email: str | None,
+    name: str | None,
+    fallback_user: Usuario | None = None,
+) -> tuple[Usuario | None, str | None, str | None]:
+    resolved_user: Usuario | None = None
+    normalized_email = normalize_email(email)
+    normalized_name = normalize_optional_text(name)
+
+    if user_id:
+        resolved_user = get_company_member_by_user_id(db, empresa_id, user_id)
+    elif normalized_email:
+        resolved_user = get_company_member_by_email(db, empresa_id, normalized_email)
+
+    if resolved_user is None and fallback_user is not None:
+        resolved_user = get_company_member_by_user_id(db, empresa_id, fallback_user.id)
+
+    if resolved_user:
+        return resolved_user, resolved_user.email, resolved_user.full_name
+
+    return None, normalized_email, normalized_name
+
+
+def resolve_hourly_rate(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    user_id: str | None,
+    user_email: str | None,
+    entry_date: date,
+) -> tuple[Decimal, str, str]:
+    normalized_email = normalize_email(user_email)
+    user_rate_query = (
+        select(PMTarifaHoraUsuario)
+        .where(
+            PMTarifaHoraUsuario.empresa_id == empresa_id,
+            PMTarifaHoraUsuario.activa == True,
+            or_(
+                and_(PMTarifaHoraUsuario.effective_from.is_(None), PMTarifaHoraUsuario.effective_to.is_(None)),
+                and_(
+                    or_(PMTarifaHoraUsuario.effective_from.is_(None), PMTarifaHoraUsuario.effective_from <= entry_date),
+                    or_(PMTarifaHoraUsuario.effective_to.is_(None), PMTarifaHoraUsuario.effective_to >= entry_date),
+                ),
+            ),
+        )
+        .order_by(desc(PMTarifaHoraUsuario.effective_from), desc(PMTarifaHoraUsuario.updated_at), desc(PMTarifaHoraUsuario.created_at))
+    )
+    if user_id:
+        user_rate = db.scalar(user_rate_query.where(PMTarifaHoraUsuario.usuario_id == user_id))
+        if user_rate:
+            return decimal_or_zero(user_rate.tarifa_hora), "usuario", user_rate.moneda
+    if normalized_email:
+        user_rate = db.scalar(user_rate_query.where(PMTarifaHoraUsuario.usuario_email == normalized_email))
+        if user_rate:
+            return decimal_or_zero(user_rate.tarifa_hora), "usuario", user_rate.moneda
+
+    candidate_roles = build_time_entry_role_candidates(
+        db,
+        empresa_id=empresa_id,
+        project_id=project_id,
+        user_id=user_id,
+    )
+    if candidate_roles:
+        role_rates = db.scalars(
+            select(PMTarifaHoraRol).where(
+                PMTarifaHoraRol.empresa_id == empresa_id,
+                PMTarifaHoraRol.activa == True,
+                PMTarifaHoraRol.rol.in_(candidate_roles),
+                or_(
+                    PMTarifaHoraRol.effective_from.is_(None),
+                    PMTarifaHoraRol.effective_from <= entry_date,
+                ),
+                or_(
+                    PMTarifaHoraRol.effective_to.is_(None),
+                    PMTarifaHoraRol.effective_to >= entry_date,
+                ),
+            )
+        ).all()
+        if role_rates:
+            for candidate_role in candidate_roles:
+                matches = [item for item in role_rates if item.rol == candidate_role]
+                if not matches:
+                    continue
+                matches.sort(
+                    key=lambda item: (
+                        item.effective_from or date.min,
+                        item.updated_at,
+                        item.created_at,
+                    ),
+                    reverse=True,
+                )
+                rate = matches[0]
+                return decimal_or_zero(rate.tarifa_hora), "rol", rate.moneda
+
+    return ZERO, "sin_tarifa", "MXN"
+
+
+def refresh_project_labor_costs(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> PMProyectoCostoResumen:
+    project = get_project_for_company(db, empresa_id, project_id)
+    summary = get_or_create_project_cost_summary_row(db, empresa_id=empresa_id, project_id=project_id)
+    aggregates = db.execute(
+        select(
+            func.coalesce(func.sum(PMTimeEntry.costo_total_snapshot), 0),
+            func.coalesce(func.sum(PMTimeEntry.horas), 0),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (PMTimeEntry.fuente_tarifa == "sin_tarifa", PMTimeEntry.horas),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+        ).where(
+            PMTimeEntry.empresa_id == empresa_id,
+            PMTimeEntry.proyecto_id == project_id,
+            PMTimeEntry.activo == True,
+        )
+    ).one()
+    summary.costo_horas_real = decimal_or_zero(aggregates[0])
+    summary.horas_totales = decimal_or_zero(aggregates[1])
+    summary.horas_sin_tarifa = decimal_or_zero(aggregates[2])
+    recalculate_project_cost_summary_totals(project, summary)
+    db.flush()
+    return summary
+
+
+def build_project_costs_response(
+    project: PMProyecto,
+    summary: PMProyectoCostoResumen,
+) -> PMProjectCostsOut:
+    return PMProjectCostsOut(
+        costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
+        costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
+        variacion_materiales=decimal_or_zero(summary.variacion_materiales),
+        compras_estimado=ZERO,
+        costo_horas_real=decimal_or_zero(summary.costo_horas_real),
+        horas_totales=decimal_or_zero(summary.horas_totales),
+        horas_sin_tarifa=decimal_or_zero(summary.horas_sin_tarifa),
+        costo_total_real=decimal_or_zero(summary.costo_total_real),
+        presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
+        variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
+        margen_estimado=summary.margen_estimado,
+    )
+
+
+def refresh_project_total_costs(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> PMProjectCostsOut:
+    project = get_project_for_company(db, empresa_id, project_id)
+    refresh_project_material_costs(db, empresa_id=empresa_id, project_id=project_id)
+    summary = refresh_project_labor_costs(db, empresa_id=empresa_id, project_id=project_id)
+    return build_project_costs_response(project, summary)
+
+
+def list_project_time_entries(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    user_id: str | None = None,
+    task_id: str | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
+    activo: bool | None = True,
+    limit: int = 50,
+    offset: int = 0,
+) -> PMTimeEntryListResponse:
+    ensure_pm_time_enabled(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    query = select(PMTimeEntry).where(
+        PMTimeEntry.empresa_id == pm_context.empresa_id,
+        PMTimeEntry.proyecto_id == project_id,
+    )
+    if user_id:
+        query = query.where(PMTimeEntry.usuario_id == user_id)
+    if task_id:
+        query = query.where(PMTimeEntry.tarea_id == task_id)
+    if fecha_desde:
+        query = query.where(PMTimeEntry.fecha >= fecha_desde)
+    if fecha_hasta:
+        query = query.where(PMTimeEntry.fecha <= fecha_hasta)
+    if activo is not None:
+        query = query.where(PMTimeEntry.activo == activo)
+    total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+    entries = db.scalars(
+        query.order_by(desc(PMTimeEntry.fecha), desc(PMTimeEntry.created_at))
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return PMTimeEntryListResponse(
+        items=[serialize_time_entry(db, entry) for entry in entries],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def create_project_time_entry(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    tarea_id: str | None,
+    usuario_id: str | None,
+    usuario_email_snapshot: str | None,
+    usuario_nombre_snapshot: str | None,
+    fecha: date,
+    horas: Decimal,
+    descripcion: str | None,
+    moneda: str | None,
+    ip_address: str | None,
+) -> PMTimeEntryOut:
+    ensure_pm_time_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    task = resolve_project_task(db, pm_context.empresa_id, project.id, tarea_id)
+    resolved_user, resolved_email, resolved_name = resolve_time_entry_user(
+        db,
+        empresa_id=pm_context.empresa_id,
+        user_id=usuario_id,
+        email=usuario_email_snapshot,
+        name=usuario_nombre_snapshot,
+        fallback_user=pm_context.user
+        if not usuario_id and not normalize_email(usuario_email_snapshot) and not normalize_optional_text(usuario_nombre_snapshot)
+        else None,
+    )
+    hours_value = decimal_or_zero(horas)
+    if hours_value <= ZERO or hours_value > Decimal("24"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Las horas deben ser mayores a 0 y no exceder 24.")
+    rate_value, rate_source, resolved_currency = resolve_hourly_rate(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project.id,
+        user_id=resolved_user.id if resolved_user else None,
+        user_email=resolved_email,
+        entry_date=fecha,
+    )
+    entry = PMTimeEntry(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        tarea_id=task.id if task else None,
+        usuario_id=resolved_user.id if resolved_user else None,
+        usuario_email_snapshot=resolved_email,
+        usuario_nombre_snapshot=resolved_name,
+        fecha=fecha,
+        horas=hours_value,
+        descripcion=normalize_optional_text(descripcion),
+        costo_hora_aplicado_snapshot=rate_value,
+        costo_total_snapshot=hours_value * rate_value,
+        fuente_tarifa=normalize_rate_source(rate_source),
+        moneda=normalize_optional_text(moneda) or resolved_currency or "MXN",
+        activo=True,
+        created_by=pm_context.user.id,
+        updated_by=pm_context.user.id,
+    )
+    db.add(entry)
+    db.flush()
+    refresh_project_labor_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.time_entry.create",
+            entity_name="pm_time_entry",
+            entity_id=entry.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "task_id": entry.tarea_id, "user_id": entry.usuario_id},
+        )
+    )
+    return serialize_time_entry(db, entry)
+
+
+def update_project_time_entry(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    time_entry_id: str,
+    tarea_id: str | None,
+    usuario_id: str | None,
+    usuario_email_snapshot: str | None,
+    usuario_nombre_snapshot: str | None,
+    fecha: date | None,
+    horas: Decimal | None,
+    descripcion: str | None,
+    moneda: str | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMTimeEntryOut:
+    ensure_pm_time_enabled(pm_context)
+    entry = get_time_entry_for_company(db, pm_context.empresa_id, time_entry_id)
+    ensure_can_manage_time_entry(pm_context, entry)
+    project = get_project_for_company(db, pm_context.empresa_id, entry.proyecto_id)
+    next_task = resolve_project_task(db, pm_context.empresa_id, project.id, tarea_id if tarea_id is not None else entry.tarea_id)
+    next_date = fecha or entry.fecha
+    next_hours = decimal_or_zero(horas if horas is not None else entry.horas)
+    if next_hours <= ZERO or next_hours > Decimal("24"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Las horas deben ser mayores a 0 y no exceder 24.")
+    resolved_user, resolved_email, resolved_name = resolve_time_entry_user(
+        db,
+        empresa_id=pm_context.empresa_id,
+        user_id=usuario_id if usuario_id is not None else entry.usuario_id,
+        email=usuario_email_snapshot if usuario_email_snapshot is not None else entry.usuario_email_snapshot,
+        name=usuario_nombre_snapshot if usuario_nombre_snapshot is not None else entry.usuario_nombre_snapshot,
+        fallback_user=None,
+    )
+    rate_value, rate_source, resolved_currency = resolve_hourly_rate(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project.id,
+        user_id=resolved_user.id if resolved_user else None,
+        user_email=resolved_email,
+        entry_date=next_date,
+    )
+    entry.tarea_id = next_task.id if next_task else None
+    entry.usuario_id = resolved_user.id if resolved_user else None
+    entry.usuario_email_snapshot = resolved_email
+    entry.usuario_nombre_snapshot = resolved_name
+    entry.fecha = next_date
+    entry.horas = next_hours
+    if descripcion is not None:
+        entry.descripcion = normalize_optional_text(descripcion)
+    if activo is not None:
+        entry.activo = activo
+    entry.costo_hora_aplicado_snapshot = rate_value
+    entry.costo_total_snapshot = next_hours * rate_value
+    entry.fuente_tarifa = normalize_rate_source(rate_source)
+    entry.moneda = normalize_optional_text(moneda) or resolved_currency or entry.moneda or "MXN"
+    entry.updated_by = pm_context.user.id
+    db.flush()
+    refresh_project_labor_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.time_entry.update",
+            entity_name="pm_time_entry",
+            entity_id=entry.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "task_id": entry.tarea_id, "active": entry.activo},
+        )
+    )
+    return serialize_time_entry(db, entry)
+
+
+def deactivate_project_time_entry(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    time_entry_id: str,
+    ip_address: str | None,
+) -> PMTimeEntryOut:
+    ensure_pm_time_enabled(pm_context)
+    entry = get_time_entry_for_company(db, pm_context.empresa_id, time_entry_id)
+    ensure_can_manage_time_entry(pm_context, entry)
+    entry.activo = False
+    entry.updated_by = pm_context.user.id
+    db.flush()
+    refresh_project_labor_costs(db, empresa_id=pm_context.empresa_id, project_id=entry.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.time_entry.deactivate",
+            entity_name="pm_time_entry",
+            entity_id=entry.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": entry.proyecto_id},
+        )
+    )
+    return serialize_time_entry(db, entry)
+
+
+def list_user_hourly_rates(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    q: str | None = None,
+    activa: bool | None = True,
+    limit: int = 50,
+    offset: int = 0,
+) -> PMTarifaHoraUsuarioListResponse:
+    ensure_pm_time_enabled(pm_context)
+    ensure_pm_rates_manage_access(pm_context)
+    query = select(PMTarifaHoraUsuario).where(PMTarifaHoraUsuario.empresa_id == pm_context.empresa_id)
+    if activa is not None:
+        query = query.where(PMTarifaHoraUsuario.activa == activa)
+    if q:
+        pattern = f"%{q.strip().lower()}%"
+        query = query.where(
+            or_(
+                func.lower(func.coalesce(PMTarifaHoraUsuario.usuario_email, "")).like(pattern),
+                func.lower(func.coalesce(PMTarifaHoraUsuario.usuario_nombre_snapshot, "")).like(pattern),
+            )
+        )
+    total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+    items = db.scalars(
+        query.order_by(desc(PMTarifaHoraUsuario.activa), PMTarifaHoraUsuario.usuario_email.asc(), desc(PMTarifaHoraUsuario.effective_from))
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return PMTarifaHoraUsuarioListResponse(
+        items=[serialize_user_hourly_rate(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def create_user_hourly_rate(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    usuario_id: str | None,
+    usuario_email: str,
+    usuario_nombre_snapshot: str | None,
+    tarifa_hora: Decimal,
+    moneda: str,
+    effective_from: date | None,
+    effective_to: date | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMTarifaHoraUsuarioOut:
+    ensure_pm_time_enabled(pm_context)
+    ensure_pm_rates_manage_access(pm_context)
+    validate_effective_dates(effective_from, effective_to)
+    resolved_user, resolved_email, resolved_name = resolve_time_entry_user(
+        db,
+        empresa_id=pm_context.empresa_id,
+        user_id=usuario_id,
+        email=usuario_email,
+        name=usuario_nombre_snapshot,
+    )
+    rate = PMTarifaHoraUsuario(
+        empresa_id=pm_context.empresa_id,
+        usuario_id=resolved_user.id if resolved_user else None,
+        usuario_email=resolved_email or normalize_email(usuario_email) or "",
+        usuario_nombre_snapshot=resolved_name,
+        tarifa_hora=decimal_or_zero(tarifa_hora),
+        moneda=(normalize_optional_text(moneda) or "MXN").upper(),
+        effective_from=effective_from,
+        effective_to=effective_to,
+        activa=True,
+        notas=normalize_optional_text(notas),
+        created_by=pm_context.user.id,
+    )
+    db.add(rate)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.user_rate.create",
+            entity_name="pm_tarifa_hora_usuario",
+            entity_id=rate.id,
+            ip_address=ip_address,
+            metadata_json={"user_id": rate.usuario_id, "email": rate.usuario_email},
+        )
+    )
+    return serialize_user_hourly_rate(rate)
+
+
+def update_user_hourly_rate(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    rate_id: str,
+    usuario_id: str | None,
+    usuario_email: str | None,
+    usuario_nombre_snapshot: str | None,
+    tarifa_hora: Decimal | None,
+    moneda: str | None,
+    effective_from: date | None,
+    effective_to: date | None,
+    activa: bool | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMTarifaHoraUsuarioOut:
+    ensure_pm_time_enabled(pm_context)
+    ensure_pm_rates_manage_access(pm_context)
+    rate = get_user_hourly_rate_for_company(db, pm_context.empresa_id, rate_id)
+    next_effective_from = effective_from if effective_from is not None else rate.effective_from
+    next_effective_to = effective_to if effective_to is not None else rate.effective_to
+    validate_effective_dates(next_effective_from, next_effective_to)
+    resolved_user, resolved_email, resolved_name = resolve_time_entry_user(
+        db,
+        empresa_id=pm_context.empresa_id,
+        user_id=usuario_id if usuario_id is not None else rate.usuario_id,
+        email=usuario_email if usuario_email is not None else rate.usuario_email,
+        name=usuario_nombre_snapshot if usuario_nombre_snapshot is not None else rate.usuario_nombre_snapshot,
+    )
+    rate.usuario_id = resolved_user.id if resolved_user else None
+    rate.usuario_email = resolved_email or rate.usuario_email
+    rate.usuario_nombre_snapshot = resolved_name
+    if tarifa_hora is not None:
+        rate.tarifa_hora = decimal_or_zero(tarifa_hora)
+    if moneda is not None:
+        rate.moneda = (normalize_optional_text(moneda) or "MXN").upper()
+    rate.effective_from = next_effective_from
+    rate.effective_to = next_effective_to
+    if activa is not None:
+        rate.activa = activa
+    if notas is not None:
+        rate.notas = normalize_optional_text(notas)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.user_rate.update",
+            entity_name="pm_tarifa_hora_usuario",
+            entity_id=rate.id,
+            ip_address=ip_address,
+            metadata_json={"user_id": rate.usuario_id, "email": rate.usuario_email, "active": rate.activa},
+        )
+    )
+    return serialize_user_hourly_rate(rate)
+
+
+def deactivate_user_hourly_rate(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    rate_id: str,
+    ip_address: str | None,
+) -> PMTarifaHoraUsuarioOut:
+    ensure_pm_time_enabled(pm_context)
+    ensure_pm_rates_manage_access(pm_context)
+    rate = get_user_hourly_rate_for_company(db, pm_context.empresa_id, rate_id)
+    rate.activa = False
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.user_rate.deactivate",
+            entity_name="pm_tarifa_hora_usuario",
+            entity_id=rate.id,
+            ip_address=ip_address,
+            metadata_json={"email": rate.usuario_email},
+        )
+    )
+    return serialize_user_hourly_rate(rate)
+
+
+def list_role_hourly_rates(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    q: str | None = None,
+    activa: bool | None = True,
+    limit: int = 50,
+    offset: int = 0,
+) -> PMTarifaHoraRolListResponse:
+    ensure_pm_time_enabled(pm_context)
+    ensure_pm_rates_manage_access(pm_context)
+    query = select(PMTarifaHoraRol).where(PMTarifaHoraRol.empresa_id == pm_context.empresa_id)
+    if activa is not None:
+        query = query.where(PMTarifaHoraRol.activa == activa)
+    if q:
+        pattern = f"%{q.strip().lower()}%"
+        query = query.where(func.lower(func.coalesce(PMTarifaHoraRol.rol, "")).like(pattern))
+    total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+    items = db.scalars(
+        query.order_by(desc(PMTarifaHoraRol.activa), PMTarifaHoraRol.rol.asc(), desc(PMTarifaHoraRol.effective_from))
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return PMTarifaHoraRolListResponse(
+        items=[serialize_role_hourly_rate(item) for item in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def create_role_hourly_rate(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    rol: str,
+    tarifa_hora: Decimal,
+    moneda: str,
+    effective_from: date | None,
+    effective_to: date | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMTarifaHoraRolOut:
+    ensure_pm_time_enabled(pm_context)
+    ensure_pm_rates_manage_access(pm_context)
+    validate_effective_dates(effective_from, effective_to)
+    rate = PMTarifaHoraRol(
+        empresa_id=pm_context.empresa_id,
+        rol=normalize_rate_role(rol),
+        tarifa_hora=decimal_or_zero(tarifa_hora),
+        moneda=(normalize_optional_text(moneda) or "MXN").upper(),
+        effective_from=effective_from,
+        effective_to=effective_to,
+        activa=True,
+        notas=normalize_optional_text(notas),
+        created_by=pm_context.user.id,
+    )
+    db.add(rate)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.role_rate.create",
+            entity_name="pm_tarifa_hora_rol",
+            entity_id=rate.id,
+            ip_address=ip_address,
+            metadata_json={"rol": rate.rol},
+        )
+    )
+    return serialize_role_hourly_rate(rate)
+
+
+def update_role_hourly_rate(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    rate_id: str,
+    rol: str | None,
+    tarifa_hora: Decimal | None,
+    moneda: str | None,
+    effective_from: date | None,
+    effective_to: date | None,
+    activa: bool | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMTarifaHoraRolOut:
+    ensure_pm_time_enabled(pm_context)
+    ensure_pm_rates_manage_access(pm_context)
+    rate = get_role_hourly_rate_for_company(db, pm_context.empresa_id, rate_id)
+    next_effective_from = effective_from if effective_from is not None else rate.effective_from
+    next_effective_to = effective_to if effective_to is not None else rate.effective_to
+    validate_effective_dates(next_effective_from, next_effective_to)
+    if rol is not None:
+        rate.rol = normalize_rate_role(rol)
+    if tarifa_hora is not None:
+        rate.tarifa_hora = decimal_or_zero(tarifa_hora)
+    if moneda is not None:
+        rate.moneda = (normalize_optional_text(moneda) or "MXN").upper()
+    rate.effective_from = next_effective_from
+    rate.effective_to = next_effective_to
+    if activa is not None:
+        rate.activa = activa
+    if notas is not None:
+        rate.notas = normalize_optional_text(notas)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.role_rate.update",
+            entity_name="pm_tarifa_hora_rol",
+            entity_id=rate.id,
+            ip_address=ip_address,
+            metadata_json={"rol": rate.rol, "active": rate.activa},
+        )
+    )
+    return serialize_role_hourly_rate(rate)
+
+
+def deactivate_role_hourly_rate(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    rate_id: str,
+    ip_address: str | None,
+) -> PMTarifaHoraRolOut:
+    ensure_pm_time_enabled(pm_context)
+    ensure_pm_rates_manage_access(pm_context)
+    rate = get_role_hourly_rate_for_company(db, pm_context.empresa_id, rate_id)
+    rate.activa = False
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.role_rate.deactivate",
+            entity_name="pm_tarifa_hora_rol",
+            entity_id=rate.id,
+            ip_address=ip_address,
+            metadata_json={"rol": rate.rol},
+        )
+    )
+    return serialize_role_hourly_rate(rate)
+
+
 def get_project_costs(
     db: Session,
     pm_context: PMContext,
     project_id: str,
 ) -> PMProjectCostsOut:
-    ensure_pm_materials_enabled(pm_context)
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
-    summary = refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
-    presupuesto = decimal_or_zero(project.presupuesto_estimado)
-    total_real = decimal_or_zero(summary.costo_real)
-    return PMProjectCostsOut(
-        materiales_estimado=decimal_or_zero(summary.costo_estimado),
-        materiales_real=total_real,
-        variacion_materiales=decimal_or_zero(summary.variacion),
-        compras_estimado=ZERO,
-        horas_real=ZERO,
-        total_real=total_real,
-        presupuesto_estimado=presupuesto,
-        variacion_presupuesto=total_real - presupuesto,
+    if pm_context.config.pm_materiales_enabled:
+        refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    summary = (
+        refresh_project_labor_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+        if pm_context.config.pm_tiempo_enabled
+        else get_or_create_project_cost_summary_row(db, empresa_id=pm_context.empresa_id, project_id=project.id)
     )
+    recalculate_project_cost_summary_totals(project, summary)
+    db.flush()
+    return build_project_costs_response(project, summary)
 
 
 def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
@@ -2187,41 +3120,6 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
         .group_by(PMProyecto.estatus)
     ).all()
 
-    material_estimated_total = db.scalar(
-        select(func.coalesce(func.sum(PMProyectoCostoResumen.costo_materiales_estimado), 0)).where(
-            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
-        )
-    ) or ZERO
-    material_real_total = db.scalar(
-        select(func.coalesce(func.sum(PMProyectoCostoResumen.costo_materiales_real), 0)).where(
-            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
-        )
-    ) or ZERO
-    material_variation_total = decimal_or_zero(material_real_total) - decimal_or_zero(material_estimated_total)
-
-    top_material_cost_projects = db.execute(
-        select(PMProyectoCostoResumen, PMProyecto)
-        .join(PMProyecto, PMProyecto.id == PMProyectoCostoResumen.proyecto_id)
-        .where(
-            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
-            PMProyecto.activo == True,
-        )
-        .order_by(PMProyectoCostoResumen.costo_materiales_real.desc(), PMProyecto.nombre.asc())
-        .limit(5)
-    ).all()
-
-    over_budget_material_projects = db.execute(
-        select(PMProyectoCostoResumen, PMProyecto)
-        .join(PMProyecto, PMProyecto.id == PMProyectoCostoResumen.proyecto_id)
-        .where(
-            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
-            PMProyecto.activo == True,
-            PMProyectoCostoResumen.costo_materiales_real > func.coalesce(PMProyecto.presupuesto_estimado, 0),
-        )
-        .order_by((PMProyectoCostoResumen.costo_materiales_real - func.coalesce(PMProyecto.presupuesto_estimado, 0)).desc())
-        .limit(5)
-    ).all()
-
     upcoming_task_rows = db.execute(
         select(PMTarea, PMProyecto)
         .join(PMProyecto, PMProyecto.id == PMTarea.proyecto_id)
@@ -2265,6 +3163,127 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
         .limit(8)
     ).all()
 
+    material_estimated_total = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.costo_materiales_estimado), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    material_real_total = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.costo_materiales_real), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    material_variation_total = decimal_or_zero(material_real_total) - decimal_or_zero(material_estimated_total)
+    labor_hours_total = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.horas_totales), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    labor_cost_total = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.costo_horas_real), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    hours_without_rate_total = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.horas_sin_tarifa), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    total_real_cost = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.costo_total_real), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+
+    top_material_cost_projects = db.execute(
+        select(PMProyectoCostoResumen, PMProyecto)
+        .join(PMProyecto, PMProyecto.id == PMProyectoCostoResumen.proyecto_id)
+        .where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+        )
+        .order_by(PMProyectoCostoResumen.costo_materiales_real.desc(), PMProyecto.nombre.asc())
+        .limit(5)
+    ).all()
+    over_budget_material_projects = db.execute(
+        select(PMProyectoCostoResumen, PMProyecto)
+        .join(PMProyecto, PMProyecto.id == PMProyectoCostoResumen.proyecto_id)
+        .where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+            PMProyectoCostoResumen.costo_materiales_real > func.coalesce(PMProyecto.presupuesto_estimado, 0),
+        )
+        .order_by((PMProyectoCostoResumen.costo_materiales_real - func.coalesce(PMProyecto.presupuesto_estimado, 0)).desc())
+        .limit(5)
+    ).all()
+    top_total_cost_projects = db.execute(
+        select(PMProyectoCostoResumen, PMProyecto)
+        .join(PMProyecto, PMProyecto.id == PMProyectoCostoResumen.proyecto_id)
+        .where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+        )
+        .order_by(PMProyectoCostoResumen.costo_total_real.desc(), PMProyecto.nombre.asc())
+        .limit(5)
+    ).all()
+    over_budget_total_projects = db.execute(
+        select(PMProyectoCostoResumen, PMProyecto)
+        .join(PMProyecto, PMProyecto.id == PMProyectoCostoResumen.proyecto_id)
+        .where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+            PMProyectoCostoResumen.costo_total_real > func.coalesce(PMProyecto.presupuesto_estimado, 0),
+        )
+        .order_by((PMProyectoCostoResumen.costo_total_real - func.coalesce(PMProyecto.presupuesto_estimado, 0)).desc())
+        .limit(5)
+    ).all()
+    top_users_by_hours_rows = db.execute(
+        select(
+            PMTimeEntry.usuario_id,
+            PMTimeEntry.usuario_email_snapshot,
+            PMTimeEntry.usuario_nombre_snapshot,
+            func.coalesce(func.sum(PMTimeEntry.horas), 0),
+            func.coalesce(func.sum(PMTimeEntry.costo_total_snapshot), 0),
+        )
+        .where(
+            PMTimeEntry.empresa_id == pm_context.empresa_id,
+            PMTimeEntry.activo == True,
+        )
+        .group_by(
+            PMTimeEntry.usuario_id,
+            PMTimeEntry.usuario_email_snapshot,
+            PMTimeEntry.usuario_nombre_snapshot,
+        )
+        .order_by(
+            desc(func.sum(PMTimeEntry.horas)),
+            func.lower(func.coalesce(PMTimeEntry.usuario_nombre_snapshot, PMTimeEntry.usuario_email_snapshot, "")),
+        )
+        .limit(5)
+    ).all()
+    top_users_by_cost_rows = db.execute(
+        select(
+            PMTimeEntry.usuario_id,
+            PMTimeEntry.usuario_email_snapshot,
+            PMTimeEntry.usuario_nombre_snapshot,
+            func.coalesce(func.sum(PMTimeEntry.horas), 0),
+            func.coalesce(func.sum(PMTimeEntry.costo_total_snapshot), 0),
+        )
+        .where(
+            PMTimeEntry.empresa_id == pm_context.empresa_id,
+            PMTimeEntry.activo == True,
+        )
+        .group_by(
+            PMTimeEntry.usuario_id,
+            PMTimeEntry.usuario_email_snapshot,
+            PMTimeEntry.usuario_nombre_snapshot,
+        )
+        .order_by(
+            desc(func.sum(PMTimeEntry.costo_total_snapshot)),
+            func.lower(func.coalesce(PMTimeEntry.usuario_nombre_snapshot, PMTimeEntry.usuario_email_snapshot, "")),
+        )
+        .limit(5)
+    ).all()
+
     return PMDashboardOut(
         kpis=PMDashboardKpis(
             proyectos_activos=active_projects,
@@ -2276,6 +3295,10 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             costo_materiales_estimado_total=decimal_or_zero(material_estimated_total),
             costo_materiales_real_total=decimal_or_zero(material_real_total),
             variacion_materiales_total=decimal_or_zero(material_variation_total),
+            horas_totales=decimal_or_zero(labor_hours_total),
+            costo_horas_real=decimal_or_zero(labor_cost_total),
+            horas_sin_tarifa=decimal_or_zero(hours_without_rate_total),
+            costo_total_real=decimal_or_zero(total_real_cost),
         ),
         proyectos_por_estatus=build_status_counts(project_rows, ALLOWED_PROJECT_STATUS),
         tareas_por_estatus=build_status_counts(task_rows, ALLOWED_TASK_STATUS),
@@ -2324,9 +3347,12 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
                 proyecto_nombre=project.nombre,
                 costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
                 costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
+                costo_horas_real=decimal_or_zero(summary.costo_horas_real),
+                horas_totales=decimal_or_zero(summary.horas_totales),
+                costo_total_real=decimal_or_zero(summary.costo_total_real),
                 variacion_materiales=decimal_or_zero(summary.variacion_materiales),
                 presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
-                variacion_presupuesto=decimal_or_zero(summary.costo_materiales_real) - decimal_or_zero(project.presupuesto_estimado),
+                variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
             )
             for summary, project in top_material_cost_projects
         ],
@@ -2336,11 +3362,64 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
                 proyecto_nombre=project.nombre,
                 costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
                 costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
+                costo_horas_real=decimal_or_zero(summary.costo_horas_real),
+                horas_totales=decimal_or_zero(summary.horas_totales),
+                costo_total_real=decimal_or_zero(summary.costo_total_real),
                 variacion_materiales=decimal_or_zero(summary.variacion_materiales),
                 presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
-                variacion_presupuesto=decimal_or_zero(summary.costo_materiales_real) - decimal_or_zero(project.presupuesto_estimado),
+                variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
             )
             for summary, project in over_budget_material_projects
+        ],
+        top_proyectos_por_costo_total=[
+            PMDashboardProjectCostItem(
+                project_id=project.id,
+                proyecto_nombre=project.nombre,
+                costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
+                costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
+                costo_horas_real=decimal_or_zero(summary.costo_horas_real),
+                horas_totales=decimal_or_zero(summary.horas_totales),
+                costo_total_real=decimal_or_zero(summary.costo_total_real),
+                variacion_materiales=decimal_or_zero(summary.variacion_materiales),
+                presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
+                variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
+            )
+            for summary, project in top_total_cost_projects
+        ],
+        proyectos_sobre_presupuesto=[
+            PMDashboardProjectCostItem(
+                project_id=project.id,
+                proyecto_nombre=project.nombre,
+                costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
+                costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
+                costo_horas_real=decimal_or_zero(summary.costo_horas_real),
+                horas_totales=decimal_or_zero(summary.horas_totales),
+                costo_total_real=decimal_or_zero(summary.costo_total_real),
+                variacion_materiales=decimal_or_zero(summary.variacion_materiales),
+                presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
+                variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
+            )
+            for summary, project in over_budget_total_projects
+        ],
+        top_usuarios_por_horas=[
+            PMDashboardUserMetricItem(
+                usuario_id=user_id,
+                usuario_email=email,
+                usuario_nombre=name,
+                horas_totales=decimal_or_zero(hours_total),
+                costo_total=decimal_or_zero(cost_total),
+            )
+            for user_id, email, name, hours_total, cost_total in top_users_by_hours_rows
+        ],
+        top_usuarios_por_costo=[
+            PMDashboardUserMetricItem(
+                usuario_id=user_id,
+                usuario_email=email,
+                usuario_nombre=name,
+                horas_totales=decimal_or_zero(hours_total),
+                costo_total=decimal_or_zero(cost_total),
+            )
+            for user_id, email, name, hours_total, cost_total in top_users_by_cost_rows
         ],
     )
 

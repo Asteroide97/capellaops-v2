@@ -21,8 +21,11 @@ from app.models.pm import (
     PMProyectoMaterialPlan,
     PMProyecto,
     PMProyectoMiembro,
+    PMTarifaHoraRol,
+    PMTarifaHoraUsuario,
     PMSubtarea,
     PMTarea,
+    PMTimeEntry,
 )
 from app.models.procurement import (
     OrdenCompra,
@@ -54,8 +57,11 @@ __all__ = [
     "PMProyectoMaterialPlan",
     "PMProyecto",
     "PMProyectoMiembro",
+    "PMTarifaHoraRol",
+    "PMTarifaHoraUsuario",
     "PMSubtarea",
     "PMTarea",
+    "PMTimeEntry",
     "PendingRegistration",
     "Plan",
     "Proveedor",

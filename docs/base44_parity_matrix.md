@@ -157,7 +157,13 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | Crear requisicion desde proyecto | Implementado | Alta | PM F2 | La tab de materiales ya puede crear requisiciones en borrador desde faltantes del proyecto con `es_proyecto=true`. | Solicitud de materiales fuera del flujo PM. |
 | PM | Reservas de stock | Pendiente | Media | PM F3 | No existe reserva formal ni bloqueo preventivo de existencias para proyectos. | Sobreasignacion posible entre proyectos y operacion diaria. |
 | PM | Compras directas desde PM | Pendiente | Media | PM F3 | PM todavia crea requisiciones; no lanza compras directas ni recepciones propias. | Flujo PM-Compras aun fragmentado. |
-| PM | Tiempo / costos / tarifas | Pendiente | Media | PM F3 | No existe captura de horas, tarifas, costo por usuario ni tablero laboral real. | Dificil medir productividad, margen o desviaciones. |
+| PM | Registro de horas | Implementado | Alta | PM F3 | Ya existe captura de horas por proyecto y tarea, con desactivacion logica y snapshot del costo aplicado. | Costo laboral sin trazabilidad real. |
+| PM | Tarifa por usuario | Implementado | Alta | PM F3 | Ya existe configuracion de tarifa horaria por usuario con vigencias y prioridad sobre rol. | Costeo real impreciso para personal clave. |
+| PM | Tarifa por rol | Implementado | Alta | PM F3 | Ya existe tarifa fallback por rol de empresa o de proyecto cuando no hay tarifa individual. | Horas sin costo o con costo inconsistente. |
+| PM | Snapshots de costo por hora | Implementado | Alta | PM F3 | Cada `pm_time_entry` guarda tarifa aplicada, costo total y fuente de tarifa sin recalculo retroactivo. | Historico de costos inestable. |
+| PM | Costo laboral real | Implementado | Alta | PM F3 | `PMProyectoCostoResumen` ya acumula horas totales, horas sin tarifa y costo horas real por proyecto. | Proyectos sin visibilidad laboral real. |
+| PM | Rentabilidad base | Parcial | Media | PM F3 | Ya existe costo total real y variacion contra presupuesto, pero aun no hay ingresos comerciales integrados ni margen real completo. | Rentabilidad parcial o estimada. |
+| PM | Aprobacion de horas | Pendiente | Media | PM F4 | No existe workflow formal de aprobacion o bloqueo previo al costeo. | Riesgo de capturas no validadas. |
 | PM | Documentos | Pendiente | Media | PM F2 | Solo existe placeholder de UI; no hay almacenamiento ni flujos documentales. | Informacion dispersa. |
 | PM | Portal externo | Pendiente | Baja | PM F3 | No implementado. | Experiencia limitada para clientes externos. |
 | PM | Vinculos comerciales | Pendiente | Alta | PM F3 | No existe enlace operativo real con ventas, facturas o cobranza. | Flujo comercial-operativo desconectado. |

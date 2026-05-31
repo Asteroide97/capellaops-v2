@@ -30,6 +30,16 @@ export const projectMemberRoleOptions = [
   { value: "observador", label: "Observador" },
 ];
 
+export const pmRateRoleOptions = [
+  { value: "owner", label: "Owner" },
+  { value: "admin", label: "Admin" },
+  { value: "user", label: "Usuario" },
+  { value: "almacenista", label: "Almacenista" },
+  { value: "lider", label: "Lider" },
+  { value: "colaborador", label: "Colaborador" },
+  { value: "observador", label: "Observador" },
+];
+
 export function getProjectStatusLabel(value) {
   return projectStatusOptions.find((item) => item.value === value)?.label ?? value ?? "Borrador";
 }
@@ -107,4 +117,32 @@ export function isTaskOverdue(task) {
   due.setHours(0, 0, 0, 0);
   today.setHours(0, 0, 0, 0);
   return due < today;
+}
+
+export function getRateSourceLabel(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "usuario") {
+    return "Usuario";
+  }
+  if (normalized === "rol") {
+    return "Rol";
+  }
+  if (normalized === "manual") {
+    return "Manual";
+  }
+  return "Sin tarifa";
+}
+
+export function getRateSourceTone(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "usuario") {
+    return "success";
+  }
+  if (normalized === "rol") {
+    return "info";
+  }
+  if (normalized === "manual") {
+    return "warning";
+  }
+  return "danger";
 }

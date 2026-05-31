@@ -1363,6 +1363,10 @@ textarea {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.inventory-metric-grid-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .inventory-metric-card {
   display: grid;
   gap: 0.45rem;
@@ -1837,6 +1841,7 @@ textarea {
   .inventory-metric-grid-3,
   .inventory-metric-grid-4,
   .inventory-metric-grid-5,
+  .inventory-metric-grid-6,
   .inventory-content-grid-2,
   .inventory-action-grid,
   .pm-kanban-grid,
@@ -1893,6 +1898,7 @@ textarea {
   .inventory-metric-grid-3,
   .inventory-metric-grid-4,
   .inventory-metric-grid-5,
+  .inventory-metric-grid-6,
   .inventory-content-grid-2,
   .inventory-action-grid,
   .inventory-search-control,

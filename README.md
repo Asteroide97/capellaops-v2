@@ -625,6 +625,58 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Vinculos comerciales
 - Cualquier funcionalidad de mantenimiento
 
+## PM Fase 3 - Horas, tarifas y costo laboral
+
+- PM ya puede registrar horas por proyecto y tarea.
+- PM ya puede configurar tarifas por usuario y por rol.
+- Cada registro de horas guarda snapshot de:
+  - tarifa aplicada
+  - costo total
+  - fuente de tarifa
+- El costo total del proyecto ahora suma:
+  - materiales reales
+  - horas reales
+- Mantenimiento sigue fuera del alcance actual.
+
+### Endpoints principales de PM Fase 3
+
+- Registro de horas:
+  - `GET /pm/projects/{project_id}/time-entries`
+  - `POST /pm/projects/{project_id}/time-entries`
+  - `PUT /pm/time-entries/{time_entry_id}`
+  - `POST /pm/time-entries/{time_entry_id}/deactivate`
+- Tarifas por usuario:
+  - `GET /pm/rates/users`
+  - `POST /pm/rates/users`
+  - `PUT /pm/rates/users/{rate_id}`
+  - `POST /pm/rates/users/{rate_id}/deactivate`
+- Tarifas por rol:
+  - `GET /pm/rates/roles`
+  - `POST /pm/rates/roles`
+  - `PUT /pm/rates/roles/{rate_id}`
+  - `POST /pm/rates/roles/{rate_id}/deactivate`
+- Costos:
+  - `GET /pm/projects/{project_id}/costs`
+  - `POST /pm/projects/{project_id}/costs/refresh`
+
+### Reglas operativas de PM Fase 3
+
+- La tarifa se resuelve primero por usuario.
+- Si no existe tarifa por usuario, se busca tarifa por rol.
+- Si no existe ninguna tarifa vigente, el registro se guarda con costo `0` y `fuente_tarifa='sin_tarifa'`.
+- Cambios posteriores de tarifa no modifican registros historicos.
+- `costo_total_real` del proyecto se calcula como `costo_materiales_real + costo_horas_real`.
+- `variacion_presupuesto` se calcula como `presupuesto_estimado - costo_total_real`.
+
+### Pendientes de PM Fase 3
+
+- Aprobaciones de horas
+- Nomina
+- Facturacion por horas
+- Presupuestos detallados / APU
+- Portal cliente
+- Gantt
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.

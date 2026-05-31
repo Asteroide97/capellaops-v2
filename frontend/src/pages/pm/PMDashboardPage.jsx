@@ -89,6 +89,9 @@ export default function PMDashboardPage() {
         subtitle="Dashboard operativo para proyectos, tareas y seguimiento basico."
         actions={
           <div className="inventory-actions">
+            <ActionButton onClick={() => navigate("/pm/rates")} type="button">
+              Tarifas PM
+            </ActionButton>
             <ActionButton onClick={() => navigate("/pm/projects")} type="button">
               Ver proyectos
             </ActionButton>
@@ -158,6 +161,37 @@ export default function PMDashboardPage() {
           meta="Real contra estimado"
           tone={Number(dashboard?.kpis?.variacion_materiales_total ?? 0) > 0 ? "warning" : "neutral"}
           value={formatMoney(dashboard?.kpis?.variacion_materiales_total ?? 0)}
+        />
+      </section>
+
+      <section className="inventory-metric-grid inventory-metric-grid-4">
+        <MetricCard
+          icon={<Calendar size={18} strokeWidth={1.9} />}
+          label="Horas totales"
+          meta="Registros acumulados"
+          tone="info"
+          value={dashboard?.kpis?.horas_totales ?? 0}
+        />
+        <MetricCard
+          icon={<DollarSign size={18} strokeWidth={1.9} />}
+          label="Costo horas real"
+          meta="Labor acumulada"
+          tone="warning"
+          value={formatMoney(dashboard?.kpis?.costo_horas_real ?? 0)}
+        />
+        <MetricCard
+          icon={<DollarSign size={18} strokeWidth={1.9} />}
+          label="Costo total real"
+          meta="Materiales + horas"
+          tone="danger"
+          value={formatMoney(dashboard?.kpis?.costo_total_real ?? 0)}
+        />
+        <MetricCard
+          icon={<TriangleAlert size={18} strokeWidth={1.9} />}
+          label="Horas sin tarifa"
+          meta="Pendientes de configuracion"
+          tone={Number(dashboard?.kpis?.horas_sin_tarifa ?? 0) > 0 ? "warning" : "neutral"}
+          value={dashboard?.kpis?.horas_sin_tarifa ?? 0}
         />
       </section>
 
@@ -299,6 +333,91 @@ export default function PMDashboardPage() {
                     <td>{formatMoney(item.costo_materiales_real ?? 0)}</td>
                     <td>{formatMoney(item.presupuesto_estimado ?? 0)}</td>
                     <td>{formatMoney(item.variacion_presupuesto ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </DataCard>
+      </div>
+
+      <div className="inventory-content-grid inventory-content-grid-2">
+        <DataCard subtitle="Proyectos con mayor costo real total acumulado." title="Top proyectos por costo total">
+          {(dashboard?.top_proyectos_por_costo_total?.length ?? 0) === 0 ? (
+            <EmptyState compact note="Aun no hay costos totales acumulados." title="Sin costos registrados" />
+          ) : (
+            <DataTable columns={["Proyecto", "Materiales", "Horas", "Costo total", "Presupuesto"]}>
+              <tbody>
+                {(dashboard?.top_proyectos_por_costo_total ?? []).map((item) => (
+                  <tr key={`total-${item.project_id}`}>
+                    <td>{safeDisplayText(item.proyecto_nombre)}</td>
+                    <td>{formatMoney(item.costo_materiales_real ?? 0)}</td>
+                    <td>{formatMoney(item.costo_horas_real ?? 0)}</td>
+                    <td>{formatMoney(item.costo_total_real ?? 0)}</td>
+                    <td>{formatMoney(item.presupuesto_estimado ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </DataCard>
+
+        <DataCard subtitle="Proyectos cuyo costo total ya supera el presupuesto." title="Proyectos sobre presupuesto">
+          {(dashboard?.proyectos_sobre_presupuesto?.length ?? 0) === 0 ? (
+            <EmptyState compact note="No hay proyectos sobre presupuesto total." title="Sin alertas" />
+          ) : (
+            <DataTable columns={["Proyecto", "Costo total", "Presupuesto", "Variacion"]}>
+              <tbody>
+                {(dashboard?.proyectos_sobre_presupuesto ?? []).map((item) => (
+                  <tr key={`budget-${item.project_id}`}>
+                    <td>{safeDisplayText(item.proyecto_nombre)}</td>
+                    <td>{formatMoney(item.costo_total_real ?? 0)}</td>
+                    <td>{formatMoney(item.presupuesto_estimado ?? 0)}</td>
+                    <td>{formatMoney(item.variacion_presupuesto ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </DataCard>
+      </div>
+
+      <div className="inventory-content-grid inventory-content-grid-2">
+        <DataCard subtitle="Usuarios con mayor carga horaria registrada." title="Top usuarios por horas">
+          {(dashboard?.top_usuarios_por_horas?.length ?? 0) === 0 ? (
+            <EmptyState compact note="Aun no hay horas registradas." title="Sin horas" />
+          ) : (
+            <DataTable columns={["Usuario", "Horas", "Costo"]}>
+              <tbody>
+                {(dashboard?.top_usuarios_por_horas ?? []).map((item, index) => (
+                  <tr key={`user-hours-${item.usuario_id ?? item.usuario_email ?? index}`}>
+                    <td>
+                      <div className="inventory-cell-main">{safeDisplayText(item.usuario_nombre, "Sin nombre")}</div>
+                      <div className="inventory-cell-sub">{safeDisplayText(item.usuario_email, "—")}</div>
+                    </td>
+                    <td>{item.horas_totales ?? 0}</td>
+                    <td>{formatMoney(item.costo_total ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </DataCard>
+
+        <DataCard subtitle="Usuarios con mayor costo laboral acumulado." title="Top usuarios por costo">
+          {(dashboard?.top_usuarios_por_costo?.length ?? 0) === 0 ? (
+            <EmptyState compact note="Aun no hay costos horarios acumulados." title="Sin costos" />
+          ) : (
+            <DataTable columns={["Usuario", "Horas", "Costo"]}>
+              <tbody>
+                {(dashboard?.top_usuarios_por_costo ?? []).map((item, index) => (
+                  <tr key={`user-cost-${item.usuario_id ?? item.usuario_email ?? index}`}>
+                    <td>
+                      <div className="inventory-cell-main">{safeDisplayText(item.usuario_nombre, "Sin nombre")}</div>
+                      <div className="inventory-cell-sub">{safeDisplayText(item.usuario_email, "—")}</div>
+                    </td>
+                    <td>{item.horas_totales ?? 0}</td>
+                    <td>{formatMoney(item.costo_total ?? 0)}</td>
                   </tr>
                 ))}
               </tbody>
