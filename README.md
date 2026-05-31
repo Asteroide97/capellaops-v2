@@ -677,6 +677,84 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Portal cliente
 - Gantt
 
+## PM Fase 4 - Presupuestos, partidas y APU básico
+
+- PM ya puede manejar presupuesto detallado por proyecto sin tocar inventario ni costos reales históricos.
+- Cada proyecto puede tener:
+  - presupuesto activo
+  - capítulos y partidas
+  - APU básico por partida
+  - indirectos
+  - comparativo contra costo real acumulado
+- Mantenimiento sigue fuera del alcance actual.
+
+### Incluye en esta fase
+
+- Presupuesto del proyecto:
+  - `GET /pm/projects/{project_id}/budget`
+  - `POST /pm/projects/{project_id}/budget`
+  - `PUT /pm/budgets/{budget_id}`
+  - `POST /pm/budgets/{budget_id}/approve`
+  - `POST /pm/budgets/{budget_id}/cancel`
+  - `POST /pm/projects/{project_id}/budget/refresh`
+- Comparativo presupuesto vs real:
+  - `GET /pm/projects/{project_id}/budget-vs-actual`
+- Partidas:
+  - `POST /pm/budgets/{budget_id}/items`
+  - `PUT /pm/budget-items/{item_id}`
+  - `POST /pm/budget-items/{item_id}/deactivate`
+- APU de materiales:
+  - `POST /pm/budget-items/{item_id}/materials`
+  - `PUT /pm/budget-item-materials/{component_id}`
+  - `POST /pm/budget-item-materials/{component_id}/deactivate`
+- APU de mano de obra:
+  - `POST /pm/budget-items/{item_id}/labor`
+  - `PUT /pm/budget-item-labor/{component_id}`
+  - `POST /pm/budget-item-labor/{component_id}/deactivate`
+- Indirectos:
+  - `POST /pm/budgets/{budget_id}/indirects`
+  - `PUT /pm/budget-indirects/{indirect_id}`
+  - `POST /pm/budget-indirects/{indirect_id}/deactivate`
+
+### Reglas operativas de PM Fase 4
+
+- El presupuesto detallado no crea facturas ni cobranza.
+- El presupuesto detallado no afecta inventario ni stock.
+- Los totales se calculan siempre en backend.
+- Cada partida calcula:
+  - costo unitario
+  - precio unitario
+  - subtotal costo
+  - subtotal venta
+- El APU básico integra:
+  - materiales estimados por partida
+  - mano de obra estimada por partida
+  - indirectos a nivel presupuesto
+- El comparativo usa:
+  - costo real de materiales
+  - costo real de horas
+  - costo total real del proyecto
+- El Project Workspace ya integra la vista `Presupuesto` dentro del detalle del proyecto.
+
+### Modelos principales de PM Fase 4
+
+- `PMPresupuesto`
+- `PMPresupuestoPartida`
+- `PMPresupuestoPartidaMaterial`
+- `PMPresupuestoPartidaManoObra`
+- `PMPresupuestoIndirecto`
+
+### Pendientes de PM Fase 4
+
+- Estados de pago y estimaciones formales
+- Facturación y cobranza
+- Aprobaciones complejas de presupuesto
+- Versionado avanzado y sustitución formal de presupuestos
+- Integración contable
+- Portal cliente
+- Gantt editable
+- Cualquier funcionalidad de mantenimiento
+
 ## PM UX tipo Project Workspace
 
 - El detalle de proyecto en `/pm/projects/:id` ya opera como un workspace de proyecto más denso y menos fragmentado.
@@ -684,6 +762,7 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - `Vista general`
   - `Plan de trabajo`
   - `Kanban`
+  - `Presupuesto`
   - `Materiales`
   - `Tiempo y costos`
   - `Comentarios`
@@ -699,6 +778,53 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - sin edición directa sobre la barra
 - `Materiales` sigue usando la integración PM ↔ Inventario de Fase 2.
 - `Tiempo y costos` sigue usando el componente operativo de Fase 3 sin cambiar lógica de costos.
+
+## PM Presupuesto UX simplificado
+
+- La vista `Presupuesto` del Project Workspace ahora guía al usuario en cinco pasos:
+  - presupuesto base
+  - capítulos y partidas
+  - desglose de costo
+  - costos indirectos y margen
+  - comparativo real
+- El lenguaje principal deja de ser técnico:
+  - `Desglose de costo de la partida`
+  - `Materiales de la partida`
+  - `Mano de obra de la partida`
+  - `Costos indirectos`
+- El flujo mantiene visibles las acciones clave:
+  - crear presupuesto
+  - agregar capítulo
+  - agregar partida
+  - agregar material
+  - agregar mano de obra
+  - agregar indirecto
+  - aprobar presupuesto
+  - actualizar totales
+- El presupuesto puede crearse con payload mínimo seguro y, si ya existe uno activo, la vista reutiliza el existente sin error genérico.
+- El comparativo sigue siendo solo económico:
+  - no crea facturas
+  - no afecta inventario
+  - no sustituye los costos reales históricos
+
+## PM Fase 4.5 - Prerrequisitos y dependencias de tareas
+
+- PM ya soporta dependencias `finish_to_start` entre tareas del mismo proyecto.
+- Una tarea puede quedar marcada como `Bloqueada` cuando tiene prerrequisitos activos pendientes.
+- El backend impide avanzar una tarea bloqueada a:
+  - `en_progreso`
+  - `en_revision`
+  - `completada`
+- El Project Workspace muestra dependencias en:
+  - plan de trabajo
+  - panel de detalle de tarea
+  - Gantt simple
+- Queda pendiente:
+  - dependencias avanzadas
+  - lag real sobre fechas
+  - recálculo automático
+  - ruta crítica
+  - drag & drop
 
 ## Inventario Fase 1.2
 

@@ -1,4 +1,4 @@
-import { CheckCheck, CircleOff, Pencil, Play } from "lucide-react";
+import { CheckCheck, CircleOff, Link2, Lock, Pencil, Play } from "lucide-react";
 
 import {
   ActionButton,
@@ -42,12 +42,26 @@ function getDurationLabel(task) {
 }
 
 
+function getDependencyLabel(task) {
+  const blockers = task?.blockers ?? [];
+  if (blockers.length === 0) {
+    return task?.dependencies_count > 0 ? `${formatNumber(task.dependencies_count)} prerrequisitos` : "Sin prerrequisitos";
+  }
+  const firstTitle = safeDisplayText(blockers[0]?.titulo, "otra tarea");
+  if (blockers.length === 1) {
+    return `Depende de ${firstTitle}`;
+  }
+  return `Depende de ${firstTitle} y ${blockers.length - 1} más`;
+}
+
+
 export default function PMProjectWorkPlanView({
   empresaId,
   materialConsumptions,
   materialPlans,
   onCreateTask,
   onDeactivateTask,
+  onDependenciesChanged,
   onEditTask,
   onSelectTask,
   onSetTaskStatus,
@@ -71,21 +85,21 @@ export default function PMProjectWorkPlanView({
   if ((tasks ?? []).length === 0) {
     return (
       <DataCard
-        actions={
+        actions={(
           <ActionButton onClick={onCreateTask} tone="primary" type="button">
             Nueva tarea
           </ActionButton>
-        }
+        )}
         subtitle="La tabla y la línea de tiempo se activan cuando existe plan de trabajo."
         title="Plan de trabajo"
       >
         <EmptyState
-          action={
+          action={(
             <ActionButton onClick={onCreateTask} tone="primary" type="button">
               Crear primera tarea
             </ActionButton>
-          }
-          note="Agrega tareas con fechas para visualizar el plan tipo workspace."
+          )}
+          note="Agrega tareas con fechas para visualizar el plan de trabajo y sus dependencias."
           title="Sin tareas"
         />
       </DataCard>
@@ -96,14 +110,14 @@ export default function PMProjectWorkPlanView({
     <div className="inventory-content-grid">
       <div className="pm-workspace-grid">
         <DataCard
-          actions={
+          actions={(
             <ActionButton onClick={onCreateTask} tone="primary" type="button">
               Nueva tarea
             </ActionButton>
-          }
+          )}
           className="pm-workplan-card"
-          subtitle="Tabla operativa con responsables, fechas, horas y costo real por tarea."
-          title="Tabla de tareas"
+          subtitle="Tabla operativa con prerrequisitos, fechas, horas y costo real por tarea."
+          title="Plan de trabajo"
         >
           <div className="pm-workplan-table">
             <div className="pm-workplan-row pm-workplan-row-head">
@@ -114,43 +128,44 @@ export default function PMProjectWorkPlanView({
               <span>Inicio</span>
               <span>Fin</span>
               <span>Duración</span>
-              <span>Avance</span>
+              <span>Avance %</span>
               <span>Horas estimadas</span>
               <span>Horas reales</span>
               <span>Costo real</span>
+              <span>Bloqueo</span>
+              <span>Prerrequisitos</span>
               <span>Acciones</span>
             </div>
             {tasks.map((task, index) => {
               const taskMetrics = taskTimeMetrics[task.id] ?? { horas: 0, costo: 0 };
               const selected = selectedTaskId === task.id;
+              const blocked = Boolean(task.is_blocked);
               return (
                 <div
-                  className={`pm-workplan-row ${selected ? "is-selected" : ""}`}
+                  className={`pm-workplan-row ${selected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""}`}
                   key={task.id}
                   onClick={() => onSelectTask?.(task.id)}
-                  role="button"
-                  tabIndex={0}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
                       onSelectTask?.(task.id);
                     }
                   }}
+                  role="button"
+                  tabIndex={0}
                 >
                   <span>{task.orden > 0 ? task.orden : index + 1}</span>
                   <span>
                     <div className="inventory-cell-main">{safeDisplayText(task.titulo)}</div>
-                    <div className="inventory-cell-sub">
-                      {safeDisplayText(task.descripcion, "Sin descripción")}
-                    </div>
+                    <div className="inventory-cell-sub">{safeDisplayText(task.descripcion, "Sin descripción")}</div>
                   </span>
                   <span>
                     <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                   </span>
                   <span>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</span>
-                  <span>{safeDisplayText(formatDate(task.fecha_inicio), "—")}</span>
+                  <span>{safeDisplayText(formatDate(task.fecha_inicio), "-")}</span>
                   <span>
-                    <div>{safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</div>
+                    <div>{safeDisplayText(formatDate(task.fecha_vencimiento), "-")}</div>
                     {isTaskOverdue(task) ? <div className="inventory-cell-sub">Vencida</div> : null}
                   </span>
                   <span>{getDurationLabel(task)}</span>
@@ -158,6 +173,22 @@ export default function PMProjectWorkPlanView({
                   <span>{formatNumber(task.estimacion_horas ?? 0)}</span>
                   <span>{formatNumber(taskMetrics.horas)}</span>
                   <span>{formatMoney(taskMetrics.costo)}</span>
+                  <span>
+                    {blocked ? (
+                      <StatusBadge tone="warning">
+                        <Lock size={12} strokeWidth={1.9} />
+                        Bloqueada
+                      </StatusBadge>
+                    ) : (
+                      <StatusBadge tone="success">Lista</StatusBadge>
+                    )}
+                  </span>
+                  <span>
+                    <div className="pm-workplan-dependency-copy">
+                      {task.dependencies_count > 0 ? <Link2 size={12} strokeWidth={1.9} /> : null}
+                      <span>{getDependencyLabel(task)}</span>
+                    </div>
+                  </span>
                   <span>
                     <div className="table-actions">
                       <ActionButton
@@ -173,12 +204,14 @@ export default function PMProjectWorkPlanView({
                       </ActionButton>
                       {task.estatus !== "en_progreso" && task.estatus !== "completada" && task.estatus !== "cancelada" ? (
                         <ActionButton
+                          disabled={blocked}
                           icon={<Play size={14} strokeWidth={1.9} />}
                           onClick={(event) => {
                             event.stopPropagation();
                             onSetTaskStatus?.(task, "en_progreso");
                           }}
                           size="sm"
+                          title={blocked ? "Completa los prerrequisitos antes de iniciar esta tarea." : undefined}
                           type="button"
                         >
                           En progreso
@@ -186,12 +219,14 @@ export default function PMProjectWorkPlanView({
                       ) : null}
                       {task.estatus !== "completada" && task.estatus !== "cancelada" ? (
                         <ActionButton
+                          disabled={blocked}
                           icon={<CheckCheck size={14} strokeWidth={1.9} />}
                           onClick={(event) => {
                             event.stopPropagation();
                             onSetTaskStatus?.(task, "completada");
                           }}
                           size="sm"
+                          title={blocked ? "Completa los prerrequisitos antes de terminar esta tarea." : undefined}
                           tone="primary"
                           type="button"
                         >
@@ -225,9 +260,12 @@ export default function PMProjectWorkPlanView({
         empresaId={empresaId}
         materialConsumptions={materialConsumptions}
         materialPlans={materialPlans}
+        onDependenciesChanged={onDependenciesChanged}
         onEditTask={onEditTask}
+        onSelectTask={onSelectTask}
         projectId={projectId}
         taskId={selectedTaskId}
+        tasks={tasks}
         timeEntries={timeEntries}
         token={token}
       />

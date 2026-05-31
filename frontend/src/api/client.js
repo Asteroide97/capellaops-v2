@@ -764,6 +764,179 @@ export function refreshPmProjectCosts({ projectId, token, empresaId }) {
 }
 
 
+export function getPmProjectBudget({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/budget`, { token, empresaId });
+}
+
+
+export function createPmProjectBudget({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/budget`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmBudget({ budgetId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budgets/${budgetId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function approvePmBudget({ budgetId, token, empresaId }) {
+  return apiRequest(`/pm/budgets/${budgetId}/approve`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelPmBudget({ budgetId, token, empresaId }) {
+  return apiRequest(`/pm/budgets/${budgetId}/cancel`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function refreshPmProjectBudget({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/budget/refresh`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmProjectBudgetVsActual({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/budget-vs-actual`, { token, empresaId });
+}
+
+
+export function createPmBudgetItem({ budgetId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budgets/${budgetId}/items`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmBudgetItem({ itemId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-items/${itemId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmBudgetItem({ itemId, token, empresaId }) {
+  return apiRequest(`/pm/budget-items/${itemId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmBudgetItemMaterial({ itemId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-items/${itemId}/materials`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmBudgetItemMaterial({ componentId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-item-materials/${componentId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmBudgetItemMaterial({ componentId, token, empresaId }) {
+  return apiRequest(`/pm/budget-item-materials/${componentId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmBudgetItemLabor({ itemId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-items/${itemId}/labor`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmBudgetItemLabor({ componentId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-item-labor/${componentId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmBudgetItemLabor({ componentId, token, empresaId }) {
+  return apiRequest(`/pm/budget-item-labor/${componentId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmBudgetIndirect({ budgetId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budgets/${budgetId}/indirects`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmBudgetIndirect({ indirectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-indirects/${indirectId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmBudgetIndirect({ indirectId, token, empresaId }) {
+  return apiRequest(`/pm/budget-indirects/${indirectId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
 export function listPmProjectTimeEntries({ projectId, token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "user_id", filters.user_id);
@@ -955,6 +1128,35 @@ export function createPmTask({ projectId, token, empresaId, payload }) {
 
 export function getPmTask({ taskId, token, empresaId }) {
   return apiRequest(`/pm/tasks/${taskId}`, { token, empresaId });
+}
+
+
+export function getPmTaskDependencies({ taskId, token, empresaId }) {
+  return apiRequest(`/pm/tasks/${taskId}/dependencies`, { token, empresaId });
+}
+
+
+export function listPmProjectDependencies({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/dependencies`, { token, empresaId });
+}
+
+
+export function createPmTaskDependency({ taskId, token, empresaId, payload }) {
+  return apiRequest(`/pm/tasks/${taskId}/dependencies`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmTaskDependency({ dependencyId, token, empresaId }) {
+  return apiRequest(`/pm/task-dependencies/${dependencyId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
 }
 
 

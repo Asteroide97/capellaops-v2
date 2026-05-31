@@ -1,4 +1,4 @@
-import { CalendarRange } from "lucide-react";
+import { CalendarRange, Link2, Lock } from "lucide-react";
 
 import { DataCard, EmptyState, formatDate, safeDisplayText } from "../inventory/shared";
 import { formatPercent, getTaskStatusTone } from "./shared";
@@ -62,11 +62,11 @@ function buildTimeline(tasks) {
 
   if (scale === "days") {
     const markers = Array.from({ length: totalDays }, (_, index) => {
-      const date = addDays(minDate, index);
+      const currentDate = addDays(minDate, index);
       return {
-        key: date.toISOString(),
-        label: new Intl.DateTimeFormat("es-MX", { day: "2-digit" }).format(date),
-        meta: new Intl.DateTimeFormat("es-MX", { month: "short" }).format(date),
+        key: currentDate.toISOString(),
+        label: new Intl.DateTimeFormat("es-MX", { day: "2-digit" }).format(currentDate),
+        meta: new Intl.DateTimeFormat("es-MX", { month: "short" }).format(currentDate),
       };
     });
     return { scale, markers, start: minDate, end: maxDate, totalDays };
@@ -111,6 +111,19 @@ function getProgressWidth(task) {
 }
 
 
+function getDependencyCopy(task) {
+  const blockers = task?.blockers ?? [];
+  if (blockers.length === 0) {
+    return "";
+  }
+  const firstTitle = safeDisplayText(blockers[0]?.titulo, "otra tarea");
+  if (blockers.length === 1) {
+    return `Depende de: ${firstTitle}`;
+  }
+  return `Depende de: ${firstTitle} y ${blockers.length - 1} más`;
+}
+
+
 export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask }) {
   const timeline = buildTimeline(tasks);
 
@@ -125,7 +138,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
   return (
     <DataCard
       subtitle={timeline ? `Escala ${timeline.scale === "days" ? "diaria" : "semanal"} para el plan vigente.` : "Agrega fechas a las tareas para visualizar la línea de tiempo."}
-      title="Línea de tiempo"
+      title="Gantt simple"
     >
       {!timeline ? (
         <EmptyState
@@ -150,16 +163,33 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
             {tasks.map((task) => {
               const barStyle = buildBarStyle(task, timeline);
               const isSelected = selectedTaskId === task.id;
+              const dependencyCopy = getDependencyCopy(task);
               return (
                 <button
-                  className={`pm-gantt-row ${isSelected ? "is-selected" : ""}`}
+                  className={`pm-gantt-row ${isSelected ? "is-selected" : ""} ${task.is_blocked ? "is-blocked" : ""}`}
                   key={task.id}
                   onClick={() => onSelectTask?.(task.id)}
                   type="button"
                 >
                   <div className="pm-gantt-row-head">
-                    <span className={`status-badge ${getTaskStatusTone(task.estatus)}`}>{safeDisplayText(task.titulo)}</span>
-                    <span className="table-note">{barStyle ? formatDate(task.fecha_vencimiento || task.fecha_inicio) : "Sin fechas"}</span>
+                    <div className="pm-gantt-row-title">
+                      <span className={`status-badge ${getTaskStatusTone(task.estatus)}`}>{safeDisplayText(task.titulo)}</span>
+                      <div className="pm-inline-metadata">
+                        <span className="table-note">{barStyle ? formatDate(task.fecha_vencimiento || task.fecha_inicio) : "Sin fechas"}</span>
+                        {task.is_blocked ? (
+                          <span className="status-badge warning">
+                            <Lock size={12} strokeWidth={1.9} />
+                            Bloqueada
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    {dependencyCopy ? (
+                      <div className="pm-gantt-dependency-copy">
+                        <Link2 size={12} strokeWidth={1.9} />
+                        <span>{dependencyCopy}</span>
+                      </div>
+                    ) : null}
                   </div>
                   <div
                     className={`pm-gantt-track pm-gantt-track-${timeline.scale}`}
@@ -169,7 +199,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                       <span className="pm-gantt-cell" key={`${task.id}-${marker.key}`} />
                     ))}
                     {barStyle ? (
-                      <div className={`pm-gantt-bar ${getTaskStatusTone(task.estatus)}`} style={barStyle}>
+                      <div className={`pm-gantt-bar ${getTaskStatusTone(task.estatus)} ${task.is_blocked ? "is-blocked" : ""}`} style={barStyle}>
                         <span className="pm-gantt-bar-progress" style={{ width: `${getProgressWidth(task)}%` }} />
                         <span className="pm-gantt-bar-label">
                           <CalendarRange size={12} strokeWidth={1.9} />

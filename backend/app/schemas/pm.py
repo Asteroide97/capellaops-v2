@@ -202,6 +202,50 @@ class PMTareaUpdate(BaseModel):
     activo: bool | None = None
 
 
+class PMTaskBlockerOut(BaseModel):
+    tarea_id: str
+    titulo: str
+    estatus: str
+
+
+class PMTareaDependenciaCreate(BaseModel):
+    depende_de_tarea_id: str
+    tipo_dependencia: str = Field(default="finish_to_start", min_length=1, max_length=30)
+    lag_dias: int = Field(default=0, ge=0)
+    bloqueante: bool = True
+    notas: str | None = None
+
+
+class PMTareaDependenciaOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    tarea_id: str
+    tarea_titulo: str | None = None
+    depende_de_tarea_id: str
+    depende_de_tarea_titulo: str | None = None
+    depende_de_tarea_estatus: str | None = None
+    tipo_dependencia: str
+    lag_dias: int = 0
+    bloqueante: bool
+    notas: str | None = None
+    activo: bool
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMTaskDependenciesOut(BaseModel):
+    task_id: str
+    is_blocked: bool = False
+    dependencies_count: int = 0
+    blockers_count: int = 0
+    successors_count: int = 0
+    dependencies: list[PMTareaDependenciaOut] = Field(default_factory=list)
+    blockers: list[PMTaskBlockerOut] = Field(default_factory=list)
+    successors: list[PMTaskBlockerOut] = Field(default_factory=list)
+
+
 class PMTareaListItem(BaseModel):
     id: str
     empresa_id: str
@@ -231,12 +275,19 @@ class PMTareaListItem(BaseModel):
     subtareas_count: int = 0
     checklist_total: int = 0
     checklist_completado: int = 0
+    is_blocked: bool = False
+    blockers_count: int = 0
+    dependencies_count: int = 0
+    successors_count: int = 0
+    blockers: list[PMTaskBlockerOut] = Field(default_factory=list)
 
 
 class PMTareaOut(PMTareaListItem):
     subtasks: list[PMSubtareaOut] = Field(default_factory=list)
     checklist_items: list[PMChecklistItemOut] = Field(default_factory=list)
     comments: list[PMCommentOut] = Field(default_factory=list)
+    dependencies: list[PMTareaDependenciaOut] = Field(default_factory=list)
+    successors: list[PMTaskBlockerOut] = Field(default_factory=list)
 
 
 class PMTareaListResponse(BaseModel):
@@ -303,6 +354,9 @@ class PMDashboardKpis(BaseModel):
     costo_horas_real: Decimal = Decimal("0")
     horas_sin_tarifa: Decimal = Decimal("0")
     costo_total_real: Decimal = Decimal("0")
+    presupuesto_detallado_total: Decimal = Decimal("0")
+    margen_estimado_total: Decimal = Decimal("0")
+    proyectos_sin_presupuesto: int = 0
 
 
 class PMDashboardProjectCostItem(BaseModel):
@@ -316,6 +370,11 @@ class PMDashboardProjectCostItem(BaseModel):
     variacion_materiales: Decimal = Decimal("0")
     presupuesto_estimado: Decimal = Decimal("0")
     variacion_presupuesto: Decimal = Decimal("0")
+    presupuesto_detallado_costo: Decimal = Decimal("0")
+    presupuesto_detallado_venta: Decimal = Decimal("0")
+    variacion_vs_presupuesto_detallado: Decimal = Decimal("0")
+    margen_estimado: Decimal | None = None
+    presupuesto_origen: str = "simple"
 
 
 class PMDashboardUserMetricItem(BaseModel):
@@ -337,6 +396,7 @@ class PMDashboardOut(BaseModel):
     proyectos_sobre_presupuesto_materiales: list[PMDashboardProjectCostItem] = Field(default_factory=list)
     top_proyectos_por_costo_total: list[PMDashboardProjectCostItem] = Field(default_factory=list)
     proyectos_sobre_presupuesto: list[PMDashboardProjectCostItem] = Field(default_factory=list)
+    proyectos_sin_presupuesto: list[PMDashboardProjectCostItem] = Field(default_factory=list)
     top_usuarios_por_horas: list[PMDashboardUserMetricItem] = Field(default_factory=list)
     top_usuarios_por_costo: list[PMDashboardUserMetricItem] = Field(default_factory=list)
 
@@ -452,7 +512,230 @@ class PMProjectCostsOut(BaseModel):
     costo_total_real: Decimal = Decimal("0")
     presupuesto_estimado: Decimal = Decimal("0")
     variacion_presupuesto: Decimal = Decimal("0")
+    presupuesto_detallado_costo: Decimal = Decimal("0")
+    presupuesto_detallado_venta: Decimal = Decimal("0")
+    variacion_vs_presupuesto_detallado: Decimal = Decimal("0")
+    presupuesto_origen: str = "simple"
     margen_estimado: Decimal | None = None
+
+
+class PMPresupuestoCreate(BaseModel):
+    nombre: str = Field(default="Presupuesto base", min_length=1, max_length=180)
+    moneda: str = Field(default="MXN", min_length=3, max_length=8)
+    indirectos_pct: Decimal = Field(default=Decimal("0"), ge=0)
+    utilidad_pct: Decimal = Field(default=Decimal("0"), ge=0)
+    notas: str | None = None
+
+
+class PMPresupuestoUpdate(BaseModel):
+    nombre: str | None = Field(default=None, min_length=1, max_length=180)
+    moneda: str | None = Field(default=None, min_length=3, max_length=8)
+    indirectos_pct: Decimal | None = Field(default=None, ge=0)
+    notas: str | None = None
+    activo: bool | None = None
+
+
+class PMPresupuestoPartidaMaterialCreate(BaseModel):
+    material_id: str | None = None
+    material_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    material_sku_snapshot: str | None = Field(default=None, max_length=60)
+    unidad: str | None = Field(default=None, max_length=40)
+    cantidad_por_unidad: Decimal = Field(default=Decimal("0"), ge=0)
+    costo_unitario: Decimal | None = Field(default=None, ge=0)
+    proveedor_nombre_snapshot: str | None = Field(default=None, max_length=180)
+
+
+class PMPresupuestoPartidaMaterialUpdate(BaseModel):
+    material_id: str | None = None
+    material_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    material_sku_snapshot: str | None = Field(default=None, max_length=60)
+    unidad: str | None = Field(default=None, max_length=40)
+    cantidad_por_unidad: Decimal | None = Field(default=None, ge=0)
+    costo_unitario: Decimal | None = Field(default=None, ge=0)
+    proveedor_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    activo: bool | None = None
+
+
+class PMPresupuestoPartidaMaterialOut(BaseModel):
+    id: str
+    empresa_id: str
+    partida_id: str
+    proyecto_id: str
+    material_id: str | None = None
+    material_nombre_snapshot: str
+    material_sku_snapshot: str | None = None
+    unidad: str | None = None
+    cantidad_por_unidad: Decimal = Decimal("0")
+    costo_unitario: Decimal = Decimal("0")
+    costo_total: Decimal = Decimal("0")
+    proveedor_nombre_snapshot: str | None = None
+    activo: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMPresupuestoPartidaManoObraCreate(BaseModel):
+    rol: str | None = Field(default=None, max_length=40)
+    descripcion: str | None = None
+    horas_por_unidad: Decimal = Field(default=Decimal("0"), ge=0)
+    tarifa_hora: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class PMPresupuestoPartidaManoObraUpdate(BaseModel):
+    rol: str | None = Field(default=None, max_length=40)
+    descripcion: str | None = None
+    horas_por_unidad: Decimal | None = Field(default=None, ge=0)
+    tarifa_hora: Decimal | None = Field(default=None, ge=0)
+    activo: bool | None = None
+
+
+class PMPresupuestoPartidaManoObraOut(BaseModel):
+    id: str
+    empresa_id: str
+    partida_id: str
+    proyecto_id: str
+    rol: str | None = None
+    descripcion: str | None = None
+    horas_por_unidad: Decimal = Decimal("0")
+    tarifa_hora: Decimal = Decimal("0")
+    costo_total: Decimal = Decimal("0")
+    activo: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMPresupuestoPartidaCreate(BaseModel):
+    parent_id: str | None = None
+    codigo: str | None = Field(default=None, max_length=60)
+    nombre: str = Field(min_length=1, max_length=180)
+    descripcion: str | None = None
+    tipo: str = Field(default="partida", min_length=4, max_length=20)
+    unidad: str | None = Field(default=None, max_length=40)
+    cantidad: Decimal = Field(default=Decimal("1"), ge=0)
+    margen_pct: Decimal = Field(default=Decimal("0"), ge=0)
+    precio_unitario_manual: Decimal | None = Field(default=None, ge=0)
+    orden: int = Field(default=0, ge=0)
+
+
+class PMPresupuestoPartidaUpdate(BaseModel):
+    parent_id: str | None = None
+    codigo: str | None = Field(default=None, max_length=60)
+    nombre: str | None = Field(default=None, min_length=1, max_length=180)
+    descripcion: str | None = None
+    tipo: str | None = Field(default=None, min_length=4, max_length=20)
+    unidad: str | None = Field(default=None, max_length=40)
+    cantidad: Decimal | None = Field(default=None, ge=0)
+    margen_pct: Decimal | None = Field(default=None, ge=0)
+    precio_unitario_manual: Decimal | None = Field(default=None, ge=0)
+    orden: int | None = Field(default=None, ge=0)
+    activo: bool | None = None
+
+
+class PMPresupuestoPartidaOut(BaseModel):
+    id: str
+    empresa_id: str
+    presupuesto_id: str
+    proyecto_id: str
+    parent_id: str | None = None
+    codigo: str | None = None
+    nombre: str
+    descripcion: str | None = None
+    tipo: str
+    unidad: str | None = None
+    cantidad: Decimal = Decimal("0")
+    costo_unitario: Decimal = Decimal("0")
+    precio_unitario: Decimal = Decimal("0")
+    precio_unitario_manual: Decimal | None = None
+    subtotal_costo: Decimal = Decimal("0")
+    subtotal_venta: Decimal = Decimal("0")
+    margen_pct: Decimal = Decimal("0")
+    orden: int = 0
+    activo: bool
+    materials: list[PMPresupuestoPartidaMaterialOut] = Field(default_factory=list)
+    labor_components: list[PMPresupuestoPartidaManoObraOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMPresupuestoIndirectoCreate(BaseModel):
+    nombre: str = Field(min_length=1, max_length=160)
+    tipo: str = Field(default="monto", min_length=4, max_length=20)
+    porcentaje: Decimal | None = Field(default=None, ge=0)
+    monto: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class PMPresupuestoIndirectoUpdate(BaseModel):
+    nombre: str | None = Field(default=None, min_length=1, max_length=160)
+    tipo: str | None = Field(default=None, min_length=4, max_length=20)
+    porcentaje: Decimal | None = Field(default=None, ge=0)
+    monto: Decimal | None = Field(default=None, ge=0)
+    activo: bool | None = None
+
+
+class PMPresupuestoIndirectoOut(BaseModel):
+    id: str
+    empresa_id: str
+    presupuesto_id: str
+    proyecto_id: str
+    nombre: str
+    tipo: str
+    porcentaje: Decimal | None = None
+    monto: Decimal = Decimal("0")
+    activo: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMBudgetVsActualOut(BaseModel):
+    project_id: str
+    presupuesto_id: str | None = None
+    presupuesto_nombre: str | None = None
+    presupuesto_estatus: str | None = None
+    presupuesto_origen: str = "simple"
+    moneda: str = "MXN"
+    presupuesto_detallado_costo: Decimal = Decimal("0")
+    presupuesto_detallado_venta: Decimal = Decimal("0")
+    costo_materiales_real: Decimal = Decimal("0")
+    costo_horas_real: Decimal = Decimal("0")
+    costo_real_total: Decimal = Decimal("0")
+    variacion: Decimal = Decimal("0")
+    porcentaje_consumido: Decimal = Decimal("0")
+    margen_estimado: Decimal | None = None
+
+
+class PMPresupuestoOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    nombre: str
+    version: int = 1
+    estatus: str
+    moneda: str = "MXN"
+    subtotal_costo: Decimal = Decimal("0")
+    subtotal_venta: Decimal = Decimal("0")
+    indirectos_pct: Decimal = Decimal("0")
+    indirectos_monto: Decimal = Decimal("0")
+    utilidad_pct: Decimal = Decimal("0")
+    utilidad_monto: Decimal = Decimal("0")
+    total_costo: Decimal = Decimal("0")
+    total_venta: Decimal = Decimal("0")
+    margen_estimado: Decimal = Decimal("0")
+    notas: str | None = None
+    aprobado_por: str | None = None
+    aprobado_at: datetime | None = None
+    activo: bool
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    items: list[PMPresupuestoPartidaOut] = Field(default_factory=list)
+    indirects: list[PMPresupuestoIndirectoOut] = Field(default_factory=list)
+
+
+class PMProjectBudgetBundleOut(BaseModel):
+    budget: PMPresupuestoOut | None = None
+    summary: PMProjectCostsOut
+    vs_actual: PMBudgetVsActualOut
 
 
 class PMTimeEntryCreate(BaseModel):

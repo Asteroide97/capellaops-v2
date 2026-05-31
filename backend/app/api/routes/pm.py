@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import TenantContext, get_tenant_context
 from app.db.session import get_db
 from app.schemas.pm import (
+    PMBudgetVsActualOut,
     PMChecklistItemCreate,
     PMChecklistItemOut,
     PMChecklistItemUpdate,
@@ -17,8 +18,24 @@ from app.schemas.pm import (
     PMConfigOut,
     PMDashboardOut,
     PMProjectMembersListResponse,
+    PMProjectBudgetBundleOut,
     PMProjectCostsOut,
     PMCreateProjectRequisitionRequest,
+    PMPresupuestoCreate,
+    PMPresupuestoIndirectoCreate,
+    PMPresupuestoIndirectoOut,
+    PMPresupuestoIndirectoUpdate,
+    PMPresupuestoOut,
+    PMPresupuestoPartidaCreate,
+    PMPresupuestoPartidaManoObraCreate,
+    PMPresupuestoPartidaManoObraOut,
+    PMPresupuestoPartidaManoObraUpdate,
+    PMPresupuestoPartidaMaterialCreate,
+    PMPresupuestoPartidaMaterialOut,
+    PMPresupuestoPartidaMaterialUpdate,
+    PMPresupuestoPartidaOut,
+    PMPresupuestoPartidaUpdate,
+    PMPresupuestoUpdate,
     PMProyectoMaterialPlanCreate,
     PMProyectoMaterialPlanOut,
     PMProyectoMaterialPlanUpdate,
@@ -44,15 +61,26 @@ from app.schemas.pm import (
     PMSubtareaCreate,
     PMSubtareaOut,
     PMSubtareaUpdate,
+    PMTareaDependenciaCreate,
+    PMTareaDependenciaOut,
     PMTareaCreate,
+    PMTaskDependenciesOut,
     PMTareaListResponse,
     PMTareaOut,
     PMTareaUpdate,
 )
 from app.services.pm import (
     PMContext,
+    add_budget_indirect,
+    add_budget_item_labor,
+    add_budget_item_material,
     add_project_member,
     add_project_material_plan,
+    approve_project_budget,
+    cancel_project_budget,
+    create_task_dependency,
+    create_budget_item,
+    create_project_budget,
     create_project_material_requisition,
     create_checklist_item,
     create_project,
@@ -69,21 +97,35 @@ from app.services.pm import (
     deactivate_project_member,
     deactivate_role_hourly_rate,
     deactivate_task,
+    deactivate_task_dependency,
     deactivate_user_hourly_rate,
+    deactivate_budget_indirect,
+    deactivate_budget_item,
+    deactivate_budget_item_labor,
+    deactivate_budget_item_material,
     get_pm_context,
     get_pm_dashboard,
+    get_project_budget,
+    get_project_budget_vs_actual,
     get_project,
     get_project_costs,
     get_task,
+    get_task_dependencies,
     list_project_time_entries,
     list_project_material_plan,
     list_project_members,
+    list_task_dependencies,
     list_projects,
     list_role_hourly_rates,
     list_tasks,
     list_user_hourly_rates,
     refresh_project_total_costs,
     serialize_pm_config,
+    update_budget_indirect,
+    update_budget_item,
+    update_budget_item_labor,
+    update_budget_item_material,
+    update_project_budget,
     update_project_time_entry,
     update_checklist_item,
     update_project,
@@ -313,6 +355,418 @@ def create_project_material_requisition_endpoint(
             almacen_destino_id=payload.almacen_destino_id,
             items=[{"plan_id": item.plan_id, "cantidad_solicitada": item.cantidad_solicitada} for item in payload.items],
             notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/budget", response_model=PMProjectBudgetBundleOut)
+def get_project_budget_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProjectBudgetBundleOut:
+    return get_project_budget(db, pm_context, project_id)
+
+
+@router.post("/projects/{project_id}/budget", response_model=PMPresupuestoOut, status_code=status.HTTP_201_CREATED)
+def create_project_budget_endpoint(
+    project_id: str,
+    payload: PMPresupuestoCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoOut:
+    return run_pm_write(
+        db,
+        "create_project_budget",
+        lambda: create_project_budget(
+            db,
+            pm_context,
+            project_id=project_id,
+            nombre=payload.nombre,
+            moneda=payload.moneda,
+            indirectos_pct=payload.indirectos_pct,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/budgets/{budget_id}", response_model=PMPresupuestoOut)
+def update_project_budget_endpoint(
+    budget_id: str,
+    payload: PMPresupuestoUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoOut:
+    return run_pm_write(
+        db,
+        "update_project_budget",
+        lambda: update_project_budget(
+            db,
+            pm_context,
+            budget_id=budget_id,
+            nombre=payload.nombre,
+            moneda=payload.moneda,
+            indirectos_pct=payload.indirectos_pct,
+            notas=payload.notas,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budgets/{budget_id}/approve", response_model=PMPresupuestoOut)
+def approve_project_budget_endpoint(
+    budget_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoOut:
+    return run_pm_write(
+        db,
+        "approve_project_budget",
+        lambda: approve_project_budget(
+            db,
+            pm_context,
+            budget_id=budget_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budgets/{budget_id}/cancel", response_model=PMPresupuestoOut)
+def cancel_project_budget_endpoint(
+    budget_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoOut:
+    return run_pm_write(
+        db,
+        "cancel_project_budget",
+        lambda: cancel_project_budget(
+            db,
+            pm_context,
+            budget_id=budget_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/projects/{project_id}/budget/refresh", response_model=PMProjectCostsOut)
+def refresh_project_budget_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProjectCostsOut:
+    return run_pm_write(
+        db,
+        "refresh_project_budget",
+        lambda: refresh_project_total_costs(
+            db,
+            empresa_id=pm_context.empresa_id,
+            project_id=project_id,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/budget-vs-actual", response_model=PMBudgetVsActualOut)
+def get_project_budget_vs_actual_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMBudgetVsActualOut:
+    return get_project_budget_vs_actual(db, pm_context, project_id)
+
+
+@router.post("/budgets/{budget_id}/items", response_model=PMPresupuestoPartidaOut, status_code=status.HTTP_201_CREATED)
+def create_budget_item_endpoint(
+    budget_id: str,
+    payload: PMPresupuestoPartidaCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaOut:
+    return run_pm_write(
+        db,
+        "create_budget_item",
+        lambda: create_budget_item(
+            db,
+            pm_context,
+            budget_id=budget_id,
+            parent_id=payload.parent_id,
+            codigo=payload.codigo,
+            nombre=payload.nombre,
+            descripcion=payload.descripcion,
+            tipo=payload.tipo,
+            unidad=payload.unidad,
+            cantidad=payload.cantidad,
+            margen_pct=payload.margen_pct,
+            precio_unitario_manual=payload.precio_unitario_manual,
+            orden=payload.orden,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/budget-items/{item_id}", response_model=PMPresupuestoPartidaOut)
+def update_budget_item_endpoint(
+    item_id: str,
+    payload: PMPresupuestoPartidaUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaOut:
+    return run_pm_write(
+        db,
+        "update_budget_item",
+        lambda: update_budget_item(
+            db,
+            pm_context,
+            item_id=item_id,
+            parent_id=payload.parent_id,
+            codigo=payload.codigo,
+            nombre=payload.nombre,
+            descripcion=payload.descripcion,
+            tipo=payload.tipo,
+            unidad=payload.unidad,
+            cantidad=payload.cantidad,
+            margen_pct=payload.margen_pct,
+            precio_unitario_manual=payload.precio_unitario_manual,
+            orden=payload.orden,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budget-items/{item_id}/deactivate", response_model=PMPresupuestoPartidaOut)
+def deactivate_budget_item_endpoint(
+    item_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaOut:
+    return run_pm_write(
+        db,
+        "deactivate_budget_item",
+        lambda: deactivate_budget_item(
+            db,
+            pm_context,
+            item_id=item_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budget-items/{item_id}/materials", response_model=PMPresupuestoPartidaMaterialOut, status_code=status.HTTP_201_CREATED)
+def create_budget_item_material_endpoint(
+    item_id: str,
+    payload: PMPresupuestoPartidaMaterialCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaMaterialOut:
+    return run_pm_write(
+        db,
+        "create_budget_item_material",
+        lambda: add_budget_item_material(
+            db,
+            pm_context,
+            item_id=item_id,
+            material_id=payload.material_id,
+            material_nombre_snapshot=payload.material_nombre_snapshot,
+            material_sku_snapshot=payload.material_sku_snapshot,
+            unidad=payload.unidad,
+            cantidad_por_unidad=payload.cantidad_por_unidad,
+            costo_unitario=payload.costo_unitario,
+            proveedor_nombre_snapshot=payload.proveedor_nombre_snapshot,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/budget-item-materials/{component_id}", response_model=PMPresupuestoPartidaMaterialOut)
+def update_budget_item_material_endpoint(
+    component_id: str,
+    payload: PMPresupuestoPartidaMaterialUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaMaterialOut:
+    return run_pm_write(
+        db,
+        "update_budget_item_material",
+        lambda: update_budget_item_material(
+            db,
+            pm_context,
+            component_id=component_id,
+            material_id=payload.material_id,
+            material_nombre_snapshot=payload.material_nombre_snapshot,
+            material_sku_snapshot=payload.material_sku_snapshot,
+            unidad=payload.unidad,
+            cantidad_por_unidad=payload.cantidad_por_unidad,
+            costo_unitario=payload.costo_unitario,
+            proveedor_nombre_snapshot=payload.proveedor_nombre_snapshot,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budget-item-materials/{component_id}/deactivate", response_model=PMPresupuestoPartidaMaterialOut)
+def deactivate_budget_item_material_endpoint(
+    component_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaMaterialOut:
+    return run_pm_write(
+        db,
+        "deactivate_budget_item_material",
+        lambda: deactivate_budget_item_material(
+            db,
+            pm_context,
+            component_id=component_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budget-items/{item_id}/labor", response_model=PMPresupuestoPartidaManoObraOut, status_code=status.HTTP_201_CREATED)
+def create_budget_item_labor_endpoint(
+    item_id: str,
+    payload: PMPresupuestoPartidaManoObraCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaManoObraOut:
+    return run_pm_write(
+        db,
+        "create_budget_item_labor",
+        lambda: add_budget_item_labor(
+            db,
+            pm_context,
+            item_id=item_id,
+            rol=payload.rol,
+            descripcion=payload.descripcion,
+            horas_por_unidad=payload.horas_por_unidad,
+            tarifa_hora=payload.tarifa_hora,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/budget-item-labor/{component_id}", response_model=PMPresupuestoPartidaManoObraOut)
+def update_budget_item_labor_endpoint(
+    component_id: str,
+    payload: PMPresupuestoPartidaManoObraUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaManoObraOut:
+    return run_pm_write(
+        db,
+        "update_budget_item_labor",
+        lambda: update_budget_item_labor(
+            db,
+            pm_context,
+            component_id=component_id,
+            rol=payload.rol,
+            descripcion=payload.descripcion,
+            horas_por_unidad=payload.horas_por_unidad,
+            tarifa_hora=payload.tarifa_hora,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budget-item-labor/{component_id}/deactivate", response_model=PMPresupuestoPartidaManoObraOut)
+def deactivate_budget_item_labor_endpoint(
+    component_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaManoObraOut:
+    return run_pm_write(
+        db,
+        "deactivate_budget_item_labor",
+        lambda: deactivate_budget_item_labor(
+            db,
+            pm_context,
+            component_id=component_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budgets/{budget_id}/indirects", response_model=PMPresupuestoIndirectoOut, status_code=status.HTTP_201_CREATED)
+def create_budget_indirect_endpoint(
+    budget_id: str,
+    payload: PMPresupuestoIndirectoCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoIndirectoOut:
+    return run_pm_write(
+        db,
+        "create_budget_indirect",
+        lambda: add_budget_indirect(
+            db,
+            pm_context,
+            budget_id=budget_id,
+            nombre=payload.nombre,
+            tipo=payload.tipo,
+            porcentaje=payload.porcentaje,
+            monto=payload.monto,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/budget-indirects/{indirect_id}", response_model=PMPresupuestoIndirectoOut)
+def update_budget_indirect_endpoint(
+    indirect_id: str,
+    payload: PMPresupuestoIndirectoUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoIndirectoOut:
+    return run_pm_write(
+        db,
+        "update_budget_indirect",
+        lambda: update_budget_indirect(
+            db,
+            pm_context,
+            indirect_id=indirect_id,
+            nombre=payload.nombre,
+            tipo=payload.tipo,
+            porcentaje=payload.porcentaje,
+            monto=payload.monto,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/budget-indirects/{indirect_id}/deactivate", response_model=PMPresupuestoIndirectoOut)
+def deactivate_budget_indirect_endpoint(
+    indirect_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoIndirectoOut:
+    return run_pm_write(
+        db,
+        "deactivate_budget_indirect",
+        lambda: deactivate_budget_indirect(
+            db,
+            pm_context,
+            indirect_id=indirect_id,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -739,6 +1193,15 @@ def deactivate_project_member_endpoint(
     )
 
 
+@router.get("/projects/{project_id}/dependencies", response_model=list[PMTareaDependenciaOut])
+def list_project_dependencies_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMTareaDependenciaOut]:
+    return list_task_dependencies(db, pm_context, project_id=project_id)
+
+
 @router.get("/projects/{project_id}/tasks", response_model=PMTareaListResponse)
 def get_project_tasks(
     project_id: str,
@@ -809,6 +1272,59 @@ def get_task_endpoint(
     db: Session = Depends(get_db),
 ) -> PMTareaOut:
     return get_task(db, pm_context, task_id)
+
+
+@router.get("/tasks/{task_id}/dependencies", response_model=PMTaskDependenciesOut)
+def get_task_dependencies_endpoint(
+    task_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTaskDependenciesOut:
+    return get_task_dependencies(db, pm_context, task_id=task_id)
+
+
+@router.post("/tasks/{task_id}/dependencies", response_model=PMTaskDependenciesOut, status_code=status.HTTP_201_CREATED)
+def create_task_dependency_endpoint(
+    task_id: str,
+    payload: PMTareaDependenciaCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTaskDependenciesOut:
+    return run_pm_write(
+        db,
+        "create_task_dependency",
+        lambda: create_task_dependency(
+            db,
+            pm_context,
+            task_id=task_id,
+            depende_de_tarea_id=payload.depende_de_tarea_id,
+            tipo_dependencia=payload.tipo_dependencia,
+            lag_dias=payload.lag_dias,
+            bloqueante=payload.bloqueante,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/task-dependencies/{dependency_id}/deactivate", response_model=PMTaskDependenciesOut)
+def deactivate_task_dependency_endpoint(
+    dependency_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMTaskDependenciesOut:
+    return run_pm_write(
+        db,
+        "deactivate_task_dependency",
+        lambda: deactivate_task_dependency(
+            db,
+            pm_context,
+            dependency_id=dependency_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.put("/tasks/{task_id}", response_model=PMTareaOut)

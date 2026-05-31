@@ -1702,7 +1702,21 @@ textarea {
 
 .pm-workplan-row {
   display: grid;
-  grid-template-columns: 3rem minmax(220px, 1.4fr) 8rem 10rem 8rem 8rem 6rem 6rem 6rem 6rem 8rem minmax(220px, 1fr);
+  grid-template-columns:
+    3rem
+    minmax(220px, 1.4fr)
+    8rem
+    10rem
+    8rem
+    8rem
+    6rem
+    7rem
+    7rem
+    7rem
+    8rem
+    8rem
+    minmax(180px, 0.9fr)
+    minmax(220px, 1fr);
   gap: 0.75rem;
   align-items: start;
   padding: 0.9rem 1rem;
@@ -1725,6 +1739,11 @@ textarea {
   background: var(--brand-soft);
 }
 
+.pm-workplan-row.is-blocked {
+  border-color: rgba(217, 119, 6, 0.28);
+  background: rgba(255, 251, 235, 0.92);
+}
+
 .pm-workplan-row-head {
   color: var(--text-secondary);
   font-size: 0.72rem;
@@ -1736,6 +1755,15 @@ textarea {
 
 .pm-workplan-row > span {
   min-width: 0;
+}
+
+.pm-workplan-dependency-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .pm-gantt-shell {
@@ -1796,12 +1824,27 @@ textarea {
   background: var(--brand-soft);
 }
 
+.pm-gantt-row.is-blocked {
+  border-color: rgba(217, 119, 6, 0.24);
+  background: rgba(255, 251, 235, 0.96);
+}
+
 .pm-gantt-row-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  display: grid;
   gap: 0.75rem;
-  flex-wrap: wrap;
+}
+
+.pm-gantt-row-title {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.pm-gantt-dependency-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #92400e;
+  font-size: 0.82rem;
 }
 
 .pm-gantt-track {
@@ -1849,6 +1892,11 @@ textarea {
 
 .pm-gantt-bar.neutral {
   background: #6b7280;
+}
+
+.pm-gantt-bar.is-blocked {
+  background: #b45309;
+  border: 1px dashed rgba(255, 255, 255, 0.65);
 }
 
 .pm-gantt-bar-progress {
@@ -2109,6 +2157,128 @@ textarea {
   align-items: start;
 }
 
+.pm-budget-stack,
+.pm-budget-apu-stack,
+.pm-budget-side-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.pm-budget-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem;
+}
+
+.pm-budget-guide-card {
+  display: grid;
+  gap: 0.4rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.pm-budget-guide-card strong {
+  color: var(--text-primary);
+  font-size: 0.95rem;
+}
+
+.pm-budget-guide-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.pm-budget-header-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.9rem;
+}
+
+.pm-budget-apu-grid {
+  align-items: start;
+}
+
+.pm-budget-workspace {
+  align-items: start;
+}
+
+.pm-budget-tree {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.pm-budget-tree-group {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.pm-budget-tree-group-label {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.pm-budget-tree-node {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0.85rem 0.9rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pm-budget-tree-node.is-chapter {
+  background: #f8fafc;
+}
+
+.pm-budget-tree-node.is-selected {
+  border-color: rgba(20, 92, 67, 0.24);
+  background: var(--brand-soft);
+}
+
+.pm-budget-tree-button {
+  width: 100%;
+  display: grid;
+  gap: 0.25rem;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.pm-budget-tree-button strong {
+  color: var(--text-primary);
+}
+
+.pm-budget-tree-button span {
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.pm-budget-tree-children {
+  display: grid;
+  gap: 0.6rem;
+  padding-left: 1.1rem;
+}
+
+.pm-budget-tree-empty {
+  padding: 0.85rem 1rem;
+  border-radius: 0.9rem;
+  border: 1px dashed var(--border);
+  color: var(--text-secondary);
+  background: #f8fafc;
+  font-size: 0.88rem;
+}
+
 .status-badge.success,
 .status-badge.enabled {
   background: rgba(24, 78, 58, 0.12);
@@ -2274,6 +2444,6 @@ textarea {
 
   .pm-workplan-row,
   .pm-workplan-row-head {
-    min-width: 1080px;
+    min-width: 1440px;
   }
 }

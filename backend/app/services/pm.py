@@ -6,7 +6,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, case, desc, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.api.deps import TenantContext
 from app.models import AuditLog, EmpresaModulo, EmpresaUsuario, Material, MovimientoInventario, Requisicion, RequisicionDetalle, Usuario
@@ -14,6 +14,11 @@ from app.models.pm import (
     EmpresaPMConfig,
     PMChecklistItem,
     PMComentario,
+    PMPresupuesto,
+    PMPresupuestoIndirecto,
+    PMPresupuestoPartida,
+    PMPresupuestoPartidaManoObra,
+    PMPresupuestoPartidaMaterial,
     PMProyectoCostoResumen,
     PMProyectoMaterialConsumo,
     PMProyectoMaterialPlan,
@@ -22,10 +27,12 @@ from app.models.pm import (
     PMTarifaHoraRol,
     PMTarifaHoraUsuario,
     PMSubtarea,
+    PMTareaDependencia,
     PMTarea,
     PMTimeEntry,
 )
 from app.schemas.pm import (
+    PMBudgetVsActualOut,
     PMChecklistItemOut,
     PMCommentOut,
     PMConfigOut,
@@ -36,7 +43,13 @@ from app.schemas.pm import (
     PMDashboardUserMetricItem,
     PMCreateProjectRequisitionRequest,
     PMProjectMembersListResponse,
+    PMProjectBudgetBundleOut,
     PMProjectCostsOut,
+    PMPresupuestoIndirectoOut,
+    PMPresupuestoOut,
+    PMPresupuestoPartidaManoObraOut,
+    PMPresupuestoPartidaMaterialOut,
+    PMPresupuestoPartidaOut,
     PMProyectoMaterialConsumoOut,
     PMProyectoMaterialPlanOut,
     PMProyectoMaterialSummaryOut,
@@ -51,8 +64,12 @@ from app.schemas.pm import (
     PMTarifaHoraUsuarioListResponse,
     PMTarifaHoraUsuarioOut,
     PMTaskStats,
+    PMTaskBlockerOut,
+    PMTaskDependenciesOut,
     PMTimeEntryListResponse,
     PMTimeEntryOut,
+    PMTareaDependenciaOut,
+    PMTareaDependenciaCreate,
     PMTareaListItem,
     PMTareaListResponse,
     PMTareaOut,
@@ -70,6 +87,10 @@ PM_MATERIAL_CONSUMPTION_ORIGIN = {"movimiento_manual", "requisicion_surtida", "a
 PM_RATE_SOURCE = {"usuario", "rol", "manual", "sin_tarifa"}
 PM_ALLOWED_RATE_ROLES = {"owner", "admin", "user", "almacenista", "lider", "colaborador", "observador"}
 PM_MANAGE_RATES_ROLES = {"owner", "admin"}
+PM_BUDGET_STATUS = {"borrador", "aprobado", "sustituido", "cancelado"}
+PM_BUDGET_ITEM_TYPES = {"capitulo", "partida"}
+PM_BUDGET_INDIRECT_TYPES = {"porcentaje", "monto"}
+PM_TASK_DEPENDENCY_TYPES = {"finish_to_start"}
 ZERO = Decimal("0")
 
 
@@ -166,6 +187,37 @@ def normalize_rate_role(value: str | None) -> str:
     return normalized
 
 
+def normalize_budget_status(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Estatus").lower()
+    if normalized not in PM_BUDGET_STATUS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estatus de presupuesto invalido.")
+    return normalized
+
+
+def normalize_budget_item_type(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Tipo").lower()
+    if normalized not in PM_BUDGET_ITEM_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de partida invalido.")
+    return normalized
+
+
+def normalize_budget_indirect_type(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Tipo").lower()
+    if normalized not in PM_BUDGET_INDIRECT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de indirecto invalido.")
+    return normalized
+
+
+def normalize_task_dependency_type(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Tipo de dependencia").lower()
+    if normalized not in PM_TASK_DEPENDENCY_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Solo se soporta la dependencia finish_to_start en esta fase.",
+        )
+    return normalized
+
+
 def validate_effective_dates(effective_from: date | None, effective_to: date | None) -> None:
     if effective_from and effective_to and effective_to < effective_from:
         raise HTTPException(
@@ -176,6 +228,14 @@ def validate_effective_dates(effective_from: date | None, effective_to: date | N
 
 def quantize_percentage(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def quantize_money(value: Decimal) -> Decimal:
+    return decimal_or_zero(value).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def quantize_rate(value: Decimal) -> Decimal:
+    return decimal_or_zero(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
 
 def build_status_counts(rows: list[tuple[str, int]], allowed_values: set[str]) -> list[PMStatusCount]:
@@ -258,6 +318,14 @@ def ensure_pm_rates_manage_access(pm_context: PMContext) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo owner o admin pueden configurar tarifas PM.",
+        )
+
+
+def ensure_pm_budget_manage_access(pm_context: PMContext) -> None:
+    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo owner o admin pueden gestionar presupuestos PM.",
         )
 
 
@@ -366,6 +434,18 @@ def get_task_for_company(db: Session, empresa_id: str, task_id: str) -> PMTarea:
     return task
 
 
+def get_task_dependency_for_company(db: Session, empresa_id: str, dependency_id: str) -> PMTareaDependencia:
+    dependency = db.scalar(
+        select(PMTareaDependencia).where(
+            PMTareaDependencia.id == dependency_id,
+            PMTareaDependencia.empresa_id == empresa_id,
+        )
+    )
+    if not dependency:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dependencia de tarea no encontrada.")
+    return dependency
+
+
 def get_project_member_for_company(db: Session, empresa_id: str, member_id: str) -> PMProyectoMiembro:
     member = db.scalar(
         select(PMProyectoMiembro).where(
@@ -400,6 +480,66 @@ def get_checklist_item_for_company(db: Session, empresa_id: str, item_id: str) -
     if not item:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Elemento de checklist no encontrado.")
     return item
+
+
+def get_budget_for_company(db: Session, empresa_id: str, budget_id: str) -> PMPresupuesto:
+    budget = db.scalar(
+        select(PMPresupuesto).where(
+            PMPresupuesto.id == budget_id,
+            PMPresupuesto.empresa_id == empresa_id,
+        )
+    )
+    if not budget:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Presupuesto no encontrado.")
+    return budget
+
+
+def get_budget_item_for_company(db: Session, empresa_id: str, item_id: str) -> PMPresupuestoPartida:
+    item = db.scalar(
+        select(PMPresupuestoPartida).where(
+            PMPresupuestoPartida.id == item_id,
+            PMPresupuestoPartida.empresa_id == empresa_id,
+        )
+    )
+    if not item:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partida de presupuesto no encontrada.")
+    return item
+
+
+def get_budget_item_material_for_company(db: Session, empresa_id: str, component_id: str) -> PMPresupuestoPartidaMaterial:
+    component = db.scalar(
+        select(PMPresupuestoPartidaMaterial).where(
+            PMPresupuestoPartidaMaterial.id == component_id,
+            PMPresupuestoPartidaMaterial.empresa_id == empresa_id,
+        )
+    )
+    if not component:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Componente de material no encontrado.")
+    return component
+
+
+def get_budget_item_labor_for_company(db: Session, empresa_id: str, component_id: str) -> PMPresupuestoPartidaManoObra:
+    component = db.scalar(
+        select(PMPresupuestoPartidaManoObra).where(
+            PMPresupuestoPartidaManoObra.id == component_id,
+            PMPresupuestoPartidaManoObra.empresa_id == empresa_id,
+        )
+    )
+    if not component:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Componente de mano de obra no encontrado.")
+    return component
+
+
+def get_budget_indirect_for_company(db: Session, empresa_id: str, indirect_id: str) -> PMPresupuestoIndirecto:
+    indirect = db.scalar(
+        select(PMPresupuestoIndirecto).where(
+            PMPresupuestoIndirecto.id == indirect_id,
+            PMPresupuestoIndirecto.empresa_id == empresa_id,
+        )
+    )
+    if not indirect:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Indirecto de presupuesto no encontrado.")
+    return indirect
 
 
 def ensure_unique_project_code(db: Session, empresa_id: str, codigo: str | None, project_id: str | None = None) -> str | None:
@@ -537,6 +677,168 @@ def serialize_checklist_item(item: PMChecklistItem) -> PMChecklistItemOut:
     )
 
 
+def serialize_task_dependency(
+    db: Session,
+    dependency: PMTareaDependencia,
+    *,
+    successor_task: PMTarea | None = None,
+    prerequisite_task: PMTarea | None = None,
+) -> PMTareaDependenciaOut:
+    successor = successor_task or get_task_for_company(db, dependency.empresa_id, dependency.tarea_id)
+    prerequisite = prerequisite_task or get_task_for_company(db, dependency.empresa_id, dependency.depende_de_tarea_id)
+    return PMTareaDependenciaOut(
+        id=dependency.id,
+        empresa_id=dependency.empresa_id,
+        proyecto_id=dependency.proyecto_id,
+        tarea_id=dependency.tarea_id,
+        tarea_titulo=successor.titulo,
+        depende_de_tarea_id=dependency.depende_de_tarea_id,
+        depende_de_tarea_titulo=prerequisite.titulo,
+        depende_de_tarea_estatus=prerequisite.estatus,
+        tipo_dependencia=dependency.tipo_dependencia,
+        lag_dias=dependency.lag_dias,
+        bloqueante=dependency.bloqueante,
+        notas=dependency.notas,
+        activo=dependency.activo,
+        created_by=dependency.created_by,
+        created_at=dependency.created_at,
+        updated_at=dependency.updated_at,
+    )
+
+
+def build_task_blocker(task: PMTarea) -> PMTaskBlockerOut:
+    return PMTaskBlockerOut(
+        tarea_id=task.id,
+        titulo=task.titulo,
+        estatus=task.estatus,
+    )
+
+
+def get_task_dependency_counts(db: Session, empresa_id: str, task_id: str) -> tuple[int, int]:
+    dependencies_count = db.scalar(
+        select(func.count(PMTareaDependencia.id)).where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.tarea_id == task_id,
+            PMTareaDependencia.activo == True,
+        )
+    ) or 0
+    successors_count = db.scalar(
+        select(func.count(PMTareaDependencia.id)).where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.depende_de_tarea_id == task_id,
+            PMTareaDependencia.activo == True,
+        )
+    ) or 0
+    return dependencies_count, successors_count
+
+
+def get_task_blockers(db: Session, empresa_id: str, task_id: str) -> list[PMTaskBlockerOut]:
+    prerequisite_task = aliased(PMTarea)
+    rows = db.execute(
+        select(prerequisite_task)
+        .join(
+            PMTareaDependencia,
+            PMTareaDependencia.depende_de_tarea_id == prerequisite_task.id,
+        )
+        .where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.tarea_id == task_id,
+            PMTareaDependencia.activo == True,
+            PMTareaDependencia.bloqueante == True,
+            prerequisite_task.estatus != "completada",
+        )
+        .order_by(prerequisite_task.orden.asc(), prerequisite_task.created_at.asc())
+    ).scalars().all()
+    return [build_task_blocker(task) for task in rows]
+
+
+def list_dependencies_for_task(
+    db: Session,
+    *,
+    empresa_id: str,
+    task_id: str,
+) -> list[PMTareaDependenciaOut]:
+    prerequisite_task = aliased(PMTarea)
+    successor_task = aliased(PMTarea)
+    rows = db.execute(
+        select(PMTareaDependencia, successor_task, prerequisite_task)
+        .join(successor_task, successor_task.id == PMTareaDependencia.tarea_id)
+        .join(prerequisite_task, prerequisite_task.id == PMTareaDependencia.depende_de_tarea_id)
+        .where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.tarea_id == task_id,
+            PMTareaDependencia.activo == True,
+        )
+        .order_by(prerequisite_task.orden.asc(), prerequisite_task.created_at.asc())
+    ).all()
+    return [
+        serialize_task_dependency(
+            db,
+            dependency,
+            successor_task=successor,
+            prerequisite_task=prerequisite,
+        )
+        for dependency, successor, prerequisite in rows
+    ]
+
+
+def list_task_successors(
+    db: Session,
+    *,
+    empresa_id: str,
+    task_id: str,
+) -> list[PMTaskBlockerOut]:
+    successor_task = aliased(PMTarea)
+    rows = db.execute(
+        select(successor_task)
+        .join(PMTareaDependencia, PMTareaDependencia.tarea_id == successor_task.id)
+        .where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.depende_de_tarea_id == task_id,
+            PMTareaDependencia.activo == True,
+            successor_task.activo == True,
+        )
+        .order_by(successor_task.orden.asc(), successor_task.created_at.asc())
+    ).scalars().all()
+    return [build_task_blocker(task) for task in rows]
+
+
+def is_task_blocked(db: Session, empresa_id: str, task_id: str, manual_flag: bool = False) -> bool:
+    return manual_flag or len(get_task_blockers(db, empresa_id, task_id)) > 0
+
+
+def build_task_dependencies_payload(db: Session, task: PMTarea) -> PMTaskDependenciesOut:
+    blockers = get_task_blockers(db, task.empresa_id, task.id)
+    dependencies = list_dependencies_for_task(db, empresa_id=task.empresa_id, task_id=task.id)
+    successors = list_task_successors(db, empresa_id=task.empresa_id, task_id=task.id)
+    dependencies_count, successors_count = get_task_dependency_counts(db, task.empresa_id, task.id)
+    return PMTaskDependenciesOut(
+        task_id=task.id,
+        is_blocked=bool(task.bloqueada or blockers),
+        dependencies_count=dependencies_count,
+        blockers_count=len(blockers),
+        successors_count=successors_count,
+        dependencies=dependencies,
+        blockers=blockers,
+        successors=successors,
+    )
+
+
+def validate_task_status_transition(db: Session, task: PMTarea, new_status: str) -> None:
+    if new_status not in {"en_progreso", "en_revision", "completada"}:
+        return
+    blockers = get_task_blockers(db, task.empresa_id, task.id)
+    if not blockers:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": "No puedes avanzar esta tarea porque tiene prerrequisitos pendientes.",
+            "blockers": [blocker.model_dump() for blocker in blockers],
+        },
+    )
+
+
 def serialize_task_list_item(db: Session, task: PMTarea) -> PMTareaListItem:
     subtasks_count = db.scalar(
         select(func.count(PMSubtarea.id)).where(
@@ -560,6 +862,7 @@ def serialize_task_list_item(db: Session, task: PMTarea) -> PMTareaListItem:
             PMChecklistItem.completado == True,
         )
     ) or 0
+    dependencies_payload = build_task_dependencies_payload(db, task)
 
     return PMTareaListItem(
         id=task.id,
@@ -590,6 +893,11 @@ def serialize_task_list_item(db: Session, task: PMTarea) -> PMTareaListItem:
         subtareas_count=subtasks_count,
         checklist_total=checklist_total,
         checklist_completado=checklist_done,
+        is_blocked=dependencies_payload.is_blocked,
+        blockers_count=dependencies_payload.blockers_count,
+        dependencies_count=dependencies_payload.dependencies_count,
+        successors_count=dependencies_payload.successors_count,
+        blockers=dependencies_payload.blockers,
     )
 
 
@@ -619,11 +927,14 @@ def serialize_task_detail(db: Session, task: PMTarea) -> PMTareaOut:
         )
         .order_by(desc(PMComentario.created_at))
     ).all()
+    dependencies_payload = build_task_dependencies_payload(db, task)
     return PMTareaOut(
         **serialize_task_list_item(db, task).model_dump(),
         subtasks=[serialize_subtask(item) for item in subtasks],
         checklist_items=[serialize_checklist_item(item) for item in checklist_items],
         comments=[serialize_comment(item) for item in comments],
+        dependencies=dependencies_payload.dependencies,
+        successors=dependencies_payload.successors,
     )
 
 
@@ -1044,6 +1355,198 @@ def list_tasks(
     )
 
 
+def list_task_dependencies(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> list[PMTareaDependenciaOut]:
+    ensure_pm_tasks_enabled(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    prerequisite_task = aliased(PMTarea)
+    successor_task = aliased(PMTarea)
+    rows = db.execute(
+        select(PMTareaDependencia, successor_task, prerequisite_task)
+        .join(successor_task, successor_task.id == PMTareaDependencia.tarea_id)
+        .join(prerequisite_task, prerequisite_task.id == PMTareaDependencia.depende_de_tarea_id)
+        .where(
+            PMTareaDependencia.empresa_id == pm_context.empresa_id,
+            PMTareaDependencia.proyecto_id == project_id,
+            PMTareaDependencia.activo == True,
+        )
+        .order_by(successor_task.orden.asc(), prerequisite_task.orden.asc(), PMTareaDependencia.created_at.asc())
+    ).all()
+    return [
+        serialize_task_dependency(
+            db,
+            dependency,
+            successor_task=successor,
+            prerequisite_task=prerequisite,
+        )
+        for dependency, successor, prerequisite in rows
+    ]
+
+
+def get_task_dependencies(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    task_id: str,
+) -> PMTaskDependenciesOut:
+    ensure_pm_tasks_enabled(pm_context)
+    task = get_task_for_company(db, pm_context.empresa_id, task_id)
+    return build_task_dependencies_payload(db, task)
+
+
+def would_create_task_dependency_cycle(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    successor_task_id: str,
+    prerequisite_task_id: str,
+) -> bool:
+    if successor_task_id == prerequisite_task_id:
+        return True
+    rows = db.execute(
+        select(PMTareaDependencia.tarea_id, PMTareaDependencia.depende_de_tarea_id).where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.proyecto_id == project_id,
+            PMTareaDependencia.activo == True,
+        )
+    ).all()
+    adjacency: dict[str, set[str]] = {}
+    for successor_id, dependency_id in rows:
+        adjacency.setdefault(dependency_id, set()).add(successor_id)
+
+    stack = [successor_task_id]
+    seen: set[str] = set()
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        for next_task_id in adjacency.get(current, set()):
+            if next_task_id == prerequisite_task_id:
+                return True
+            stack.append(next_task_id)
+    return False
+
+
+def create_task_dependency(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    task_id: str,
+    depende_de_tarea_id: str,
+    tipo_dependencia: str,
+    lag_dias: int,
+    bloqueante: bool,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMTaskDependenciesOut:
+    ensure_pm_tasks_enabled(pm_context)
+    task = get_task_for_company(db, pm_context.empresa_id, task_id)
+    prerequisite_task = get_task_for_company(db, pm_context.empresa_id, depende_de_tarea_id)
+    if task.proyecto_id != prerequisite_task.proyecto_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El prerrequisito debe pertenecer al mismo proyecto.",
+        )
+    if task.id == prerequisite_task.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Una tarea no puede depender de si misma.",
+        )
+    normalized_type = normalize_task_dependency_type(tipo_dependencia)
+    duplicate = db.scalar(
+        select(PMTareaDependencia.id).where(
+            PMTareaDependencia.empresa_id == pm_context.empresa_id,
+            PMTareaDependencia.proyecto_id == task.proyecto_id,
+            PMTareaDependencia.tarea_id == task.id,
+            PMTareaDependencia.depende_de_tarea_id == prerequisite_task.id,
+            PMTareaDependencia.activo == True,
+        )
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Esta tarea ya tiene ese prerrequisito activo.",
+        )
+    if would_create_task_dependency_cycle(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=task.proyecto_id,
+        successor_task_id=task.id,
+        prerequisite_task_id=prerequisite_task.id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La dependencia crea un ciclo entre tareas.",
+        )
+
+    dependency = PMTareaDependencia(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=task.proyecto_id,
+        tarea_id=task.id,
+        depende_de_tarea_id=prerequisite_task.id,
+        tipo_dependencia=normalized_type,
+        lag_dias=max(0, lag_dias),
+        bloqueante=bloqueante,
+        notas=normalize_optional_text(notas),
+        activo=True,
+        created_by=pm_context.user.id,
+    )
+    db.add(dependency)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.task_dependency.create",
+            entity_name="pm_tarea_dependencia",
+            entity_id=dependency.id,
+            ip_address=ip_address,
+            metadata_json={
+                "project_id": task.proyecto_id,
+                "task_id": task.id,
+                "depends_on_task_id": prerequisite_task.id,
+            },
+        )
+    )
+    return build_task_dependencies_payload(db, task)
+
+
+def deactivate_task_dependency(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    dependency_id: str,
+    ip_address: str | None,
+) -> PMTaskDependenciesOut:
+    ensure_pm_tasks_enabled(pm_context)
+    dependency = get_task_dependency_for_company(db, pm_context.empresa_id, dependency_id)
+    dependency.activo = False
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.task_dependency.deactivate",
+            entity_name="pm_tarea_dependencia",
+            entity_id=dependency.id,
+            ip_address=ip_address,
+            metadata_json={
+                "project_id": dependency.proyecto_id,
+                "task_id": dependency.tarea_id,
+                "depends_on_task_id": dependency.depende_de_tarea_id,
+            },
+        )
+    )
+    task = get_task_for_company(db, pm_context.empresa_id, dependency.tarea_id)
+    return build_task_dependencies_payload(db, task)
+
+
 def create_task(
     db: Session,
     pm_context: PMContext,
@@ -1150,7 +1653,9 @@ def update_task(
     if descripcion is not None:
         task.descripcion = normalize_optional_text(descripcion)
     if estatus is not None:
-        task.estatus = normalize_task_status(estatus)
+        next_status = normalize_task_status(estatus)
+        validate_task_status_transition(db, task, next_status)
+        task.estatus = next_status
         if task.estatus == "completada" and not task.fecha_completada:
             task.fecha_completada = today_utc()
             task.porcentaje_avance = Decimal("100")
@@ -1761,10 +2266,14 @@ def recalculate_project_cost_summary_totals(
     project: PMProyecto,
     summary: PMProyectoCostoResumen,
 ) -> None:
-    presupuesto = decimal_or_zero(project.presupuesto_estimado)
+    detailed_budget = decimal_or_zero(summary.presupuesto_detallado_costo)
+    simple_budget = decimal_or_zero(project.presupuesto_estimado)
+    presupuesto = detailed_budget if detailed_budget > ZERO else simple_budget
     summary.presupuesto_estimado = presupuesto
+    summary.presupuesto_origen = "detallado" if detailed_budget > ZERO else "simple"
     summary.costo_total_real = decimal_or_zero(summary.costo_materiales_real) + decimal_or_zero(summary.costo_horas_real)
     summary.variacion_presupuesto = presupuesto - decimal_or_zero(summary.costo_total_real)
+    summary.variacion_vs_presupuesto_detallado = detailed_budget - decimal_or_zero(summary.costo_total_real)
 
 
 def refresh_project_material_costs(
@@ -2499,8 +3008,12 @@ def build_project_costs_response(
         horas_totales=decimal_or_zero(summary.horas_totales),
         horas_sin_tarifa=decimal_or_zero(summary.horas_sin_tarifa),
         costo_total_real=decimal_or_zero(summary.costo_total_real),
-        presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
+        presupuesto_estimado=decimal_or_zero(summary.presupuesto_estimado or project.presupuesto_estimado),
         variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
+        presupuesto_detallado_costo=decimal_or_zero(summary.presupuesto_detallado_costo),
+        presupuesto_detallado_venta=decimal_or_zero(summary.presupuesto_detallado_venta),
+        variacion_vs_presupuesto_detallado=decimal_or_zero(summary.variacion_vs_presupuesto_detallado),
+        presupuesto_origen=summary.presupuesto_origen or "simple",
         margen_estimado=summary.margen_estimado,
     )
 
@@ -2514,6 +3027,9 @@ def refresh_project_total_costs(
     project = get_project_for_company(db, empresa_id, project_id)
     refresh_project_material_costs(db, empresa_id=empresa_id, project_id=project_id)
     summary = refresh_project_labor_costs(db, empresa_id=empresa_id, project_id=project_id)
+    refresh_project_budget_totals(db, empresa_id=empresa_id, project_id=project_id)
+    recalculate_project_cost_summary_totals(project, summary)
+    db.flush()
     return build_project_costs_response(project, summary)
 
 
@@ -3052,6 +3568,1202 @@ def deactivate_role_hourly_rate(
     return serialize_role_hourly_rate(rate)
 
 
+def ensure_budget_editable(budget: PMPresupuesto) -> None:
+    if not budget.activo or budget.estatus != "borrador":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo se pueden editar presupuestos en borrador.",
+        )
+
+
+def get_active_project_budget_row(db: Session, empresa_id: str, project_id: str) -> PMPresupuesto | None:
+    return db.scalar(
+        select(PMPresupuesto)
+        .where(
+            PMPresupuesto.empresa_id == empresa_id,
+            PMPresupuesto.proyecto_id == project_id,
+            PMPresupuesto.activo == True,
+            PMPresupuesto.estatus != "cancelado",
+        )
+        .order_by(desc(PMPresupuesto.version), desc(PMPresupuesto.updated_at), desc(PMPresupuesto.created_at))
+    )
+
+
+def validate_budget_item_parent(
+    db: Session,
+    *,
+    empresa_id: str,
+    budget_id: str,
+    item_type: str,
+    parent_id: str | None,
+    current_item_id: str | None = None,
+) -> PMPresupuestoPartida | None:
+    if not parent_id:
+        return None
+    parent = get_budget_item_for_company(db, empresa_id, parent_id)
+    if parent.presupuesto_id != budget_id or not parent.activo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La partida padre no pertenece al presupuesto activo.")
+    if parent.tipo != "capitulo":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo los capitulos pueden agrupar partidas.")
+    if current_item_id and parent.id == current_item_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La partida no puede ser su propio padre.")
+    if item_type == "capitulo":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se soportan capitulos anidados en esta fase.")
+    return parent
+
+
+def resolve_budget_labor_rate(
+    db: Session,
+    *,
+    empresa_id: str,
+    rol: str | None,
+    provided_rate: Decimal | None,
+) -> Decimal:
+    if provided_rate is not None:
+        return quantize_rate(provided_rate)
+    normalized_role = normalize_optional_text(rol)
+    if not normalized_role:
+        return ZERO
+    rate = db.scalar(
+        select(PMTarifaHoraRol)
+        .where(
+            PMTarifaHoraRol.empresa_id == empresa_id,
+            PMTarifaHoraRol.activa == True,
+            PMTarifaHoraRol.rol == normalized_role.lower(),
+            or_(PMTarifaHoraRol.effective_from.is_(None), PMTarifaHoraRol.effective_from <= today_utc()),
+            or_(PMTarifaHoraRol.effective_to.is_(None), PMTarifaHoraRol.effective_to >= today_utc()),
+        )
+        .order_by(desc(PMTarifaHoraRol.effective_from), desc(PMTarifaHoraRol.updated_at), desc(PMTarifaHoraRol.created_at))
+    )
+    return quantize_rate(rate.tarifa_hora if rate else ZERO)
+
+
+def refresh_budget_item_component_totals(item: PMPresupuestoPartida) -> None:
+    for component in item.materials:
+        if not component.activo:
+            continue
+        component.costo_total = quantize_rate(decimal_or_zero(component.cantidad_por_unidad) * decimal_or_zero(component.costo_unitario))
+    for component in item.labor_components:
+        if not component.activo:
+            continue
+        component.costo_total = quantize_rate(decimal_or_zero(component.horas_por_unidad) * decimal_or_zero(component.tarifa_hora))
+
+
+def refresh_budget_item_totals(db: Session, item: PMPresupuestoPartida) -> PMPresupuestoPartida:
+    refresh_budget_item_component_totals(item)
+    quantity = decimal_or_zero(item.cantidad)
+    if item.tipo == "capitulo":
+        child_rows = db.scalars(
+            select(PMPresupuestoPartida).where(
+                PMPresupuestoPartida.empresa_id == item.empresa_id,
+                PMPresupuestoPartida.presupuesto_id == item.presupuesto_id,
+                PMPresupuestoPartida.parent_id == item.id,
+                PMPresupuestoPartida.activo == True,
+            )
+        ).all()
+        subtotal_cost = sum((decimal_or_zero(child.subtotal_costo) for child in child_rows), ZERO)
+        subtotal_sale = sum((decimal_or_zero(child.subtotal_venta) for child in child_rows), ZERO)
+        divisor = quantity if quantity > ZERO else Decimal("1")
+        item.costo_unitario = quantize_rate(subtotal_cost / divisor) if divisor > ZERO else ZERO
+        item.precio_unitario = quantize_rate(subtotal_sale / divisor) if divisor > ZERO else ZERO
+        item.subtotal_costo = quantize_money(subtotal_cost)
+        item.subtotal_venta = quantize_money(subtotal_sale)
+        return item
+
+    material_cost = sum((decimal_or_zero(component.costo_total) for component in item.materials if component.activo), ZERO)
+    labor_cost = sum((decimal_or_zero(component.costo_total) for component in item.labor_components if component.activo), ZERO)
+    unit_cost = material_cost + labor_cost
+    margin_pct = decimal_or_zero(item.margen_pct)
+    price_unit = (
+        decimal_or_zero(item.precio_unitario_manual)
+        if item.precio_unitario_manual is not None
+        else unit_cost * (Decimal("1") + (margin_pct / Decimal("100")))
+    )
+    item.costo_unitario = quantize_rate(unit_cost)
+    item.precio_unitario = quantize_rate(price_unit)
+    item.subtotal_costo = quantize_money(quantity * decimal_or_zero(item.costo_unitario))
+    item.subtotal_venta = quantize_money(quantity * decimal_or_zero(item.precio_unitario))
+    return item
+
+
+def refresh_budget_item_tree(db: Session, item: PMPresupuestoPartida) -> None:
+    current = refresh_budget_item_totals(db, item)
+    while current.parent_id:
+        parent = get_budget_item_for_company(db, current.empresa_id, current.parent_id)
+        current = refresh_budget_item_totals(db, parent)
+
+
+def refresh_project_budget_totals(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> PMPresupuesto | None:
+    project = get_project_for_company(db, empresa_id, project_id)
+    summary = get_or_create_project_cost_summary_row(db, empresa_id=empresa_id, project_id=project_id)
+    budget = get_active_project_budget_row(db, empresa_id, project_id)
+
+    if budget is None:
+        summary.presupuesto_detallado_costo = ZERO
+        summary.presupuesto_detallado_venta = ZERO
+        summary.variacion_vs_presupuesto_detallado = ZERO - decimal_or_zero(summary.costo_total_real)
+        if summary.presupuesto_origen == "detallado":
+            summary.presupuesto_origen = "simple"
+        summary.margen_estimado = None
+        recalculate_project_cost_summary_totals(project, summary)
+        db.flush()
+        return None
+
+    leaf_items = db.scalars(
+        select(PMPresupuestoPartida).where(
+            PMPresupuestoPartida.empresa_id == empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget.id,
+            PMPresupuestoPartida.activo == True,
+            PMPresupuestoPartida.tipo == "partida",
+        )
+    ).all()
+    for item in leaf_items:
+        refresh_budget_item_totals(db, item)
+
+    chapter_items = db.scalars(
+        select(PMPresupuestoPartida).where(
+            PMPresupuestoPartida.empresa_id == empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget.id,
+            PMPresupuestoPartida.activo == True,
+            PMPresupuestoPartida.tipo == "capitulo",
+        )
+    ).all()
+    for item in chapter_items:
+        refresh_budget_item_totals(db, item)
+
+    subtotal_cost = db.scalar(
+        select(func.coalesce(func.sum(PMPresupuestoPartida.subtotal_costo), 0)).where(
+            PMPresupuestoPartida.empresa_id == empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget.id,
+            PMPresupuestoPartida.activo == True,
+            PMPresupuestoPartida.tipo == "partida",
+        )
+    ) or ZERO
+    subtotal_sale = db.scalar(
+        select(func.coalesce(func.sum(PMPresupuestoPartida.subtotal_venta), 0)).where(
+            PMPresupuestoPartida.empresa_id == empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget.id,
+            PMPresupuestoPartida.activo == True,
+            PMPresupuestoPartida.tipo == "partida",
+        )
+    ) or ZERO
+
+    indirect_rows = db.scalars(
+        select(PMPresupuestoIndirecto).where(
+            PMPresupuestoIndirecto.empresa_id == empresa_id,
+            PMPresupuestoIndirecto.presupuesto_id == budget.id,
+            PMPresupuestoIndirecto.activo == True,
+        )
+    ).all()
+    header_indirect_amount = decimal_or_zero(subtotal_cost) * (decimal_or_zero(budget.indirectos_pct) / Decimal("100"))
+    detail_indirect_amount = ZERO
+    for indirect in indirect_rows:
+        if indirect.tipo == "porcentaje":
+            indirect_amount = decimal_or_zero(subtotal_cost) * (decimal_or_zero(indirect.porcentaje) / Decimal("100"))
+        else:
+            indirect_amount = decimal_or_zero(indirect.monto)
+        indirect.monto = quantize_money(indirect_amount)
+        detail_indirect_amount += decimal_or_zero(indirect.monto)
+
+    indirect_total = quantize_money(header_indirect_amount + detail_indirect_amount)
+    total_cost = quantize_money(decimal_or_zero(subtotal_cost) + indirect_total)
+    total_sale = quantize_money(subtotal_sale)
+    profit_amount = quantize_money(total_sale - total_cost)
+    profit_pct = quantize_percentage((profit_amount / total_cost) * Decimal("100")) if total_cost > ZERO else ZERO
+
+    budget.subtotal_costo = quantize_money(subtotal_cost)
+    budget.subtotal_venta = quantize_money(subtotal_sale)
+    budget.indirectos_monto = indirect_total
+    budget.total_costo = total_cost
+    budget.total_venta = total_sale
+    budget.utilidad_monto = profit_amount
+    budget.utilidad_pct = profit_pct
+    budget.margen_estimado = profit_amount
+
+    summary.presupuesto_detallado_costo = total_cost
+    summary.presupuesto_detallado_venta = total_sale
+    summary.variacion_vs_presupuesto_detallado = total_cost - decimal_or_zero(summary.costo_total_real)
+    summary.margen_estimado = profit_amount
+    recalculate_project_cost_summary_totals(project, summary)
+    db.flush()
+    return budget
+
+
+def serialize_budget_item_material(component: PMPresupuestoPartidaMaterial) -> PMPresupuestoPartidaMaterialOut:
+    return PMPresupuestoPartidaMaterialOut(
+        id=component.id,
+        empresa_id=component.empresa_id,
+        partida_id=component.partida_id,
+        proyecto_id=component.proyecto_id,
+        material_id=component.material_id,
+        material_nombre_snapshot=component.material_nombre_snapshot,
+        material_sku_snapshot=component.material_sku_snapshot,
+        unidad=component.unidad,
+        cantidad_por_unidad=decimal_or_zero(component.cantidad_por_unidad),
+        costo_unitario=decimal_or_zero(component.costo_unitario),
+        costo_total=decimal_or_zero(component.costo_total),
+        proveedor_nombre_snapshot=component.proveedor_nombre_snapshot,
+        activo=component.activo,
+        created_at=component.created_at,
+        updated_at=component.updated_at,
+    )
+
+
+def serialize_budget_item_labor(component: PMPresupuestoPartidaManoObra) -> PMPresupuestoPartidaManoObraOut:
+    return PMPresupuestoPartidaManoObraOut(
+        id=component.id,
+        empresa_id=component.empresa_id,
+        partida_id=component.partida_id,
+        proyecto_id=component.proyecto_id,
+        rol=component.rol,
+        descripcion=component.descripcion,
+        horas_por_unidad=decimal_or_zero(component.horas_por_unidad),
+        tarifa_hora=decimal_or_zero(component.tarifa_hora),
+        costo_total=decimal_or_zero(component.costo_total),
+        activo=component.activo,
+        created_at=component.created_at,
+        updated_at=component.updated_at,
+    )
+
+
+def serialize_budget_item(db: Session, item: PMPresupuestoPartida) -> PMPresupuestoPartidaOut:
+    materials = db.scalars(
+        select(PMPresupuestoPartidaMaterial)
+        .where(
+            PMPresupuestoPartidaMaterial.empresa_id == item.empresa_id,
+            PMPresupuestoPartidaMaterial.partida_id == item.id,
+            PMPresupuestoPartidaMaterial.activo == True,
+        )
+        .order_by(PMPresupuestoPartidaMaterial.created_at.asc(), PMPresupuestoPartidaMaterial.id.asc())
+    ).all()
+    labor_components = db.scalars(
+        select(PMPresupuestoPartidaManoObra)
+        .where(
+            PMPresupuestoPartidaManoObra.empresa_id == item.empresa_id,
+            PMPresupuestoPartidaManoObra.partida_id == item.id,
+            PMPresupuestoPartidaManoObra.activo == True,
+        )
+        .order_by(PMPresupuestoPartidaManoObra.created_at.asc(), PMPresupuestoPartidaManoObra.id.asc())
+    ).all()
+    return PMPresupuestoPartidaOut(
+        id=item.id,
+        empresa_id=item.empresa_id,
+        presupuesto_id=item.presupuesto_id,
+        proyecto_id=item.proyecto_id,
+        parent_id=item.parent_id,
+        codigo=item.codigo,
+        nombre=item.nombre,
+        descripcion=item.descripcion,
+        tipo=item.tipo,
+        unidad=item.unidad,
+        cantidad=decimal_or_zero(item.cantidad),
+        costo_unitario=decimal_or_zero(item.costo_unitario),
+        precio_unitario=decimal_or_zero(item.precio_unitario),
+        precio_unitario_manual=item.precio_unitario_manual,
+        subtotal_costo=decimal_or_zero(item.subtotal_costo),
+        subtotal_venta=decimal_or_zero(item.subtotal_venta),
+        margen_pct=decimal_or_zero(item.margen_pct),
+        orden=item.orden,
+        activo=item.activo,
+        materials=[serialize_budget_item_material(component) for component in materials],
+        labor_components=[serialize_budget_item_labor(component) for component in labor_components],
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+def serialize_budget_indirect(indirect: PMPresupuestoIndirecto) -> PMPresupuestoIndirectoOut:
+    return PMPresupuestoIndirectoOut(
+        id=indirect.id,
+        empresa_id=indirect.empresa_id,
+        presupuesto_id=indirect.presupuesto_id,
+        proyecto_id=indirect.proyecto_id,
+        nombre=indirect.nombre,
+        tipo=indirect.tipo,
+        porcentaje=decimal_or_zero(indirect.porcentaje) if indirect.porcentaje is not None else None,
+        monto=decimal_or_zero(indirect.monto),
+        activo=indirect.activo,
+        created_at=indirect.created_at,
+        updated_at=indirect.updated_at,
+    )
+
+
+def serialize_budget(db: Session, budget: PMPresupuesto) -> PMPresupuestoOut:
+    items = db.scalars(
+        select(PMPresupuestoPartida)
+        .where(
+            PMPresupuestoPartida.empresa_id == budget.empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget.id,
+            PMPresupuestoPartida.activo == True,
+        )
+        .order_by(PMPresupuestoPartida.orden.asc(), PMPresupuestoPartida.created_at.asc(), PMPresupuestoPartida.id.asc())
+    ).all()
+    indirects = db.scalars(
+        select(PMPresupuestoIndirecto)
+        .where(
+            PMPresupuestoIndirecto.empresa_id == budget.empresa_id,
+            PMPresupuestoIndirecto.presupuesto_id == budget.id,
+            PMPresupuestoIndirecto.activo == True,
+        )
+        .order_by(PMPresupuestoIndirecto.created_at.asc(), PMPresupuestoIndirecto.id.asc())
+    ).all()
+    return PMPresupuestoOut(
+        id=budget.id,
+        empresa_id=budget.empresa_id,
+        proyecto_id=budget.proyecto_id,
+        nombre=budget.nombre,
+        version=budget.version,
+        estatus=budget.estatus,
+        moneda=budget.moneda,
+        subtotal_costo=decimal_or_zero(budget.subtotal_costo),
+        subtotal_venta=decimal_or_zero(budget.subtotal_venta),
+        indirectos_pct=decimal_or_zero(budget.indirectos_pct),
+        indirectos_monto=decimal_or_zero(budget.indirectos_monto),
+        utilidad_pct=decimal_or_zero(budget.utilidad_pct),
+        utilidad_monto=decimal_or_zero(budget.utilidad_monto),
+        total_costo=decimal_or_zero(budget.total_costo),
+        total_venta=decimal_or_zero(budget.total_venta),
+        margen_estimado=decimal_or_zero(budget.margen_estimado),
+        notas=budget.notas,
+        aprobado_por=budget.aprobado_por,
+        aprobado_at=budget.aprobado_at,
+        activo=budget.activo,
+        created_by=budget.created_by,
+        updated_by=budget.updated_by,
+        created_at=budget.created_at,
+        updated_at=budget.updated_at,
+        items=[serialize_budget_item(db, item) for item in items],
+        indirects=[serialize_budget_indirect(indirect) for indirect in indirects],
+    )
+
+
+def build_budget_vs_actual_response(
+    project: PMProyecto,
+    summary: PMProyectoCostoResumen,
+    budget: PMPresupuesto | None,
+) -> PMBudgetVsActualOut:
+    budget_cost = decimal_or_zero(summary.presupuesto_detallado_costo or summary.presupuesto_estimado or project.presupuesto_estimado)
+    total_real = decimal_or_zero(summary.costo_total_real)
+    percentage_consumed = ZERO
+    if budget_cost > ZERO:
+        percentage_consumed = quantize_percentage((total_real / budget_cost) * Decimal("100"))
+    return PMBudgetVsActualOut(
+        project_id=project.id,
+        presupuesto_id=budget.id if budget else None,
+        presupuesto_nombre=budget.nombre if budget else None,
+        presupuesto_estatus=budget.estatus if budget else None,
+        presupuesto_origen=summary.presupuesto_origen or "simple",
+        moneda=budget.moneda if budget else "MXN",
+        presupuesto_detallado_costo=budget_cost,
+        presupuesto_detallado_venta=decimal_or_zero(summary.presupuesto_detallado_venta),
+        costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
+        costo_horas_real=decimal_or_zero(summary.costo_horas_real),
+        costo_real_total=total_real,
+        variacion=budget_cost - total_real,
+        porcentaje_consumido=percentage_consumed,
+        margen_estimado=summary.margen_estimado,
+    )
+
+
+def build_dashboard_project_cost_item(summary: PMProyectoCostoResumen, project: PMProyecto) -> PMDashboardProjectCostItem:
+    return PMDashboardProjectCostItem(
+        project_id=project.id,
+        proyecto_nombre=project.nombre,
+        costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
+        costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
+        costo_horas_real=decimal_or_zero(summary.costo_horas_real),
+        horas_totales=decimal_or_zero(summary.horas_totales),
+        costo_total_real=decimal_or_zero(summary.costo_total_real),
+        variacion_materiales=decimal_or_zero(summary.variacion_materiales),
+        presupuesto_estimado=decimal_or_zero(summary.presupuesto_estimado or project.presupuesto_estimado),
+        variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
+        presupuesto_detallado_costo=decimal_or_zero(summary.presupuesto_detallado_costo),
+        presupuesto_detallado_venta=decimal_or_zero(summary.presupuesto_detallado_venta),
+        variacion_vs_presupuesto_detallado=decimal_or_zero(summary.variacion_vs_presupuesto_detallado),
+        margen_estimado=summary.margen_estimado,
+        presupuesto_origen=summary.presupuesto_origen or "simple",
+    )
+
+
+def get_project_budget(
+    db: Session,
+    pm_context: PMContext,
+    project_id: str,
+) -> PMProjectBudgetBundleOut:
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    if pm_context.config.pm_materiales_enabled:
+        refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    summary = (
+        refresh_project_labor_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+        if pm_context.config.pm_tiempo_enabled
+        else get_or_create_project_cost_summary_row(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    )
+    budget = refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    recalculate_project_cost_summary_totals(project, summary)
+    db.flush()
+    return PMProjectBudgetBundleOut(
+        budget=serialize_budget(db, budget) if budget else None,
+        summary=build_project_costs_response(project, summary),
+        vs_actual=build_budget_vs_actual_response(project, summary, budget),
+    )
+
+
+def create_project_budget(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    nombre: str | None,
+    moneda: str | None,
+    indirectos_pct: Decimal | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMPresupuestoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    current_budget = get_active_project_budget_row(db, pm_context.empresa_id, project.id)
+    if current_budget:
+        refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+        return serialize_budget(db, current_budget)
+
+    next_version = (db.scalar(
+        select(func.coalesce(func.max(PMPresupuesto.version), 0)).where(
+            PMPresupuesto.empresa_id == pm_context.empresa_id,
+            PMPresupuesto.proyecto_id == project.id,
+        )
+    ) or 0) + 1
+    budget = PMPresupuesto(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        nombre=normalize_required_text(nombre or "Presupuesto base", "Nombre"),
+        version=next_version,
+        estatus="borrador",
+        moneda=(normalize_optional_text(moneda) or "MXN").upper(),
+        indirectos_pct=decimal_or_zero(indirectos_pct),
+        notas=normalize_optional_text(notas),
+        activo=True,
+        created_by=pm_context.user.id,
+        updated_by=pm_context.user.id,
+    )
+    db.add(budget)
+    db.flush()
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget.create",
+            entity_name="pm_presupuesto",
+            entity_id=budget.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "version": budget.version},
+        )
+    )
+    return serialize_budget(db, budget)
+
+
+def update_project_budget(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    budget_id: str,
+    nombre: str | None,
+    moneda: str | None,
+    indirectos_pct: Decimal | None,
+    notas: str | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMPresupuestoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+    ensure_budget_editable(budget)
+    if nombre is not None:
+        budget.nombre = normalize_required_text(nombre, "Nombre")
+    if moneda is not None:
+        budget.moneda = (normalize_optional_text(moneda) or "MXN").upper()
+    if indirectos_pct is not None:
+        budget.indirectos_pct = decimal_or_zero(indirectos_pct)
+    if notas is not None:
+        budget.notas = normalize_optional_text(notas)
+    if activo is not None:
+        budget.activo = activo
+    budget.updated_by = pm_context.user.id
+    db.flush()
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget.update",
+            entity_name="pm_presupuesto",
+            entity_id=budget.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id},
+        )
+    )
+    return serialize_budget(db, budget)
+
+
+def approve_project_budget(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    budget_id: str,
+    ip_address: str | None,
+) -> PMPresupuestoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+    ensure_budget_editable(budget)
+    active_items = db.scalar(
+        select(func.count(PMPresupuestoPartida.id)).where(
+            PMPresupuestoPartida.empresa_id == pm_context.empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget.id,
+            PMPresupuestoPartida.activo == True,
+            PMPresupuestoPartida.tipo == "partida",
+        )
+    ) or 0
+    if active_items <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Debes agregar al menos una partida antes de aprobar el presupuesto.")
+    budget.estatus = "aprobado"
+    budget.aprobado_por = pm_context.user.id
+    budget.aprobado_at = utcnow()
+    budget.updated_by = pm_context.user.id
+    db.flush()
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget.approve",
+            entity_name="pm_presupuesto",
+            entity_id=budget.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id},
+        )
+    )
+    return serialize_budget(db, budget)
+
+
+def cancel_project_budget(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    budget_id: str,
+    ip_address: str | None,
+) -> PMPresupuestoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+    budget.estatus = "cancelado"
+    budget.activo = False
+    budget.updated_by = pm_context.user.id
+    db.flush()
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget.cancel",
+            entity_name="pm_presupuesto",
+            entity_id=budget.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id},
+        )
+    )
+    return serialize_budget(db, budget)
+
+
+def create_budget_item(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    budget_id: str,
+    parent_id: str | None,
+    codigo: str | None,
+    nombre: str,
+    descripcion: str | None,
+    tipo: str,
+    unidad: str | None,
+    cantidad: Decimal,
+    margen_pct: Decimal,
+    precio_unitario_manual: Decimal | None,
+    orden: int,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaOut:
+    ensure_pm_budget_manage_access(pm_context)
+    budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+    ensure_budget_editable(budget)
+    item_type = normalize_budget_item_type(tipo)
+    validate_budget_item_parent(
+        db,
+        empresa_id=pm_context.empresa_id,
+        budget_id=budget.id,
+        item_type=item_type,
+        parent_id=parent_id,
+    )
+    quantity = decimal_or_zero(cantidad)
+    if item_type == "partida" and quantity <= ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad de la partida debe ser mayor a 0.")
+    item = PMPresupuestoPartida(
+        empresa_id=pm_context.empresa_id,
+        presupuesto_id=budget.id,
+        proyecto_id=budget.proyecto_id,
+        parent_id=normalize_optional_text(parent_id),
+        codigo=normalize_optional_text(codigo),
+        nombre=normalize_required_text(nombre, "Nombre"),
+        descripcion=normalize_optional_text(descripcion),
+        tipo=item_type,
+        unidad=normalize_optional_text(unidad),
+        cantidad=quantity if item_type == "partida" else quantity,
+        margen_pct=decimal_or_zero(margen_pct),
+        precio_unitario_manual=decimal_or_zero(precio_unitario_manual) if precio_unitario_manual is not None else None,
+        orden=max(int(orden), 0),
+        activo=True,
+    )
+    db.add(item)
+    db.flush()
+    refresh_budget_item_tree(db, item)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.create",
+            entity_name="pm_presupuesto_partida",
+            entity_id=item.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id, "budget_id": budget.id},
+        )
+    )
+    return serialize_budget_item(db, item)
+
+
+def update_budget_item(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    item_id: str,
+    parent_id: str | None,
+    codigo: str | None,
+    nombre: str | None,
+    descripcion: str | None,
+    tipo: str | None,
+    unidad: str | None,
+    cantidad: Decimal | None,
+    margen_pct: Decimal | None,
+    precio_unitario_manual: Decimal | None,
+    orden: int | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaOut:
+    ensure_pm_budget_manage_access(pm_context)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, item_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    next_type = normalize_budget_item_type(tipo or item.tipo)
+    next_parent_id = parent_id if parent_id is not None else item.parent_id
+    validate_budget_item_parent(
+        db,
+        empresa_id=pm_context.empresa_id,
+        budget_id=budget.id,
+        item_type=next_type,
+        parent_id=next_parent_id,
+        current_item_id=item.id,
+    )
+    next_quantity = decimal_or_zero(cantidad if cantidad is not None else item.cantidad)
+    if next_type == "partida" and next_quantity <= ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad de la partida debe ser mayor a 0.")
+    item.tipo = next_type
+    item.parent_id = normalize_optional_text(next_parent_id)
+    if codigo is not None:
+        item.codigo = normalize_optional_text(codigo)
+    if nombre is not None:
+        item.nombre = normalize_required_text(nombre, "Nombre")
+    if descripcion is not None:
+        item.descripcion = normalize_optional_text(descripcion)
+    if unidad is not None:
+        item.unidad = normalize_optional_text(unidad)
+    item.cantidad = next_quantity
+    if margen_pct is not None:
+        item.margen_pct = decimal_or_zero(margen_pct)
+    if precio_unitario_manual is not None:
+        item.precio_unitario_manual = decimal_or_zero(precio_unitario_manual)
+    if orden is not None:
+        item.orden = max(int(orden), 0)
+    if activo is not None:
+        item.activo = activo
+    db.flush()
+    refresh_budget_item_tree(db, item)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.update",
+            entity_name="pm_presupuesto_partida",
+            entity_id=item.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id, "budget_id": budget.id},
+        )
+    )
+    return serialize_budget_item(db, item)
+
+
+def deactivate_budget_item(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    item_id: str,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaOut:
+    ensure_pm_budget_manage_access(pm_context)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, item_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    item.activo = False
+    db.flush()
+    if item.parent_id:
+        parent = get_budget_item_for_company(db, pm_context.empresa_id, item.parent_id)
+        refresh_budget_item_tree(db, parent)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.deactivate",
+            entity_name="pm_presupuesto_partida",
+            entity_id=item.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id, "budget_id": budget.id},
+        )
+    )
+    return serialize_budget_item(db, item)
+
+
+def add_budget_item_material(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    item_id: str,
+    material_id: str | None,
+    material_nombre_snapshot: str | None,
+    material_sku_snapshot: str | None,
+    unidad: str | None,
+    cantidad_por_unidad: Decimal,
+    costo_unitario: Decimal | None,
+    proveedor_nombre_snapshot: str | None,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaMaterialOut:
+    ensure_pm_budget_manage_access(pm_context)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, item_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    if item.tipo != "partida":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo las partidas pueden tener APU de materiales.")
+
+    material = get_material_for_company_pm(db, pm_context.empresa_id, material_id) if material_id else None
+    snapshot_name = material.nombre if material else normalize_required_text(material_nombre_snapshot or "", "Material")
+    snapshot_sku = material.sku if material else normalize_optional_text(material_sku_snapshot)
+    snapshot_unit = material.unidad if material else normalize_optional_text(unidad)
+    snapshot_cost = quantize_rate(
+        decimal_or_zero(costo_unitario if costo_unitario is not None else (material.costo_promedio_actual or material.costo_unitario if material else ZERO))
+    )
+    quantity = decimal_or_zero(cantidad_por_unidad)
+    component = PMPresupuestoPartidaMaterial(
+        empresa_id=pm_context.empresa_id,
+        partida_id=item.id,
+        proyecto_id=item.proyecto_id,
+        material_id=material.id if material else None,
+        material_nombre_snapshot=snapshot_name,
+        material_sku_snapshot=snapshot_sku,
+        unidad=snapshot_unit,
+        cantidad_por_unidad=quantity,
+        costo_unitario=snapshot_cost,
+        costo_total=quantize_rate(quantity * snapshot_cost),
+        proveedor_nombre_snapshot=normalize_optional_text(proveedor_nombre_snapshot),
+        activo=True,
+    )
+    db.add(component)
+    db.flush()
+    refresh_budget_item_tree(db, item)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=item.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.material.create",
+            entity_name="pm_presupuesto_partida_material",
+            entity_id=component.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": item.proyecto_id, "item_id": item.id},
+        )
+    )
+    return serialize_budget_item_material(component)
+
+
+def update_budget_item_material(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    component_id: str,
+    material_id: str | None,
+    material_nombre_snapshot: str | None,
+    material_sku_snapshot: str | None,
+    unidad: str | None,
+    cantidad_por_unidad: Decimal | None,
+    costo_unitario: Decimal | None,
+    proveedor_nombre_snapshot: str | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaMaterialOut:
+    ensure_pm_budget_manage_access(pm_context)
+    component = get_budget_item_material_for_company(db, pm_context.empresa_id, component_id)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, component.partida_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    material = get_material_for_company_pm(db, pm_context.empresa_id, material_id) if material_id else None
+    if material:
+        component.material_id = material.id
+        component.material_nombre_snapshot = material.nombre
+        component.material_sku_snapshot = material.sku
+        component.unidad = material.unidad
+        if costo_unitario is None:
+            component.costo_unitario = quantize_rate(decimal_or_zero(material.costo_promedio_actual or material.costo_unitario))
+    else:
+        if material_nombre_snapshot is not None:
+            component.material_nombre_snapshot = normalize_required_text(material_nombre_snapshot, "Material")
+        if material_sku_snapshot is not None:
+            component.material_sku_snapshot = normalize_optional_text(material_sku_snapshot)
+        if unidad is not None:
+            component.unidad = normalize_optional_text(unidad)
+        if material_id is not None:
+            component.material_id = None
+    if cantidad_por_unidad is not None:
+        component.cantidad_por_unidad = decimal_or_zero(cantidad_por_unidad)
+    if costo_unitario is not None:
+        component.costo_unitario = quantize_rate(costo_unitario)
+    if proveedor_nombre_snapshot is not None:
+        component.proveedor_nombre_snapshot = normalize_optional_text(proveedor_nombre_snapshot)
+    if activo is not None:
+        component.activo = activo
+    component.costo_total = quantize_rate(decimal_or_zero(component.cantidad_por_unidad) * decimal_or_zero(component.costo_unitario))
+    db.flush()
+    refresh_budget_item_tree(db, item)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=item.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.material.update",
+            entity_name="pm_presupuesto_partida_material",
+            entity_id=component.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": item.proyecto_id, "item_id": item.id},
+        )
+    )
+    return serialize_budget_item_material(component)
+
+
+def deactivate_budget_item_material(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    component_id: str,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaMaterialOut:
+    ensure_pm_budget_manage_access(pm_context)
+    component = get_budget_item_material_for_company(db, pm_context.empresa_id, component_id)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, component.partida_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    component.activo = False
+    db.flush()
+    refresh_budget_item_tree(db, item)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=item.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.material.deactivate",
+            entity_name="pm_presupuesto_partida_material",
+            entity_id=component.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": item.proyecto_id, "item_id": item.id},
+        )
+    )
+    return serialize_budget_item_material(component)
+
+
+def add_budget_item_labor(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    item_id: str,
+    rol: str | None,
+    descripcion: str | None,
+    horas_por_unidad: Decimal,
+    tarifa_hora: Decimal | None,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaManoObraOut:
+    ensure_pm_budget_manage_access(pm_context)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, item_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    if item.tipo != "partida":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo las partidas pueden tener mano de obra APU.")
+    hours = decimal_or_zero(horas_por_unidad)
+    rate = resolve_budget_labor_rate(db, empresa_id=pm_context.empresa_id, rol=rol, provided_rate=tarifa_hora)
+    component = PMPresupuestoPartidaManoObra(
+        empresa_id=pm_context.empresa_id,
+        partida_id=item.id,
+        proyecto_id=item.proyecto_id,
+        rol=normalize_optional_text(rol),
+        descripcion=normalize_optional_text(descripcion),
+        horas_por_unidad=hours,
+        tarifa_hora=rate,
+        costo_total=quantize_rate(hours * rate),
+        activo=True,
+    )
+    db.add(component)
+    db.flush()
+    refresh_budget_item_tree(db, item)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=item.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.labor.create",
+            entity_name="pm_presupuesto_partida_mano_obra",
+            entity_id=component.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": item.proyecto_id, "item_id": item.id},
+        )
+    )
+    return serialize_budget_item_labor(component)
+
+
+def update_budget_item_labor(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    component_id: str,
+    rol: str | None,
+    descripcion: str | None,
+    horas_por_unidad: Decimal | None,
+    tarifa_hora: Decimal | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaManoObraOut:
+    ensure_pm_budget_manage_access(pm_context)
+    component = get_budget_item_labor_for_company(db, pm_context.empresa_id, component_id)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, component.partida_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    if rol is not None:
+        component.rol = normalize_optional_text(rol)
+    if descripcion is not None:
+        component.descripcion = normalize_optional_text(descripcion)
+    if horas_por_unidad is not None:
+        component.horas_por_unidad = decimal_or_zero(horas_por_unidad)
+    if tarifa_hora is not None:
+        component.tarifa_hora = resolve_budget_labor_rate(
+            db,
+            empresa_id=pm_context.empresa_id,
+            rol=component.rol,
+            provided_rate=tarifa_hora,
+        )
+    elif rol is not None:
+        component.tarifa_hora = resolve_budget_labor_rate(
+            db,
+            empresa_id=pm_context.empresa_id,
+            rol=component.rol,
+            provided_rate=None,
+        )
+    if activo is not None:
+        component.activo = activo
+    component.costo_total = quantize_rate(decimal_or_zero(component.horas_por_unidad) * decimal_or_zero(component.tarifa_hora))
+    db.flush()
+    refresh_budget_item_tree(db, item)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=item.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.labor.update",
+            entity_name="pm_presupuesto_partida_mano_obra",
+            entity_id=component.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": item.proyecto_id, "item_id": item.id},
+        )
+    )
+    return serialize_budget_item_labor(component)
+
+
+def deactivate_budget_item_labor(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    component_id: str,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaManoObraOut:
+    ensure_pm_budget_manage_access(pm_context)
+    component = get_budget_item_labor_for_company(db, pm_context.empresa_id, component_id)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, component.partida_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    component.activo = False
+    db.flush()
+    refresh_budget_item_tree(db, item)
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=item.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item.labor.deactivate",
+            entity_name="pm_presupuesto_partida_mano_obra",
+            entity_id=component.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": item.proyecto_id, "item_id": item.id},
+        )
+    )
+    return serialize_budget_item_labor(component)
+
+
+def add_budget_indirect(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    budget_id: str,
+    nombre: str,
+    tipo: str,
+    porcentaje: Decimal | None,
+    monto: Decimal,
+    ip_address: str | None,
+) -> PMPresupuestoIndirectoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+    ensure_budget_editable(budget)
+    normalized_type = normalize_budget_indirect_type(tipo)
+    indirect = PMPresupuestoIndirecto(
+        empresa_id=pm_context.empresa_id,
+        presupuesto_id=budget.id,
+        proyecto_id=budget.proyecto_id,
+        nombre=normalize_required_text(nombre, "Nombre"),
+        tipo=normalized_type,
+        porcentaje=decimal_or_zero(porcentaje) if porcentaje is not None else None,
+        monto=decimal_or_zero(monto),
+        activo=True,
+    )
+    db.add(indirect)
+    db.flush()
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget.indirect.create",
+            entity_name="pm_presupuesto_indirecto",
+            entity_id=indirect.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id, "budget_id": budget.id},
+        )
+    )
+    return serialize_budget_indirect(indirect)
+
+
+def update_budget_indirect(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    indirect_id: str,
+    nombre: str | None,
+    tipo: str | None,
+    porcentaje: Decimal | None,
+    monto: Decimal | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMPresupuestoIndirectoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    indirect = get_budget_indirect_for_company(db, pm_context.empresa_id, indirect_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, indirect.presupuesto_id)
+    ensure_budget_editable(budget)
+    if nombre is not None:
+        indirect.nombre = normalize_required_text(nombre, "Nombre")
+    if tipo is not None:
+        indirect.tipo = normalize_budget_indirect_type(tipo)
+    if porcentaje is not None:
+        indirect.porcentaje = decimal_or_zero(porcentaje)
+    if monto is not None:
+        indirect.monto = decimal_or_zero(monto)
+    if activo is not None:
+        indirect.activo = activo
+    db.flush()
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget.indirect.update",
+            entity_name="pm_presupuesto_indirecto",
+            entity_id=indirect.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id, "budget_id": budget.id},
+        )
+    )
+    return serialize_budget_indirect(indirect)
+
+
+def deactivate_budget_indirect(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    indirect_id: str,
+    ip_address: str | None,
+) -> PMPresupuestoIndirectoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    indirect = get_budget_indirect_for_company(db, pm_context.empresa_id, indirect_id)
+    budget = get_budget_for_company(db, pm_context.empresa_id, indirect.presupuesto_id)
+    ensure_budget_editable(budget)
+    indirect.activo = False
+    db.flush()
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=budget.proyecto_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget.indirect.deactivate",
+            entity_name="pm_presupuesto_indirecto",
+            entity_id=indirect.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": budget.proyecto_id, "budget_id": budget.id},
+        )
+    )
+    return serialize_budget_indirect(indirect)
+
+
+def get_project_budget_vs_actual(
+    db: Session,
+    pm_context: PMContext,
+    project_id: str,
+) -> PMBudgetVsActualOut:
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    if pm_context.config.pm_materiales_enabled:
+        refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    summary = (
+        refresh_project_labor_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+        if pm_context.config.pm_tiempo_enabled
+        else get_or_create_project_cost_summary_row(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    )
+    budget = refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    recalculate_project_cost_summary_totals(project, summary)
+    db.flush()
+    return build_budget_vs_actual_response(project, summary, budget)
+
+
 def get_project_costs(
     db: Session,
     pm_context: PMContext,
@@ -3065,6 +4777,7 @@ def get_project_costs(
         if pm_context.config.pm_tiempo_enabled
         else get_or_create_project_cost_summary_row(db, empresa_id=pm_context.empresa_id, project_id=project.id)
     )
+    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
     recalculate_project_cost_summary_totals(project, summary)
     db.flush()
     return build_project_costs_response(project, summary)
@@ -3194,6 +4907,26 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
         )
     ) or ZERO
+    total_budget_cost = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.presupuesto_estimado), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    total_estimated_margin = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.margen_estimado), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    projects_without_budget_count = db.scalar(
+        select(func.count(PMProyecto.id))
+        .select_from(PMProyecto)
+        .outerjoin(PMProyectoCostoResumen, PMProyectoCostoResumen.proyecto_id == PMProyecto.id)
+        .where(
+            PMProyecto.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+            func.coalesce(PMProyectoCostoResumen.presupuesto_estimado, 0) <= 0,
+        )
+    ) or 0
 
     top_material_cost_projects = db.execute(
         select(PMProyectoCostoResumen, PMProyecto)
@@ -3211,9 +4944,9 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
         .where(
             PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
             PMProyecto.activo == True,
-            PMProyectoCostoResumen.costo_materiales_real > func.coalesce(PMProyecto.presupuesto_estimado, 0),
+            PMProyectoCostoResumen.costo_materiales_real > func.coalesce(PMProyectoCostoResumen.presupuesto_estimado, 0),
         )
-        .order_by((PMProyectoCostoResumen.costo_materiales_real - func.coalesce(PMProyecto.presupuesto_estimado, 0)).desc())
+        .order_by((PMProyectoCostoResumen.costo_materiales_real - func.coalesce(PMProyectoCostoResumen.presupuesto_estimado, 0)).desc())
         .limit(5)
     ).all()
     top_total_cost_projects = db.execute(
@@ -3232,9 +4965,21 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
         .where(
             PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
             PMProyecto.activo == True,
-            PMProyectoCostoResumen.costo_total_real > func.coalesce(PMProyecto.presupuesto_estimado, 0),
+            PMProyectoCostoResumen.costo_total_real > func.coalesce(PMProyectoCostoResumen.presupuesto_estimado, 0),
         )
-        .order_by((PMProyectoCostoResumen.costo_total_real - func.coalesce(PMProyecto.presupuesto_estimado, 0)).desc())
+        .order_by((PMProyectoCostoResumen.costo_total_real - func.coalesce(PMProyectoCostoResumen.presupuesto_estimado, 0)).desc())
+        .limit(5)
+    ).all()
+    projects_without_budget_rows = db.execute(
+        select(PMProyecto, PMProyectoCostoResumen)
+        .select_from(PMProyecto)
+        .outerjoin(PMProyectoCostoResumen, PMProyectoCostoResumen.proyecto_id == PMProyecto.id)
+        .where(
+            PMProyecto.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+            func.coalesce(PMProyectoCostoResumen.presupuesto_estimado, 0) <= 0,
+        )
+        .order_by(PMProyecto.nombre.asc())
         .limit(5)
     ).all()
     top_users_by_hours_rows = db.execute(
@@ -3299,6 +5044,9 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             costo_horas_real=decimal_or_zero(labor_cost_total),
             horas_sin_tarifa=decimal_or_zero(hours_without_rate_total),
             costo_total_real=decimal_or_zero(total_real_cost),
+            presupuesto_detallado_total=decimal_or_zero(total_budget_cost),
+            margen_estimado_total=decimal_or_zero(total_estimated_margin),
+            proyectos_sin_presupuesto=projects_without_budget_count,
         ),
         proyectos_por_estatus=build_status_counts(project_rows, ALLOWED_PROJECT_STATUS),
         tareas_por_estatus=build_status_counts(task_rows, ALLOWED_TASK_STATUS),
@@ -3342,64 +5090,27 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             for task, project in overdue_task_rows
         ],
         top_proyectos_por_costo_materiales=[
-            PMDashboardProjectCostItem(
-                project_id=project.id,
-                proyecto_nombre=project.nombre,
-                costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
-                costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
-                costo_horas_real=decimal_or_zero(summary.costo_horas_real),
-                horas_totales=decimal_or_zero(summary.horas_totales),
-                costo_total_real=decimal_or_zero(summary.costo_total_real),
-                variacion_materiales=decimal_or_zero(summary.variacion_materiales),
-                presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
-                variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
-            )
+            build_dashboard_project_cost_item(summary, project)
             for summary, project in top_material_cost_projects
         ],
         proyectos_sobre_presupuesto_materiales=[
-            PMDashboardProjectCostItem(
-                project_id=project.id,
-                proyecto_nombre=project.nombre,
-                costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
-                costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
-                costo_horas_real=decimal_or_zero(summary.costo_horas_real),
-                horas_totales=decimal_or_zero(summary.horas_totales),
-                costo_total_real=decimal_or_zero(summary.costo_total_real),
-                variacion_materiales=decimal_or_zero(summary.variacion_materiales),
-                presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
-                variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
-            )
+            build_dashboard_project_cost_item(summary, project)
             for summary, project in over_budget_material_projects
         ],
         top_proyectos_por_costo_total=[
-            PMDashboardProjectCostItem(
-                project_id=project.id,
-                proyecto_nombre=project.nombre,
-                costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
-                costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
-                costo_horas_real=decimal_or_zero(summary.costo_horas_real),
-                horas_totales=decimal_or_zero(summary.horas_totales),
-                costo_total_real=decimal_or_zero(summary.costo_total_real),
-                variacion_materiales=decimal_or_zero(summary.variacion_materiales),
-                presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
-                variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
-            )
+            build_dashboard_project_cost_item(summary, project)
             for summary, project in top_total_cost_projects
         ],
         proyectos_sobre_presupuesto=[
-            PMDashboardProjectCostItem(
-                project_id=project.id,
-                proyecto_nombre=project.nombre,
-                costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
-                costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
-                costo_horas_real=decimal_or_zero(summary.costo_horas_real),
-                horas_totales=decimal_or_zero(summary.horas_totales),
-                costo_total_real=decimal_or_zero(summary.costo_total_real),
-                variacion_materiales=decimal_or_zero(summary.variacion_materiales),
-                presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
-                variacion_presupuesto=decimal_or_zero(summary.variacion_presupuesto),
-            )
+            build_dashboard_project_cost_item(summary, project)
             for summary, project in over_budget_total_projects
+        ],
+        proyectos_sin_presupuesto=[
+            build_dashboard_project_cost_item(
+                summary or PMProyectoCostoResumen(empresa_id=project.empresa_id, proyecto_id=project.id),
+                project,
+            )
+            for project, summary in projects_without_budget_rows
         ],
         top_usuarios_por_horas=[
             PMDashboardUserMetricItem(

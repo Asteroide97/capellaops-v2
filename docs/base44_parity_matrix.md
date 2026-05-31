@@ -151,9 +151,12 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | PM tareas basicas | Implementado | Alta | PM F1 | Tareas, subtareas, checklist, comentarios y actualizacion de avance ya operan dentro del proyecto. | Seguimiento operativo incompleto. |
 | PM | Project Workspace | Implementado | Alta | PM UX | El detalle de proyecto ya opera con vista general, plan de trabajo, selector de vistas y panel de detalle de tarea. | La ejecucion sigue mas fragmentada que una herramienta PM dedicada. |
 | PM | Kanban simple | Parcial | Media | PM F1 | El detalle de proyecto ya muestra columnas simples por estatus, sin drag and drop ni reglas avanzadas. | Visualizacion operativa menos agil. |
-| PM | Gantt simple visual | Parcial | Media | PM UX | Ya existe una linea de tiempo simple por tarea usando fechas de inicio y fin, solo para visualizacion. | Sin interaccion avanzada ni reprogramacion visual. |
+| PM | Gantt simple visual | Parcial | Media | PM UX | Ya existe una linea de tiempo simple por tarea usando fechas de inicio y fin, con estado bloqueado y referencia textual de prerrequisitos. | Sin interaccion avanzada ni reprogramacion visual. |
+| PM | Gantt con dependencias visuales | Parcial | Media | PM F4.5 | El Gantt simple ya marca tareas bloqueadas y muestra de que tarea dependen, sin flechas ni recalculo automatico. | La secuencia sigue siendo menos visible que en una herramienta PM avanzada. |
 | PM | Gantt editable | Pendiente | Media | PM F4 | No existe edicion directa sobre barras ni ajustes de fechas desde la linea de tiempo. | Planeacion temporal aun manual. |
-| PM | Dependencias | Pendiente | Media | PM F4 | No implementado. | Sin secuencia formal entre tareas. |
+| PM | Dependencias | Implementado | Media | PM F4.5 | Ya existen dependencias `finish_to_start` entre tareas del mismo proyecto, con validacion backend y conteos en plan de trabajo. | Sin secuencia formal entre tareas. |
+| PM | Prerrequisitos bloqueantes | Implementado | Media | PM F4.5 | Una tarea bloqueada no puede avanzar a `en_progreso`, `en_revision` o `completada` mientras su prerrequisito siga pendiente. | Ejecucion fuera de secuencia si la validacion falla. |
+| PM | Dependencias avanzadas | Pendiente | Media | PM futura | No existen `start_to_start`, `finish_to_finish`, `start_to_finish` ni lag real sobre fechas. | Planeacion avanzada aun limitada. |
 | PM | Ruta critica | Pendiente | Media | PM F4 | No implementado. | Priorizacion temporal limitada. |
 | PM | Drag and drop | Pendiente | Media | PM F4 | No implementado en kanban ni Gantt. | Replaneacion visual menos agil. |
 | PM | Materiales PM planeados | Implementado | Alta | PM F2 | Cada proyecto ya puede definir materiales planeados, cantidad, costo estimado y pendiente operativo. | Planeacion material fuera del proyecto. |
@@ -168,6 +171,15 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | Snapshots de costo por hora | Implementado | Alta | PM F3 | Cada `pm_time_entry` guarda tarifa aplicada, costo total y fuente de tarifa sin recalculo retroactivo. | Historico de costos inestable. |
 | PM | Costo laboral real | Implementado | Alta | PM F3 | `PMProyectoCostoResumen` ya acumula horas totales, horas sin tarifa y costo horas real por proyecto. | Proyectos sin visibilidad laboral real. |
 | PM | Rentabilidad base | Parcial | Media | PM F3 | Ya existe costo total real y variacion contra presupuesto, pero aun no hay ingresos comerciales integrados ni margen real completo. | Rentabilidad parcial o estimada. |
+| PM | Presupuesto detallado | Implementado | Alta | PM F4 | El proyecto ya soporta presupuesto activo, cabecera, totales y comparativo contra costo real dentro del workspace. | Ejecucion sin linea base economica detallada. |
+| PM | Partidas / capitulos | Implementado | Alta | PM F4 | Ya existen capitulos y partidas para estructurar presupuesto detallado por proyecto. | Presupuesto plano y poco auditable. |
+| PM | Presupuesto UX guiado | Implementado | Media | PM F4.5 | La vista de presupuesto ahora expone pasos, acciones visibles y lenguaje menos tecnico para crear capitulos, partidas, materiales, mano de obra e indirectos. | Presupuesto menos operable si la UX vuelve a ser demasiado tecnica. |
+| PM | APU basico con lenguaje simplificado | Implementado | Alta | PM F4.5 | El detalle de partida ya se presenta como desglose de costo con materiales y mano de obra, manteniendo APU como concepto secundario. | Costeo estimado menos preciso o mas manual. |
+| PM | APU basico | Parcial | Alta | PM F4 | Ya existe APU basico con materiales y mano de obra por partida, pero sin versiones avanzadas, plantillas ni formulas compuestas. | Costeo estimado menos preciso o mas manual. |
+| PM | Indirectos | Parcial | Media | PM F4 | Ya existen indirectos por porcentaje o monto fijo, pero sin catalogo avanzado ni reglas contables. | Subestimacion de costo total presupuestado. |
+| PM | Comparativo presupuesto vs real | Implementado | Alta | PM F4 | Ya compara presupuesto detallado contra costo real de materiales y horas en proyecto y dashboard. | Desviaciones economicas invisibles. |
+| PM | Estados de pago / estimaciones formales | Pendiente | Media | PM F5 | No existen estimaciones, valuaciones ni estados de pago formales. | Seguimiento economico incompleto frente a obra real. |
+| PM | Facturacion / cobranza | Pendiente | Alta | PM comercial futura | PM no conecta todavia con facturacion ni cobranza. | Rentabilidad sin cierre comercial completo. |
 | PM | Aprobacion de horas | Pendiente | Media | PM F4 | No existe workflow formal de aprobacion o bloqueo previo al costeo. | Riesgo de capturas no validadas. |
 | PM | Documentos | Pendiente | Media | PM F2 | Solo existe placeholder de UI; no hay almacenamiento ni flujos documentales. | Informacion dispersa. |
 | PM | Portal externo | Pendiente | Baja | PM F3 | No implementado. | Experiencia limitada para clientes externos. |

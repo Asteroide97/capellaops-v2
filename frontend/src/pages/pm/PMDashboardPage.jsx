@@ -195,6 +195,37 @@ export default function PMDashboardPage() {
         />
       </section>
 
+      <section className="inventory-metric-grid inventory-metric-grid-4">
+        <MetricCard
+          icon={<DollarSign size={18} strokeWidth={1.9} />}
+          label="Total presupuestado"
+          meta="Presupuesto detallado activo"
+          tone="neutral"
+          value={formatMoney(dashboard?.kpis?.presupuesto_detallado_total ?? 0)}
+        />
+        <MetricCard
+          icon={<Gauge size={18} strokeWidth={1.9} />}
+          label="Margen estimado total"
+          meta="Venta esperada - costo"
+          tone={Number(dashboard?.kpis?.margen_estimado_total ?? 0) < 0 ? "danger" : "success"}
+          value={formatMoney(dashboard?.kpis?.margen_estimado_total ?? 0)}
+        />
+        <MetricCard
+          icon={<TriangleAlert size={18} strokeWidth={1.9} />}
+          label="Proyectos sobre presupuesto"
+          meta="Costo total real excedido"
+          tone="warning"
+          value={dashboard?.proyectos_sobre_presupuesto?.length ?? 0}
+        />
+        <MetricCard
+          icon={<FolderKanban size={18} strokeWidth={1.9} />}
+          label="Proyectos sin presupuesto"
+          meta="Sin detalle presupuestal"
+          tone={Number(dashboard?.kpis?.proyectos_sin_presupuesto ?? 0) > 0 ? "warning" : "neutral"}
+          value={dashboard?.kpis?.proyectos_sin_presupuesto ?? 0}
+        />
+      </section>
+
       <div className="inventory-content-grid inventory-content-grid-2">
         <DataCard subtitle="Distribución de proyectos activos por estatus." title="Proyectos por estatus">
           <StatusDistribution items={dashboard?.proyectos_por_estatus ?? []} kind="project" />
@@ -282,7 +313,7 @@ export default function PMDashboardPage() {
         </DataCard>
       </div>
 
-      <DataCard title="Indicadores rapidos">
+      <DataCard title="Indicadores rápidos">
         <div className="inventory-metric-grid inventory-metric-grid-4">
           <MetricCard
             icon={<Gauge size={18} strokeWidth={1.9} />}
@@ -331,7 +362,7 @@ export default function PMDashboardPage() {
                   <tr key={item.project_id}>
                     <td>{safeDisplayText(item.proyecto_nombre)}</td>
                     <td>{formatMoney(item.costo_materiales_real ?? 0)}</td>
-                    <td>{formatMoney(item.presupuesto_estimado ?? 0)}</td>
+                    <td>{formatMoney(item.presupuesto_detallado_costo ?? item.presupuesto_estimado ?? 0)}</td>
                     <td>{formatMoney(item.variacion_presupuesto ?? 0)}</td>
                   </tr>
                 ))}
@@ -346,7 +377,7 @@ export default function PMDashboardPage() {
           {(dashboard?.top_proyectos_por_costo_total?.length ?? 0) === 0 ? (
             <EmptyState compact note="Aún no hay costos totales acumulados." title="Sin costos registrados" />
           ) : (
-            <DataTable columns={["Proyecto", "Materiales", "Horas", "Costo total", "Presupuesto"]}>
+            <DataTable columns={["Proyecto", "Materiales", "Horas", "Costo total", "Presupuesto", "Margen"]}>
               <tbody>
                 {(dashboard?.top_proyectos_por_costo_total ?? []).map((item) => (
                   <tr key={`total-${item.project_id}`}>
@@ -354,7 +385,8 @@ export default function PMDashboardPage() {
                     <td>{formatMoney(item.costo_materiales_real ?? 0)}</td>
                     <td>{formatMoney(item.costo_horas_real ?? 0)}</td>
                     <td>{formatMoney(item.costo_total_real ?? 0)}</td>
-                    <td>{formatMoney(item.presupuesto_estimado ?? 0)}</td>
+                    <td>{formatMoney(item.presupuesto_detallado_costo ?? item.presupuesto_estimado ?? 0)}</td>
+                    <td>{formatMoney(item.margen_estimado ?? 0)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -372,7 +404,7 @@ export default function PMDashboardPage() {
                   <tr key={`budget-${item.project_id}`}>
                     <td>{safeDisplayText(item.proyecto_nombre)}</td>
                     <td>{formatMoney(item.costo_total_real ?? 0)}</td>
-                    <td>{formatMoney(item.presupuesto_estimado ?? 0)}</td>
+                    <td>{formatMoney(item.presupuesto_detallado_costo ?? item.presupuesto_estimado ?? 0)}</td>
                     <td>{formatMoney(item.variacion_presupuesto ?? 0)}</td>
                   </tr>
                 ))}
@@ -425,6 +457,25 @@ export default function PMDashboardPage() {
           )}
         </DataCard>
       </div>
+
+      <DataCard subtitle="Proyectos activos que todavía no tienen presupuesto detallado." title="Proyectos sin presupuesto">
+        {(dashboard?.proyectos_sin_presupuesto?.length ?? 0) === 0 ? (
+          <EmptyState compact note="Todos los proyectos activos ya tienen presupuesto o no requieren detalle adicional." title="Sin pendientes" />
+        ) : (
+          <DataTable columns={["Proyecto", "Presupuesto simple", "Costo real", "Horas"]}>
+            <tbody>
+              {(dashboard?.proyectos_sin_presupuesto ?? []).map((item) => (
+                <tr key={`missing-budget-${item.project_id}`}>
+                  <td>{safeDisplayText(item.proyecto_nombre)}</td>
+                  <td>{formatMoney(item.presupuesto_estimado ?? 0)}</td>
+                  <td>{formatMoney(item.costo_total_real ?? 0)}</td>
+                  <td>{item.horas_totales ?? 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        )}
+      </DataCard>
     </div>
   );
 }

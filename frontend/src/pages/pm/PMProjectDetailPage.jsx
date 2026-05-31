@@ -47,6 +47,7 @@ import {
   safeDisplayText,
 } from "../inventory/shared";
 import PMProjectMaterialsTab from "./PMProjectMaterialsTab";
+import PMProjectBudgetTab from "./PMProjectBudgetTab";
 import PMProjectTimeCostsTab from "./PMProjectTimeCostsTab";
 import PMProjectWorkPlanView from "./PMProjectWorkPlanView";
 import PMTaskDetailModal from "./PMTaskDetailModal";
@@ -67,6 +68,7 @@ const projectViews = [
   { key: "general", label: "Vista general", icon: Gauge },
   { key: "plan", label: "Plan de trabajo", icon: CheckSquare },
   { key: "kanban", label: "Kanban", icon: FolderKanban },
+  { key: "presupuesto", label: "Presupuesto", icon: BadgeDollarSign },
   { key: "materiales", label: "Materiales", icon: PackageOpen },
   { key: "costos", label: "Tiempo y costos", icon: Clock3 },
   { key: "comentarios", label: "Comentarios", icon: MessageSquare },
@@ -203,6 +205,8 @@ export default function PMProjectDetailPage() {
 
   const alertItems = useMemo(() => {
     const items = [];
+    const detailedBudget = Number(projectCosts?.presupuesto_detallado_costo ?? 0);
+    const effectiveBudget = detailedBudget > 0 ? detailedBudget : Number(projectCosts?.presupuesto_estimado ?? 0);
     if (overdueTasks.length > 0) {
       items.push({
         key: "overdue",
@@ -219,12 +223,14 @@ export default function PMProjectDetailPage() {
         note: `Hay ${formatNumber(projectCosts?.horas_sin_tarifa ?? 0)} horas sin costo resuelto.`,
       });
     }
-    if (Number(projectCosts?.presupuesto_estimado ?? 0) > 0 && Number(projectCosts?.costo_total_real ?? 0) > Number(projectCosts?.presupuesto_estimado ?? 0)) {
+    if (effectiveBudget > 0 && Number(projectCosts?.costo_total_real ?? 0) > effectiveBudget) {
       items.push({
         key: "budget",
         tone: "danger",
-        title: "Presupuesto superado",
-        note: "El costo real ya rebasa el presupuesto estimado.",
+        title: detailedBudget > 0 ? "Presupuesto detallado superado" : "Presupuesto superado",
+        note: detailedBudget > 0
+          ? "El costo real ya rebasa el presupuesto detallado cargado para este proyecto."
+          : "El costo real ya rebasa el presupuesto estimado.",
       });
     }
     if (Number(projectMaterials?.summary?.materiales_pendientes ?? 0) > 0) {
@@ -454,8 +460,20 @@ export default function PMProjectDetailPage() {
         <MetricCard icon={<PackageOpen size={18} strokeWidth={1.9} />} label="Costo materiales real" meta="Consumo acumulado" tone="warning" value={formatMoney(projectCosts?.costo_materiales_real ?? 0)} />
         <MetricCard icon={<Clock3 size={18} strokeWidth={1.9} />} label="Costo horas real" meta="Labor acumulada" tone="info" value={formatMoney(projectCosts?.costo_horas_real ?? 0)} />
         <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Costo total real" meta="Materiales + horas" tone="danger" value={formatMoney(projectCosts?.costo_total_real ?? 0)} />
-        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Presupuesto" meta="Base del proyecto" tone="neutral" value={formatMoney(projectCosts?.presupuesto_estimado ?? 0)} />
-        <MetricCard icon={<Gauge size={18} strokeWidth={1.9} />} label="Variación" meta="Presupuesto - costo real" tone={Number(projectCosts?.variacion_presupuesto ?? 0) < 0 ? "danger" : "success"} value={formatMoney(projectCosts?.variacion_presupuesto ?? 0)} />
+        <MetricCard
+          icon={<BadgeDollarSign size={18} strokeWidth={1.9} />}
+          label="Presupuesto"
+          meta={Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? "Detalle aprobado" : "Base del proyecto"}
+          tone="neutral"
+          value={formatMoney((Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? projectCosts?.presupuesto_detallado_costo : projectCosts?.presupuesto_estimado) ?? 0)}
+        />
+        <MetricCard
+          icon={<Gauge size={18} strokeWidth={1.9} />}
+          label="Variación"
+          meta={Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? "Presupuesto detallado - costo real" : "Presupuesto - costo real"}
+          tone={Number((Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? projectCosts?.variacion_vs_presupuesto_detallado : projectCosts?.variacion_presupuesto) ?? 0) < 0 ? "danger" : "success"}
+          value={formatMoney((Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? projectCosts?.variacion_vs_presupuesto_detallado : projectCosts?.variacion_presupuesto) ?? 0)}
+        />
       </section>
 
       <div className="pm-view-switcher">
@@ -502,7 +520,7 @@ export default function PMProjectDetailPage() {
               </div>
               <div>
                 <strong>Presupuesto</strong>
-                <span>{formatMoney(projectCosts?.presupuesto_estimado ?? 0)}</span>
+                <span>{formatMoney((Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? projectCosts?.presupuesto_detallado_costo : projectCosts?.presupuesto_estimado) ?? 0)}</span>
               </div>
             </div>
             <div className="inventory-form-note">
@@ -600,8 +618,10 @@ export default function PMProjectDetailPage() {
               <MetricCard label="Materiales reales" meta="Consumo" tone="success" value={formatMoney(projectCosts?.costo_materiales_real ?? 0)} />
               <MetricCard label="Horas reales" meta="Labor" tone="info" value={formatMoney(projectCosts?.costo_horas_real ?? 0)} />
               <MetricCard label="Total real" meta="Proyecto" tone="warning" value={formatMoney(projectCosts?.costo_total_real ?? 0)} />
-              <MetricCard label="Presupuesto" meta="Estimado" tone="neutral" value={formatMoney(projectCosts?.presupuesto_estimado ?? 0)} />
-              <MetricCard label="Variación" meta="Presupuesto - costo real" tone={Number(projectCosts?.variacion_presupuesto ?? 0) < 0 ? "danger" : "success"} value={formatMoney(projectCosts?.variacion_presupuesto ?? 0)} />
+              <MetricCard label="Presupuesto detallado" meta={projectCosts?.presupuesto_origen === "detallado" ? "Activo" : "Sin detalle"} tone="neutral" value={formatMoney(projectCosts?.presupuesto_detallado_costo ?? 0)} />
+              <MetricCard label="Venta esperada" meta="Presupuesto detallado" tone="success" value={formatMoney(projectCosts?.presupuesto_detallado_venta ?? 0)} />
+              <MetricCard label="Margen esperado" meta="Venta - costo" tone={Number(projectCosts?.margen_estimado ?? 0) < 0 ? "danger" : "info"} value={formatMoney(projectCosts?.margen_estimado ?? 0)} />
+              <MetricCard label="Variación" meta={projectCosts?.presupuesto_origen === "detallado" ? "Detalle - costo real" : "Presupuesto - costo real"} tone={Number((projectCosts?.presupuesto_origen === "detallado" ? projectCosts?.variacion_vs_presupuesto_detallado : projectCosts?.variacion_presupuesto) ?? 0) < 0 ? "danger" : "success"} value={formatMoney((projectCosts?.presupuesto_origen === "detallado" ? projectCosts?.variacion_vs_presupuesto_detallado : projectCosts?.variacion_presupuesto) ?? 0)} />
               <MetricCard label="Horas sin tarifa" meta="Pendiente por resolver" tone={Number(projectCosts?.horas_sin_tarifa ?? 0) > 0 ? "warning" : "neutral"} value={formatNumber(projectCosts?.horas_sin_tarifa ?? 0)} />
             </div>
           </DataCard>
@@ -651,6 +671,7 @@ export default function PMProjectDetailPage() {
           materialPlans={projectMaterials?.plans ?? []}
           onCreateTask={openNewTaskModal}
           onDeactivateTask={handleDeactivateTask}
+          onDependenciesChanged={() => loadProjectBundle({ background: true })}
           onEditTask={openExistingTaskModal}
           onSelectTask={setSelectedTaskId}
           onSetTaskStatus={handleTaskStatusChange}
@@ -716,6 +737,16 @@ export default function PMProjectDetailPage() {
 
       {activeView === "materiales" ? (
         <PMProjectMaterialsTab empresaId={empresaId} project={project} projectId={id} token={token} />
+      ) : null}
+
+      {activeView === "presupuesto" ? (
+        <PMProjectBudgetTab
+          empresaId={empresaId}
+          onChanged={() => loadProjectBundle({ background: true })}
+          project={project}
+          projectId={id}
+          token={token}
+        />
       ) : null}
 
       {activeView === "costos" ? (

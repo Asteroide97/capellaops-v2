@@ -1,6 +1,6 @@
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Date, ForeignKey, Index, Integer, Numeric, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -67,6 +67,7 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="proyecto", cascade="all, delete-orphan")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
     time_entries = relationship("PMTimeEntry", back_populates="proyecto", cascade="all, delete-orphan")
+    budgets = relationship("PMPresupuesto", back_populates="proyecto", cascade="all, delete-orphan")
     material_cost_summary = relationship(
         "PMProyectoCostoResumen",
         back_populates="proyecto",
@@ -155,12 +156,65 @@ class PMTarea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     updated_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
 
     proyecto = relationship("PMProyecto", back_populates="tasks")
+    prerequisites = relationship(
+        "PMTareaDependencia",
+        back_populates="tarea",
+        cascade="all, delete-orphan",
+        foreign_keys="PMTareaDependencia.tarea_id",
+    )
+    unlocked_tasks = relationship(
+        "PMTareaDependencia",
+        back_populates="prerequisite_task",
+        cascade="all, delete-orphan",
+        foreign_keys="PMTareaDependencia.depende_de_tarea_id",
+    )
     subtasks = relationship("PMSubtarea", back_populates="tarea", cascade="all, delete-orphan")
     checklist_items = relationship("PMChecklistItem", back_populates="tarea", cascade="all, delete-orphan")
     comments = relationship("PMComentario", back_populates="tarea", cascade="all, delete-orphan")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="tarea")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="tarea")
     time_entries = relationship("PMTimeEntry", back_populates="tarea")
+
+
+class PMTareaDependencia(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_tarea_dependencias"
+    __table_args__ = (
+        Index("ix_pm_tarea_dependencias_empresa_id", "empresa_id"),
+        Index("ix_pm_tarea_dependencias_proyecto_id", "proyecto_id"),
+        Index("ix_pm_tarea_dependencias_tarea_id", "tarea_id"),
+        Index("ix_pm_tarea_dependencias_depende_de_tarea_id", "depende_de_tarea_id"),
+        Index("ix_pm_tarea_dependencias_activo", "activo"),
+        Index(
+            "uq_pm_tarea_dependencia_activa",
+            "empresa_id",
+            "proyecto_id",
+            "tarea_id",
+            "depende_de_tarea_id",
+            unique=True,
+            sqlite_where=text("activo = 1"),
+            mssql_where=text("activo = 1"),
+        ),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    tarea_id: Mapped[str] = mapped_column(ForeignKey("pm_tareas.id"), nullable=False, index=True)
+    depende_de_tarea_id: Mapped[str] = mapped_column(ForeignKey("pm_tareas.id"), nullable=False, index=True)
+    tipo_dependencia: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="finish_to_start",
+        server_default="finish_to_start",
+    )
+    lag_dias: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    bloqueante: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    tarea = relationship("PMTarea", back_populates="prerequisites", foreign_keys=[tarea_id])
+    prerequisite_task = relationship("PMTarea", back_populates="unlocked_tasks", foreign_keys=[depende_de_tarea_id])
+    proyecto = relationship("PMProyecto")
 
 
 class PMSubtarea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -349,9 +403,157 @@ class PMProyectoCostoResumen(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     costo_total_real: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     presupuesto_estimado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     variacion_presupuesto: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    presupuesto_detallado_costo: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    presupuesto_detallado_venta: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    variacion_vs_presupuesto_detallado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    presupuesto_origen: Mapped[str] = mapped_column(String(20), nullable=False, default="simple", server_default="simple")
     margen_estimado: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
 
     proyecto = relationship("PMProyecto", back_populates="material_cost_summary")
+
+
+class PMPresupuesto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_presupuestos"
+    __table_args__ = (
+        Index("ix_pm_presupuestos_empresa_id", "empresa_id"),
+        Index("ix_pm_presupuestos_proyecto_id", "proyecto_id"),
+        Index("ix_pm_presupuestos_estatus", "estatus"),
+        Index("ix_pm_presupuestos_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    estatus: Mapped[str] = mapped_column(String(20), nullable=False, default="borrador", server_default="borrador")
+    moneda: Mapped[str] = mapped_column(String(8), nullable=False, default="MXN", server_default="MXN")
+    subtotal_costo: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    subtotal_venta: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    indirectos_pct: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False, default=0, server_default="0")
+    indirectos_monto: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    utilidad_pct: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False, default=0, server_default="0")
+    utilidad_monto: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    total_costo: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    total_venta: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    margen_estimado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    aprobado_por: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    aprobado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="budgets")
+    items = relationship("PMPresupuestoPartida", back_populates="presupuesto", cascade="all, delete-orphan")
+    indirects = relationship("PMPresupuestoIndirecto", back_populates="presupuesto", cascade="all, delete-orphan")
+
+
+class PMPresupuestoPartida(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_presupuesto_partidas"
+    __table_args__ = (
+        Index("ix_pm_presupuesto_partidas_empresa_id", "empresa_id"),
+        Index("ix_pm_presupuesto_partidas_presupuesto_id", "presupuesto_id"),
+        Index("ix_pm_presupuesto_partidas_proyecto_id", "proyecto_id"),
+        Index("ix_pm_presupuesto_partidas_parent_id", "parent_id"),
+        Index("ix_pm_presupuesto_partidas_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    presupuesto_id: Mapped[str] = mapped_column(ForeignKey("pm_presupuestos.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("pm_presupuesto_partidas.id"), nullable=True, index=True)
+    codigo: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tipo: Mapped[str] = mapped_column(String(20), nullable=False, default="partida", server_default="partida")
+    unidad: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    cantidad: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=1, server_default="1")
+    costo_unitario: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    precio_unitario: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    precio_unitario_manual: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    subtotal_costo: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    subtotal_venta: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    margen_pct: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False, default=0, server_default="0")
+    orden: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+
+    presupuesto = relationship("PMPresupuesto", back_populates="items")
+    proyecto = relationship("PMProyecto")
+    parent = relationship("PMPresupuestoPartida", remote_side="PMPresupuestoPartida.id")
+    materials = relationship("PMPresupuestoPartidaMaterial", back_populates="partida", cascade="all, delete-orphan")
+    labor_components = relationship("PMPresupuestoPartidaManoObra", back_populates="partida", cascade="all, delete-orphan")
+
+
+class PMPresupuestoPartidaMaterial(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_presupuesto_partida_materiales"
+    __table_args__ = (
+        Index("ix_pm_presupuesto_partida_materiales_empresa_id", "empresa_id"),
+        Index("ix_pm_presupuesto_partida_materiales_partida_id", "partida_id"),
+        Index("ix_pm_presupuesto_partida_materiales_proyecto_id", "proyecto_id"),
+        Index("ix_pm_presupuesto_partida_materiales_material_id", "material_id"),
+        Index("ix_pm_presupuesto_partida_materiales_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    partida_id: Mapped[str] = mapped_column(ForeignKey("pm_presupuesto_partidas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    material_id: Mapped[str | None] = mapped_column(ForeignKey("materiales.id"), nullable=True, index=True)
+    material_nombre_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
+    material_sku_snapshot: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    unidad: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    cantidad_por_unidad: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    costo_unitario: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    costo_total: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    proveedor_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+
+    partida = relationship("PMPresupuestoPartida", back_populates="materials")
+    proyecto = relationship("PMProyecto")
+
+
+class PMPresupuestoPartidaManoObra(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_presupuesto_partida_mano_obra"
+    __table_args__ = (
+        Index("ix_pm_presupuesto_partida_mano_obra_empresa_id", "empresa_id"),
+        Index("ix_pm_presupuesto_partida_mano_obra_partida_id", "partida_id"),
+        Index("ix_pm_presupuesto_partida_mano_obra_proyecto_id", "proyecto_id"),
+        Index("ix_pm_presupuesto_partida_mano_obra_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    partida_id: Mapped[str] = mapped_column(ForeignKey("pm_presupuesto_partidas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    rol: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    horas_por_unidad: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    tarifa_hora: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    costo_total: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+
+    partida = relationship("PMPresupuestoPartida", back_populates="labor_components")
+    proyecto = relationship("PMProyecto")
+
+
+class PMPresupuestoIndirecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_presupuesto_indirectos"
+    __table_args__ = (
+        Index("ix_pm_presupuesto_indirectos_empresa_id", "empresa_id"),
+        Index("ix_pm_presupuesto_indirectos_presupuesto_id", "presupuesto_id"),
+        Index("ix_pm_presupuesto_indirectos_proyecto_id", "proyecto_id"),
+        Index("ix_pm_presupuesto_indirectos_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    presupuesto_id: Mapped[str] = mapped_column(ForeignKey("pm_presupuestos.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    nombre: Mapped[str] = mapped_column(String(160), nullable=False)
+    tipo: Mapped[str] = mapped_column(String(20), nullable=False, default="monto", server_default="monto")
+    porcentaje: Mapped[float | None] = mapped_column(Numeric(8, 4), nullable=True)
+    monto: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+
+    presupuesto = relationship("PMPresupuesto", back_populates="indirects")
+    proyecto = relationship("PMProyecto")
 
 
 class PMTimeEntry(UUIDPrimaryKeyMixin, TimestampMixin, Base):
