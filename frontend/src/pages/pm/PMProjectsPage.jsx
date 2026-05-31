@@ -253,7 +253,7 @@ export default function PMProjectsPage() {
 
       {(error || success) && (
         <div className={`inventory-form-note ${error ? "inventory-form-note-danger" : "inventory-form-note-success"}`}>
-          <strong>{error ? "No se pudo completar la operacion" : "Operacion completada"}</strong>
+          <strong>{error ? "No se pudo completar la operación" : "Operación completada"}</strong>
           <p className="table-note">{error || success}</p>
         </div>
       )}
@@ -265,7 +265,7 @@ export default function PMProjectsPage() {
         <MetricCard icon={<Gauge size={18} strokeWidth={1.9} />} label="Total listado" meta="Segun filtros" tone="neutral" value={meta.total} />
       </section>
 
-      <FilterCard title="Filtros" subtitle="Busqueda y clasificacion de proyectos.">
+      <FilterCard title="Filtros" subtitle="Búsqueda y clasificación de proyectos.">
         <form className="inventory-filter-toolbar" onSubmit={handleFilterSubmit}>
           <div className="inventory-toolbar-grid">
             <SearchInput
@@ -274,7 +274,7 @@ export default function PMProjectsPage() {
                   Buscar
                 </ActionButton>
               }
-              hint="Busca por nombre, codigo, descripcion o cliente."
+              hint="Busca por nombre, código, descripción o cliente."
               label="Buscar"
               onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
               placeholder="Buscar proyectos..."
@@ -325,7 +325,7 @@ export default function PMProjectsPage() {
         </form>
       </FilterCard>
 
-      <DataCard subtitle="Listado operativo de proyectos activos o historicos." title="Portafolio">
+      <DataCard subtitle="Listado operativo de proyectos activos o históricos." title="Portafolio">
         <ResultMeta label="proyectos" loaded={projects.length} total={meta.total} />
         {loading ? (
           <div className="table-note">Cargando proyectos...</div>
@@ -347,7 +347,7 @@ export default function PMProjectsPage() {
                   <tr key={project.id}>
                     <td>
                       <div className="inventory-cell-main">{safeDisplayText(project.nombre)}</div>
-                      <div className="inventory-cell-sub">{safeDisplayText(project.codigo, "Sin codigo")}</div>
+                      <div className="inventory-cell-sub">{safeDisplayText(project.codigo, "Sin código")}</div>
                     </td>
                     <td>
                       <StatusBadge tone={getProjectStatusTone(project.estatus)}>{getProjectStatusLabel(project.estatus)}</StatusBadge>
@@ -422,7 +422,7 @@ export default function PMProjectsPage() {
                 value={projectForm.nombre}
               />
             </Field>
-            <Field label="Codigo">
+            <Field label="Código">
               <input
                 onChange={(event) => setProjectForm((current) => ({ ...current, codigo: event.target.value }))}
                 type="text"
@@ -514,7 +514,7 @@ export default function PMProjectsPage() {
                 value={projectForm.porcentaje_avance}
               />
             </Field>
-            <Field label="Descripcion" span={2}>
+            <Field label="Descripción" span={2}>
               <textarea
                 onChange={(event) => setProjectForm((current) => ({ ...current, descripcion: event.target.value }))}
                 rows={5}

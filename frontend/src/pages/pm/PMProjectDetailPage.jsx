@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ArrowLeft,
+  BadgeDollarSign,
   Calendar,
   CheckSquare,
-  Folder,
+  Clock3,
+  FileText,
   FolderKanban,
   Gauge,
   MessageSquare,
+  PackageOpen,
   Plus,
+  RefreshCw,
   Users,
 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -15,15 +20,19 @@ import {
   addPmProjectMember,
   createPmProjectComment,
   deactivatePmProjectMember,
+  deactivatePmTask,
   getPmProject,
+  getPmProjectCosts,
+  getPmProjectMaterials,
   listPmProjectMembers,
+  listPmProjectTimeEntries,
   listPmTasks,
+  updatePmTask,
 } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
 import {
   ActionButton,
   DataCard,
-  DataTable,
   EmptyState,
   Field,
   FormGrid,
@@ -34,11 +43,13 @@ import {
   StatusBadge,
   formatDate,
   formatMoney,
+  formatNumber,
   safeDisplayText,
 } from "../inventory/shared";
-import PMTaskDetailModal from "./PMTaskDetailModal";
 import PMProjectMaterialsTab from "./PMProjectMaterialsTab";
 import PMProjectTimeCostsTab from "./PMProjectTimeCostsTab";
+import PMProjectWorkPlanView from "./PMProjectWorkPlanView";
+import PMTaskDetailModal from "./PMTaskDetailModal";
 import {
   formatPercent,
   getPriorityLabel,
@@ -52,15 +63,14 @@ import {
 } from "./shared";
 
 
-const projectTabs = [
-  { key: "resumen", label: "Resumen", icon: Folder },
-  { key: "tareas", label: "Tareas", icon: CheckSquare },
-  { key: "miembros", label: "Miembros", icon: Users },
+const projectViews = [
+  { key: "general", label: "Vista general", icon: Gauge },
+  { key: "plan", label: "Plan de trabajo", icon: CheckSquare },
+  { key: "kanban", label: "Kanban", icon: FolderKanban },
+  { key: "materiales", label: "Materiales", icon: PackageOpen },
+  { key: "costos", label: "Tiempo y costos", icon: Clock3 },
   { key: "comentarios", label: "Comentarios", icon: MessageSquare },
-  { key: "materiales", label: "Materiales", icon: FolderKanban },
-  { key: "compras", label: "Compras", icon: FolderKanban },
-  { key: "costos", label: "Tiempo y costos", icon: Gauge },
-  { key: "documentos", label: "Documentos", icon: FolderKanban },
+  { key: "documentos", label: "Documentos", icon: FileText },
 ];
 
 const defaultMemberForm = {
@@ -70,12 +80,17 @@ const defaultMemberForm = {
 };
 
 
-function PlaceholderTab({ title, note }) {
+function PlaceholderView({ title, note }) {
   return (
-    <DataCard title={title}>
-      <EmptyState note={note} title="Disponible en fase posterior" />
+    <DataCard subtitle="Bloque operativo pendiente en una fase posterior." title={title}>
+      <EmptyState compact note={note} title="Disponible más adelante" />
     </DataCard>
   );
+}
+
+
+function sortByDateDesc(items, field) {
+  return [...(items ?? [])].sort((left, right) => new Date(right?.[field] ?? 0) - new Date(left?.[field] ?? 0));
 }
 
 
@@ -83,46 +98,66 @@ export default function PMProjectDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams();
   const { empresaId, token } = useAuth();
-  const [activeTab, setActiveTab] = useState("resumen");
+
+  const [activeView, setActiveView] = useState("plan");
   const [loading, setLoading] = useState(true);
-  const [taskLoading, setTaskLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [project, setProject] = useState(null);
+  const [projectCosts, setProjectCosts] = useState(null);
+  const [projectMaterials, setProjectMaterials] = useState(null);
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const [taskModalOpen, setTaskModalOpen] = useState(false);
+  const [projectTimeEntries, setProjectTimeEntries] = useState([]);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
+  const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
+  const [selectedTaskModalId, setSelectedTaskModalId] = useState(null);
   const [memberForm, setMemberForm] = useState(defaultMemberForm);
   const [commentBody, setCommentBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  async function loadProjectBundle() {
+  async function loadProjectBundle({ background = false } = {}) {
     if (!token || !empresaId || !id) {
       return;
     }
 
-    setLoading(true);
+    if (background) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError("");
+
     try {
-      const [projectResponse, membersResponse, tasksResponse] = await Promise.all([
+      const [projectResponse, costsResponse, materialsResponse, membersResponse, tasksResponse, timeEntriesResponse] = await Promise.all([
         getPmProject({ projectId: id, token, empresaId }),
+        getPmProjectCosts({ projectId: id, token, empresaId }),
+        getPmProjectMaterials({ projectId: id, token, empresaId }),
         listPmProjectMembers({ projectId: id, token, empresaId }),
-        listPmTasks({
-          projectId: id,
-          token,
-          empresaId,
-          filters: { limit: 100, offset: 0, activo: true },
-        }),
+        listPmTasks({ projectId: id, token, empresaId, filters: { limit: 100, offset: 0, activo: true } }),
+        listPmProjectTimeEntries({ projectId: id, token, empresaId, filters: { limit: 200, offset: 0, activo: true } }),
       ]);
+
+      const nextTasks = tasksResponse.items ?? [];
       setProject(projectResponse);
+      setProjectCosts(costsResponse);
+      setProjectMaterials(materialsResponse);
       setMembers(membersResponse.items ?? []);
-      setTasks(tasksResponse.items ?? []);
+      setTasks(nextTasks);
+      setProjectTimeEntries(timeEntriesResponse.items ?? []);
+      setSelectedTaskId((current) => {
+        if (current && nextTasks.some((task) => task.id === current)) {
+          return current;
+        }
+        return nextTasks[0]?.id ?? null;
+      });
     } catch (requestError) {
       setError(requestError.message || "No se pudo cargar el proyecto.");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
@@ -131,13 +166,17 @@ export default function PMProjectDetailPage() {
   }, [token, empresaId, id]);
 
   const activeMembers = useMemo(() => members.filter((item) => item.activo), [members]);
+  const activeTasks = useMemo(
+    () => tasks.filter((task) => task.activo && !["completada", "cancelada"].includes(String(task.estatus || "").toLowerCase())),
+    [tasks],
+  );
+  const overdueTasks = useMemo(() => tasks.filter((task) => isTaskOverdue(task)), [tasks]);
   const tasksByStatus = useMemo(() => {
     const groups = {
       pendiente: [],
       en_progreso: [],
       en_revision: [],
       completada: [],
-      cancelada: [],
     };
     tasks.forEach((task) => {
       const key = groups[task.estatus] ? task.estatus : "pendiente";
@@ -146,19 +185,73 @@ export default function PMProjectDetailPage() {
     return groups;
   }, [tasks]);
 
+  const upcomingTasks = useMemo(
+    () =>
+      [...tasks]
+        .filter((task) => task.activo && !["completada", "cancelada"].includes(task.estatus) && task.fecha_vencimiento)
+        .sort((left, right) => new Date(left.fecha_vencimiento) - new Date(right.fecha_vencimiento))
+        .slice(0, 5),
+    [tasks],
+  );
+
+  const recentTasks = useMemo(() => sortByDateDesc(tasks, "updated_at").slice(0, 5), [tasks]);
+  const recentTimeEntries = useMemo(() => sortByDateDesc(projectTimeEntries, "created_at").slice(0, 5), [projectTimeEntries]);
+  const recentMaterialConsumptions = useMemo(
+    () => sortByDateDesc(projectMaterials?.consumptions ?? [], "created_at").slice(0, 5),
+    [projectMaterials],
+  );
+
+  const alertItems = useMemo(() => {
+    const items = [];
+    if (overdueTasks.length > 0) {
+      items.push({
+        key: "overdue",
+        tone: "danger",
+        title: "Tareas vencidas",
+        note: `${formatNumber(overdueTasks.length)} tareas requieren atención inmediata.`,
+      });
+    }
+    if (Number(projectCosts?.horas_sin_tarifa ?? 0) > 0) {
+      items.push({
+        key: "no-rate",
+        tone: "warning",
+        title: "Horas sin tarifa",
+        note: `Hay ${formatNumber(projectCosts?.horas_sin_tarifa ?? 0)} horas sin costo resuelto.`,
+      });
+    }
+    if (Number(projectCosts?.presupuesto_estimado ?? 0) > 0 && Number(projectCosts?.costo_total_real ?? 0) > Number(projectCosts?.presupuesto_estimado ?? 0)) {
+      items.push({
+        key: "budget",
+        tone: "danger",
+        title: "Presupuesto superado",
+        note: "El costo real ya rebasa el presupuesto estimado.",
+      });
+    }
+    if (Number(projectMaterials?.summary?.materiales_pendientes ?? 0) > 0) {
+      items.push({
+        key: "materials",
+        tone: "info",
+        title: "Material pendiente",
+        note: `${formatNumber(projectMaterials?.summary?.materiales_pendientes ?? 0)} materiales siguen pendientes de surtir o solicitar.`,
+      });
+    }
+    return items;
+  }, [overdueTasks, projectCosts, projectMaterials]);
+
   function openNewTaskModal() {
-    setSelectedTaskId(null);
+    setSelectedTaskModalId(null);
     setTaskModalOpen(true);
   }
 
   function openExistingTaskModal(taskId) {
     setSelectedTaskId(taskId);
+    setSelectedTaskModalId(taskId);
     setTaskModalOpen(true);
   }
 
   function closeTaskModal() {
     setTaskModalOpen(false);
-    setSelectedTaskId(null);
+    setSelectedTaskModalId(null);
   }
 
   function closeMemberModal() {
@@ -169,27 +262,49 @@ export default function PMProjectDetailPage() {
     setMemberForm(defaultMemberForm);
   }
 
-  async function refreshTasksAndProject() {
-    if (!id) {
+  async function handleTaskSaved() {
+    await loadProjectBundle({ background: true });
+  }
+
+  async function handleTaskStatusChange(task, nextStatus) {
+    if (!task?.id) {
       return;
     }
-    setTaskLoading(true);
+
+    setError("");
+    setSuccess("");
     try {
-      const [projectResponse, tasksResponse] = await Promise.all([
-        getPmProject({ projectId: id, token, empresaId }),
-        listPmTasks({ projectId: id, token, empresaId, filters: { limit: 100, offset: 0, activo: true } }),
-      ]);
-      setProject(projectResponse);
-      setTasks(tasksResponse.items ?? []);
+      await updatePmTask({
+        taskId: task.id,
+        token,
+        empresaId,
+        payload: {
+          estatus: nextStatus,
+          porcentaje_avance: nextStatus === "completada"
+            ? 100
+            : Math.max(Number(task.porcentaje_avance || 0), 15),
+        },
+      });
+      setSuccess(`Tarea "${safeDisplayText(task.titulo)}" actualizada.`);
+      await loadProjectBundle({ background: true });
     } catch (requestError) {
-      setError(requestError.message || "No se pudo actualizar el proyecto.");
-    } finally {
-      setTaskLoading(false);
+      setError(requestError.message || "No se pudo actualizar el estatus de la tarea.");
     }
   }
 
-  async function handleTaskSaved() {
-    await refreshTasksAndProject();
+  async function handleDeactivateTask(task) {
+    if (!task?.id) {
+      return;
+    }
+    setError("");
+    setSuccess("");
+    try {
+      await deactivatePmTask({ taskId: task.id, token, empresaId });
+      setSuccess(`Tarea "${safeDisplayText(task.titulo)}" desactivada.`);
+      await loadProjectBundle({ background: true });
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo desactivar la tarea.");
+    }
   }
 
   async function handleAddMember(event) {
@@ -210,8 +325,7 @@ export default function PMProjectDetailPage() {
       });
       setSuccess("Miembro agregado al proyecto.");
       closeMemberModal();
-      const response = await listPmProjectMembers({ projectId: id, token, empresaId });
-      setMembers(response.items ?? []);
+      await loadProjectBundle({ background: true });
     } catch (requestError) {
       setError(requestError.message || "No se pudo agregar el miembro.");
     } finally {
@@ -226,8 +340,7 @@ export default function PMProjectDetailPage() {
     try {
       await deactivatePmProjectMember({ projectId: id, memberId, token, empresaId });
       setSuccess("Miembro desactivado.");
-      const response = await listPmProjectMembers({ projectId: id, token, empresaId });
-      setMembers(response.items ?? []);
+      await loadProjectBundle({ background: true });
     } catch (requestError) {
       setError(requestError.message || "No se pudo actualizar el miembro.");
     } finally {
@@ -253,8 +366,7 @@ export default function PMProjectDetailPage() {
       });
       setCommentBody("");
       setSuccess("Comentario agregado.");
-      const projectResponse = await getPmProject({ projectId: id, token, empresaId });
-      setProject(projectResponse);
+      await loadProjectBundle({ background: true });
     } catch (requestError) {
       setError(requestError.message || "No se pudo guardar el comentario.");
     } finally {
@@ -283,86 +395,90 @@ export default function PMProjectDetailPage() {
   return (
     <div className="inventory-shell inventory-screen pm-screen">
       <PageHeader
-        eyebrow="PM Core"
+        eyebrow="Gestión de proyectos"
         title={project.nombre}
-        subtitle="Detalle operativo de proyecto, tareas, miembros y comentarios."
+        subtitle="Workspace operativo del proyecto con tareas, fechas, materiales, horas y costos en una sola vista."
         actions={
           <div className="inventory-actions">
-            <ActionButton onClick={() => navigate("/pm/projects")} type="button">
+            <ActionButton icon={<ArrowLeft size={16} strokeWidth={1.9} />} onClick={() => navigate("/pm/projects")} type="button">
               Volver a proyectos
             </ActionButton>
-            <ActionButton onClick={openNewTaskModal} tone="primary" type="button">
+            <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openNewTaskModal} tone="primary" type="button">
               Nueva tarea
+            </ActionButton>
+            <ActionButton icon={<RefreshCw size={16} strokeWidth={1.9} />} onClick={() => loadProjectBundle({ background: true })} type="button">
+              {refreshing ? "Actualizando..." : "Actualizar"}
             </ActionButton>
           </div>
         }
         meta={
-          <div className="inventory-inline-meta">
+          <>
             <StatusBadge tone={getProjectStatusTone(project.estatus)}>{getProjectStatusLabel(project.estatus)}</StatusBadge>
             <StatusBadge tone={getPriorityTone(project.prioridad)}>{getPriorityLabel(project.prioridad)}</StatusBadge>
-            <span className="table-note">{safeDisplayText(project.codigo, "Sin codigo")}</span>
-          </div>
+            <span className="table-note">{safeDisplayText(project.codigo, "Sin código")}</span>
+          </>
         }
-      />
+      >
+        <div className="pm-project-header-grid">
+          <div className="pm-project-header-item">
+            <span>Cliente</span>
+            <strong>{safeDisplayText(project.cliente_nombre_snapshot, "Sin cliente")}</strong>
+          </div>
+          <div className="pm-project-header-item">
+            <span>Inicio</span>
+            <strong>{safeDisplayText(formatDate(project.fecha_inicio), "—")}</strong>
+          </div>
+          <div className="pm-project-header-item">
+            <span>Fin planificada</span>
+            <strong>{safeDisplayText(formatDate(project.fecha_fin_planificada), "—")}</strong>
+          </div>
+          <div className="pm-project-header-item">
+            <span>Presupuesto</span>
+            <strong>{formatMoney(projectCosts?.presupuesto_estimado ?? project.presupuesto_estimado ?? 0)}</strong>
+          </div>
+        </div>
+      </PageHeader>
 
       {(error || success) && (
         <div className={`inventory-form-note ${error ? "inventory-form-note-danger" : "inventory-form-note-success"}`}>
-          <strong>{error ? "No se pudo completar la operacion" : "Operacion completada"}</strong>
+          <strong>{error ? "No se pudo completar la operación" : "Operación completada"}</strong>
           <p className="table-note">{error || success}</p>
         </div>
       )}
 
-      <section className="inventory-metric-grid inventory-metric-grid-4">
-        <MetricCard
-          icon={<Gauge size={18} strokeWidth={1.9} />}
-          label="Avance"
-          meta="Calculado desde tareas activas"
-          tone="info"
-          value={formatPercent(project.porcentaje_avance)}
-        />
-        <MetricCard
-          icon={<CheckSquare size={18} strokeWidth={1.9} />}
-          label="Tareas"
-          meta="Activas en el proyecto"
-          tone="success"
-          value={project.task_stats?.total ?? 0}
-        />
-        <MetricCard
-          icon={<Users size={18} strokeWidth={1.9} />}
-          label="Miembros"
-          meta="Asignados al proyecto"
-          tone="neutral"
-          value={project.miembros_activos ?? activeMembers.length}
-        />
-        <MetricCard
-          icon={<Calendar size={18} strokeWidth={1.9} />}
-          label="Vencidas"
-          meta="Tareas fuera de fecha"
-          tone="warning"
-          value={project.task_stats?.vencidas ?? 0}
-        />
+      <section className="inventory-metric-grid inventory-metric-grid-5">
+        <MetricCard icon={<Gauge size={18} strokeWidth={1.9} />} label="Avance" meta="Calculado desde tareas activas" tone="info" value={formatPercent(project.porcentaje_avance)} />
+        <MetricCard icon={<CheckSquare size={18} strokeWidth={1.9} />} label="Tareas activas" meta="Pendientes y en ejecución" tone="success" value={formatNumber(activeTasks.length)} />
+        <MetricCard icon={<Users size={18} strokeWidth={1.9} />} label="Miembros" meta="Equipo asignado" tone="neutral" value={formatNumber(activeMembers.length)} />
+        <MetricCard icon={<Calendar size={18} strokeWidth={1.9} />} label="Vencidas" meta="Requieren atención" tone={overdueTasks.length > 0 ? "danger" : "neutral"} value={formatNumber(overdueTasks.length)} />
+        <MetricCard icon={<PackageOpen size={18} strokeWidth={1.9} />} label="Costo materiales real" meta="Consumo acumulado" tone="warning" value={formatMoney(projectCosts?.costo_materiales_real ?? 0)} />
+        <MetricCard icon={<Clock3 size={18} strokeWidth={1.9} />} label="Costo horas real" meta="Labor acumulada" tone="info" value={formatMoney(projectCosts?.costo_horas_real ?? 0)} />
+        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Costo total real" meta="Materiales + horas" tone="danger" value={formatMoney(projectCosts?.costo_total_real ?? 0)} />
+        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Presupuesto" meta="Base del proyecto" tone="neutral" value={formatMoney(projectCosts?.presupuesto_estimado ?? 0)} />
+        <MetricCard icon={<Gauge size={18} strokeWidth={1.9} />} label="Variación" meta="Presupuesto - costo real" tone={Number(projectCosts?.variacion_presupuesto ?? 0) < 0 ? "danger" : "success"} value={formatMoney(projectCosts?.variacion_presupuesto ?? 0)} />
       </section>
 
-      <div className="inventory-subnav pm-subnav">
-        {projectTabs.map((tab) => {
-          const Icon = tab.icon;
+      <div className="pm-view-switcher">
+        {projectViews.map((view) => {
+          const Icon = view.icon;
           return (
-            <button
-              className={`inventory-tab-button ${activeTab === tab.key ? "active" : ""}`}
-              key={tab.key}
-              onClick={() => setActiveTab(tab.key)}
+            <ActionButton
+              active={activeView === view.key}
+              className="pm-view-switcher-button"
+              icon={<Icon size={16} strokeWidth={1.9} />}
+              key={view.key}
+              onClick={() => setActiveView(view.key)}
               type="button"
             >
-              <span className="inventory-button-glyph"><Icon size={15} strokeWidth={1.9} /></span>
-              <span>{tab.label}</span>
-            </button>
+              {view.label}
+            </ActionButton>
           );
         })}
       </div>
 
-      {activeTab === "resumen" ? (
+      {activeView === "general" ? (
         <div className="inventory-content-grid inventory-content-grid-2">
-          <DataCard subtitle="Contexto general y datos base." title="Resumen del proyecto">
+          <DataCard subtitle="Contexto y objetivos del proyecto." title="Resumen del proyecto">
             <div className="pm-meta-list">
               <div>
                 <strong>Responsable</strong>
@@ -374,49 +490,191 @@ export default function PMProjectDetailPage() {
               </div>
               <div>
                 <strong>Inicio</strong>
-                <span>{safeDisplayText(formatDate(project.fecha_inicio), "-")}</span>
+                <span>{safeDisplayText(formatDate(project.fecha_inicio), "—")}</span>
               </div>
               <div>
                 <strong>Fin planificada</strong>
-                <span>{safeDisplayText(formatDate(project.fecha_fin_planificada), "-")}</span>
+                <span>{safeDisplayText(formatDate(project.fecha_fin_planificada), "—")}</span>
               </div>
               <div>
                 <strong>Fin real</strong>
-                <span>{safeDisplayText(formatDate(project.fecha_fin_real), "-")}</span>
+                <span>{safeDisplayText(formatDate(project.fecha_fin_real), "—")}</span>
               </div>
               <div>
                 <strong>Presupuesto</strong>
-                <span>{formatMoney(project.presupuesto_estimado ?? 0)}</span>
+                <span>{formatMoney(projectCosts?.presupuesto_estimado ?? 0)}</span>
               </div>
             </div>
             <div className="inventory-form-note">
-              <strong>Descripcion</strong>
-              <p className="table-note">{safeDisplayText(project.descripcion, "Sin descripcion operativa.")}</p>
+              <strong>Descripción</strong>
+              <p className="table-note">{safeDisplayText(project.descripcion, "Sin descripción operativa.")}</p>
             </div>
           </DataCard>
 
-          <DataCard subtitle="Conteo simple de ejecucion." title="KPIs de tareas">
-            <div className="inventory-metric-grid inventory-metric-grid-4">
-              <MetricCard label="Pendientes" meta="Backlog" tone="neutral" value={project.task_stats?.pendientes ?? 0} />
-              <MetricCard label="En progreso" meta="Ejecucion" tone="info" value={project.task_stats?.en_progreso ?? 0} />
-              <MetricCard label="En revision" meta="Validacion" tone="warning" value={project.task_stats?.en_revision ?? 0} />
-              <MetricCard label="Completadas" meta="Cierre" tone="success" value={project.task_stats?.completadas ?? 0} />
+          <DataCard subtitle="Señales tempranas del proyecto." title="Alertas">
+            {alertItems.length === 0 ? (
+              <EmptyState compact note="No hay alertas críticas para este proyecto." title="Proyecto estable" />
+            ) : (
+              <div className="inventory-alert-stack">
+                {alertItems.map((item) => (
+                  <div className={`inventory-form-note inventory-form-note-${item.tone === "info" ? "success" : item.tone === "danger" ? "danger" : "warning"}`} key={item.key}>
+                    <strong>{item.title}</strong>
+                    <p className="table-note">{item.note}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </DataCard>
+
+          <DataCard subtitle="Siguiente carga operativa por fecha compromiso." title="Próximos vencimientos">
+            {upcomingTasks.length === 0 ? (
+              <EmptyState compact note="Las tareas con fecha aparecerán aquí." title="Sin vencimientos" />
+            ) : (
+              <div className="pm-detail-list">
+                {upcomingTasks.map((task) => (
+                  <button className="pm-detail-list-item pm-detail-list-item-button" key={task.id} onClick={() => setSelectedTaskId(task.id)} type="button">
+                    <div>
+                      <strong>{safeDisplayText(task.titulo)}</strong>
+                      <span>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} · {safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</span>
+                    </div>
+                    <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
+                  </button>
+                ))}
+              </div>
+            )}
+          </DataCard>
+
+          <DataCard subtitle="Actividad reciente del plan de trabajo." title="Tareas recientes">
+            {recentTasks.length === 0 ? (
+              <EmptyState compact note="No hay actividad reciente todavía." title="Sin actividad" />
+            ) : (
+              <div className="pm-detail-list">
+                {recentTasks.map((task) => (
+                  <button className="pm-detail-list-item pm-detail-list-item-button" key={task.id} onClick={() => openExistingTaskModal(task.id)} type="button">
+                    <div>
+                      <strong>{safeDisplayText(task.titulo)}</strong>
+                      <span>{safeDisplayText(formatDate(task.updated_at), "—")} · {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</span>
+                    </div>
+                    <StatusBadge tone={getPriorityTone(task.prioridad)}>{getPriorityLabel(task.prioridad)}</StatusBadge>
+                  </button>
+                ))}
+              </div>
+            )}
+          </DataCard>
+
+          <DataCard
+            actions={
+              <ActionButton onClick={() => setMemberModalOpen(true)} tone="primary" type="button">
+                Agregar miembro
+              </ActionButton>
+            }
+            subtitle="Usuarios vinculados al proyecto activo."
+            title="Equipo del proyecto"
+          >
+            <ResultMeta label="miembros" loaded={members.length} total={members.length} />
+            {members.length === 0 ? (
+              <EmptyState compact note="Aún no se han asignado miembros." title="Sin miembros" />
+            ) : (
+              <div className="pm-detail-list">
+                {members.map((member) => (
+                  <div className="pm-detail-list-item" key={member.id}>
+                    <div>
+                      <strong>{safeDisplayText(member.nombre_snapshot, "Sin nombre")}</strong>
+                      <span>{safeDisplayText(member.email, "Sin correo")} · {safeDisplayText(member.rol_en_proyecto, "colaborador")}</span>
+                    </div>
+                    {member.activo ? (
+                      <ActionButton onClick={() => handleDeactivateMember(member.id)} size="sm" tone="danger" type="button">
+                        Desactivar
+                      </ActionButton>
+                    ) : (
+                      <StatusBadge tone="neutral">Inactivo</StatusBadge>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </DataCard>
+
+          <DataCard subtitle="Lectura rápida de presupuesto y costos." title="Costos principales">
+            <div className="inventory-metric-grid inventory-metric-grid-3">
+              <MetricCard label="Materiales reales" meta="Consumo" tone="success" value={formatMoney(projectCosts?.costo_materiales_real ?? 0)} />
+              <MetricCard label="Horas reales" meta="Labor" tone="info" value={formatMoney(projectCosts?.costo_horas_real ?? 0)} />
+              <MetricCard label="Total real" meta="Proyecto" tone="warning" value={formatMoney(projectCosts?.costo_total_real ?? 0)} />
+              <MetricCard label="Presupuesto" meta="Estimado" tone="neutral" value={formatMoney(projectCosts?.presupuesto_estimado ?? 0)} />
+              <MetricCard label="Variación" meta="Presupuesto - costo real" tone={Number(projectCosts?.variacion_presupuesto ?? 0) < 0 ? "danger" : "success"} value={formatMoney(projectCosts?.variacion_presupuesto ?? 0)} />
+              <MetricCard label="Horas sin tarifa" meta="Pendiente por resolver" tone={Number(projectCosts?.horas_sin_tarifa ?? 0) > 0 ? "warning" : "neutral"} value={formatNumber(projectCosts?.horas_sin_tarifa ?? 0)} />
             </div>
+          </DataCard>
+
+          <DataCard subtitle="Últimos consumos ligados al proyecto." title="Materiales recientes">
+            {recentMaterialConsumptions.length === 0 ? (
+              <EmptyState compact note="Los consumos aparecerán cuando se surtan requisiciones o salidas vinculadas." title="Sin consumos" />
+            ) : (
+              <div className="pm-detail-list">
+                {recentMaterialConsumptions.map((consumption) => (
+                  <div className="pm-detail-list-item" key={consumption.id}>
+                    <div>
+                      <strong>{safeDisplayText(consumption.material_nombre_snapshot)}</strong>
+                      <span>{safeDisplayText(formatDate(consumption.created_at), "—")} · {formatNumber(consumption.cantidad_consumida)} · {safeDisplayText(consumption.origen)}</span>
+                    </div>
+                    <strong>{formatMoney(consumption.costo_total_snapshot)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
+          </DataCard>
+
+          <DataCard subtitle="Últimos registros de tiempo del proyecto." title="Horas recientes">
+            {recentTimeEntries.length === 0 ? (
+              <EmptyState compact note="Los registros aparecerán cuando el equipo capture horas." title="Sin horas" />
+            ) : (
+              <div className="pm-detail-list">
+                {recentTimeEntries.map((entry) => (
+                  <div className="pm-detail-list-item" key={entry.id}>
+                    <div>
+                      <strong>{safeDisplayText(entry.usuario_nombre_snapshot, "Registro manual")}</strong>
+                      <span>{safeDisplayText(formatDate(entry.fecha), "—")} · {safeDisplayText(entry.tarea_titulo, "Proyecto general")}</span>
+                    </div>
+                    <strong>{formatMoney(entry.costo_total_snapshot)}</strong>
+                  </div>
+                ))}
+              </div>
+            )}
           </DataCard>
         </div>
       ) : null}
 
-      {activeTab === "tareas" ? (
-        <div className="inventory-content-grid">
-          <DataCard
-            actions={
-              <ActionButton disabled={taskLoading} onClick={openNewTaskModal} tone="primary" type="button">
-                Nueva tarea
-              </ActionButton>
-            }
-            subtitle="Kanban simple por estatus y listado editable."
-            title="Tareas del proyecto"
-          >
+      {activeView === "plan" ? (
+        <PMProjectWorkPlanView
+          empresaId={empresaId}
+          materialConsumptions={projectMaterials?.consumptions ?? []}
+          materialPlans={projectMaterials?.plans ?? []}
+          onCreateTask={openNewTaskModal}
+          onDeactivateTask={handleDeactivateTask}
+          onEditTask={openExistingTaskModal}
+          onSelectTask={setSelectedTaskId}
+          onSetTaskStatus={handleTaskStatusChange}
+          projectId={id}
+          selectedTaskId={selectedTaskId}
+          tasks={tasks}
+          timeEntries={projectTimeEntries}
+          token={token}
+        />
+      ) : null}
+
+      {activeView === "kanban" ? (
+        <DataCard
+          actions={
+            <ActionButton onClick={openNewTaskModal} tone="primary" type="button">
+              Nueva tarea
+            </ActionButton>
+          }
+          subtitle="Vista por columnas para seguimiento rápido del flujo."
+          title="Kanban"
+        >
+          {(tasks ?? []).length === 0 ? (
+            <EmptyState compact note="Crea tareas para ver el flujo del proyecto." title="Sin tareas" />
+          ) : (
             <div className="pm-kanban-grid">
               {["pendiente", "en_progreso", "en_revision", "completada"].map((statusKey) => (
                 <div className="pm-kanban-column" key={statusKey}>
@@ -425,7 +683,7 @@ export default function PMProjectDetailPage() {
                     <strong>{tasksByStatus[statusKey]?.length ?? 0}</strong>
                   </div>
                   {(tasksByStatus[statusKey]?.length ?? 0) === 0 ? (
-                    <EmptyState compact note="Sin tareas en esta columna." title="Vacio" />
+                    <EmptyState compact note="Sin tareas en esta columna." title="Vacío" />
                   ) : (
                     <div className="pm-kanban-card-stack">
                       {tasksByStatus[statusKey].map((task) => (
@@ -439,9 +697,10 @@ export default function PMProjectDetailPage() {
                             <strong>{safeDisplayText(task.titulo)}</strong>
                             <StatusBadge tone={getPriorityTone(task.prioridad)}>{getPriorityLabel(task.prioridad)}</StatusBadge>
                           </div>
-                          <div className="inventory-cell-sub">{safeDisplayText(task.asignado_nombre_snapshot, "Sin asignacion")}</div>
+                          <div className="inventory-cell-sub">{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</div>
                           <div className="pm-inline-metadata">
-                            <span className="table-note">{safeDisplayText(formatDate(task.fecha_vencimiento), "-")}</span>
+                            <span className="table-note">{safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</span>
+                            <span className="table-note">{formatPercent(task.porcentaje_avance)}</span>
                             {isTaskOverdue(task) ? <StatusBadge tone="danger">Vencida</StatusBadge> : null}
                           </div>
                         </button>
@@ -451,81 +710,28 @@ export default function PMProjectDetailPage() {
                 </div>
               ))}
             </div>
-
-            <DataTable columns={["Tarea", "Prioridad", "Asignado", "Vence", "Avance", "Acciones"]}>
-              <tbody>
-                {tasks.map((task) => (
-                  <tr key={task.id}>
-                    <td>
-                      <div className="inventory-cell-main">{safeDisplayText(task.titulo)}</div>
-                      <div className="inventory-cell-sub">{safeDisplayText(task.descripcion, "Sin descripcion")}</div>
-                    </td>
-                    <td>
-                      <StatusBadge tone={getPriorityTone(task.prioridad)}>{getPriorityLabel(task.prioridad)}</StatusBadge>
-                    </td>
-                    <td>{safeDisplayText(task.asignado_nombre_snapshot, "Sin asignacion")}</td>
-                    <td>
-                      {safeDisplayText(formatDate(task.fecha_vencimiento), "-")}
-                      {isTaskOverdue(task) ? <div className="inventory-cell-sub">Vencida</div> : null}
-                    </td>
-                    <td>{formatPercent(task.porcentaje_avance)}</td>
-                    <td>
-                      <ActionButton onClick={() => openExistingTaskModal(task.id)} size="sm" type="button">
-                        Abrir
-                      </ActionButton>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </DataTable>
-          </DataCard>
-        </div>
-      ) : null}
-
-      {activeTab === "miembros" ? (
-        <DataCard
-          actions={
-            <ActionButton onClick={() => setMemberModalOpen(true)} tone="primary" type="button">
-              Agregar miembro
-            </ActionButton>
-          }
-          subtitle="Miembros internos o snapshots manuales por email/nombre."
-          title="Miembros del proyecto"
-        >
-          <ResultMeta label="miembros" loaded={members.length} total={members.length} />
-          {members.length === 0 ? (
-            <EmptyState compact note="Aun no se han asignado miembros." title="Sin miembros" />
-          ) : (
-            <DataTable columns={["Miembro", "Rol", "Estado", "Fecha", "Acciones"]}>
-              <tbody>
-                {members.map((member) => (
-                  <tr key={member.id}>
-                    <td>
-                      <div className="inventory-cell-main">{safeDisplayText(member.nombre_snapshot, "Sin nombre")}</div>
-                      <div className="inventory-cell-sub">{safeDisplayText(member.email, "Sin correo")}</div>
-                    </td>
-                    <td><StatusBadge tone="info">{safeDisplayText(member.rol_en_proyecto)}</StatusBadge></td>
-                    <td><StatusBadge tone={member.activo ? "success" : "neutral"}>{member.activo ? "Activo" : "Inactivo"}</StatusBadge></td>
-                    <td>{safeDisplayText(formatDate(member.created_at), "-")}</td>
-                    <td>
-                      {member.activo ? (
-                        <ActionButton onClick={() => handleDeactivateMember(member.id)} size="sm" tone="danger" type="button">
-                          Desactivar
-                        </ActionButton>
-                      ) : (
-                        <span className="table-note">Sin acciones</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </DataTable>
           )}
         </DataCard>
       ) : null}
 
-      {activeTab === "comentarios" ? (
-        <DataCard subtitle="Conversacion del proyecto a nivel general." title="Comentarios">
+      {activeView === "materiales" ? (
+        <PMProjectMaterialsTab empresaId={empresaId} project={project} projectId={id} token={token} />
+      ) : null}
+
+      {activeView === "costos" ? (
+        <PMProjectTimeCostsTab
+          empresaId={empresaId}
+          members={members}
+          onChanged={() => loadProjectBundle({ background: true })}
+          project={project}
+          projectId={id}
+          tasks={tasks}
+          token={token}
+        />
+      ) : null}
+
+      {activeView === "comentarios" ? (
+        <DataCard subtitle="Conversación general del proyecto." title="Comentarios">
           <form className="inventory-modal-form" onSubmit={handleCreateProjectComment}>
             <Field label="Nuevo comentario">
               <textarea
@@ -541,14 +747,14 @@ export default function PMProjectDetailPage() {
             </div>
           </form>
           {(project.comments?.length ?? 0) === 0 ? (
-            <EmptyState compact note="Aun no hay comentarios de proyecto." title="Sin comentarios" />
+            <EmptyState compact note="Aún no hay comentarios de proyecto." title="Sin comentarios" />
           ) : (
             <div className="pm-comment-list">
               {project.comments.map((comment) => (
                 <article className="pm-comment-card" key={comment.id}>
                   <div className="pm-comment-head">
                     <strong>{safeDisplayText(comment.created_by_nombre_snapshot, "Usuario")}</strong>
-                    <span className="inventory-cell-sub">{safeDisplayText(formatDate(comment.created_at), "-")}</span>
+                    <span className="inventory-cell-sub">{safeDisplayText(formatDate(comment.created_at), "—")}</span>
                   </div>
                   <p>{safeDisplayText(comment.body, "")}</p>
                 </article>
@@ -558,24 +764,11 @@ export default function PMProjectDetailPage() {
         </DataCard>
       ) : null}
 
-      {activeTab === "materiales" ? (
-        <PMProjectMaterialsTab empresaId={empresaId} project={project} projectId={id} token={token} />
-      ) : null}
-      {activeTab === "compras" ? (
-        <PlaceholderTab note="Se conectara en PM <-> Compras Fase 4." title="Compras del proyecto" />
-      ) : null}
-      {activeTab === "costos" ? (
-        <PMProjectTimeCostsTab
-          empresaId={empresaId}
-          members={members}
-          project={project}
-          projectId={id}
-          tasks={tasks}
-          token={token}
+      {activeView === "documentos" ? (
+        <PlaceholderView
+          note="La vista de documentos se conectará en una fase posterior. Todavía no hay drag & drop, dependencias ni ruta crítica."
+          title="Documentos del proyecto"
         />
-      ) : null}
-      {activeTab === "documentos" ? (
-        <PlaceholderTab note="Se conectara en Portal/Documentos Fase 5." title="Documentos" />
       ) : null}
 
       <ModalShell
@@ -626,8 +819,8 @@ export default function PMProjectDetailPage() {
             </Field>
           </FormGrid>
           <div className="inventory-form-note">
-            <strong>Vinculacion controlada</strong>
-            <p className="table-note">Si el correo ya pertenece a un usuario activo de la empresa, el backend lo vincula automaticamente.</p>
+            <strong>Vinculación controlada</strong>
+            <p className="table-note">Si el correo ya pertenece a un usuario activo de la empresa, el backend lo vincula automáticamente.</p>
           </div>
         </form>
       </ModalShell>
@@ -639,7 +832,7 @@ export default function PMProjectDetailPage() {
         onSaved={handleTaskSaved}
         open={taskModalOpen}
         projectId={id}
-        taskId={selectedTaskId}
+        taskId={selectedTaskModalId}
         token={token}
       />
     </div>

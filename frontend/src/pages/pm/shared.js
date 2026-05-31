@@ -12,7 +12,7 @@ export const projectStatusOptions = [
 export const taskStatusOptions = [
   { value: "pendiente", label: "Pendiente" },
   { value: "en_progreso", label: "En progreso" },
-  { value: "en_revision", label: "En revision" },
+  { value: "en_revision", label: "En revisión" },
   { value: "completada", label: "Completada" },
   { value: "cancelada", label: "Cancelada" },
 ];
@@ -21,11 +21,11 @@ export const priorityOptions = [
   { value: "baja", label: "Baja" },
   { value: "media", label: "Media" },
   { value: "alta", label: "Alta" },
-  { value: "critica", label: "Critica" },
+  { value: "critica", label: "Crítica" },
 ];
 
 export const projectMemberRoleOptions = [
-  { value: "lider", label: "Lider" },
+  { value: "lider", label: "Líder" },
   { value: "colaborador", label: "Colaborador" },
   { value: "observador", label: "Observador" },
 ];
@@ -35,7 +35,7 @@ export const pmRateRoleOptions = [
   { value: "admin", label: "Admin" },
   { value: "user", label: "Usuario" },
   { value: "almacenista", label: "Almacenista" },
-  { value: "lider", label: "Lider" },
+  { value: "lider", label: "Líder" },
   { value: "colaborador", label: "Colaborador" },
   { value: "observador", label: "Observador" },
 ];

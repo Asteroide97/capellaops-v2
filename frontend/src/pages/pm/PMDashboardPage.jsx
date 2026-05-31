@@ -29,7 +29,7 @@ import {
 
 function StatusDistribution({ items, kind }) {
   if (!items?.length) {
-    return <EmptyState compact note="Sin distribucion disponible." title="Sin datos" />;
+    return <EmptyState compact note="Sin distribución disponible." title="Sin datos" />;
   }
 
   return (
@@ -85,8 +85,8 @@ export default function PMDashboardPage() {
     <div className="inventory-shell inventory-screen pm-screen">
       <PageHeader
         eyebrow="PM Core"
-        title="Gestion de Proyectos"
-        subtitle="Dashboard operativo para proyectos, tareas y seguimiento basico."
+        title="Gestión de Proyectos"
+        subtitle="Dashboard operativo para proyectos, tareas y seguimiento básico."
         actions={
           <div className="inventory-actions">
             <ActionButton onClick={() => navigate("/pm/rates")} type="button">
@@ -127,7 +127,7 @@ export default function PMDashboardPage() {
         <MetricCard
           icon={<Calendar size={18} strokeWidth={1.9} />}
           label="Tareas vencidas"
-          meta="Pendientes de atencion"
+          meta="Pendientes de atención"
           tone="danger"
           value={dashboard?.kpis?.tareas_vencidas ?? 0}
         />
@@ -144,7 +144,7 @@ export default function PMDashboardPage() {
         <MetricCard
           icon={<DollarSign size={18} strokeWidth={1.9} />}
           label="Costo estimado materiales"
-          meta="Planeacion acumulada"
+          meta="Planeación acumulada"
           tone="info"
           value={formatMoney(dashboard?.kpis?.costo_materiales_estimado_total ?? 0)}
         />
@@ -157,7 +157,7 @@ export default function PMDashboardPage() {
         />
         <MetricCard
           icon={<TriangleAlert size={18} strokeWidth={1.9} />}
-          label="Variacion materiales"
+          label="Variación materiales"
           meta="Real contra estimado"
           tone={Number(dashboard?.kpis?.variacion_materiales_total ?? 0) > 0 ? "warning" : "neutral"}
           value={formatMoney(dashboard?.kpis?.variacion_materiales_total ?? 0)}
@@ -189,17 +189,17 @@ export default function PMDashboardPage() {
         <MetricCard
           icon={<TriangleAlert size={18} strokeWidth={1.9} />}
           label="Horas sin tarifa"
-          meta="Pendientes de configuracion"
+          meta="Pendientes de configuración"
           tone={Number(dashboard?.kpis?.horas_sin_tarifa ?? 0) > 0 ? "warning" : "neutral"}
           value={dashboard?.kpis?.horas_sin_tarifa ?? 0}
         />
       </section>
 
       <div className="inventory-content-grid inventory-content-grid-2">
-        <DataCard subtitle="Distribucion de proyectos activos por estatus." title="Proyectos por estatus">
+        <DataCard subtitle="Distribución de proyectos activos por estatus." title="Proyectos por estatus">
           <StatusDistribution items={dashboard?.proyectos_por_estatus ?? []} kind="project" />
         </DataCard>
-        <DataCard subtitle="Distribucion de tareas activas por estatus." title="Tareas por estatus">
+        <DataCard subtitle="Distribución de tareas activas por estatus." title="Tareas por estatus">
           <StatusDistribution items={dashboard?.tareas_por_estatus ?? []} kind="task" />
         </DataCard>
       </div>
@@ -211,8 +211,8 @@ export default function PMDashboardPage() {
               Ir a proyectos
             </ActionButton>
           }
-          subtitle="Proyectos que requieren atencion en el corto plazo."
-          title="Proximos proyectos a vencer"
+          subtitle="Proyectos que requieren atención en el corto plazo."
+          title="Próximos proyectos a vencer"
         >
           <ResultMeta
             label="proyectos"
@@ -220,7 +220,7 @@ export default function PMDashboardPage() {
             total={dashboard?.proyectos_proximos?.length ?? 0}
           />
           {(dashboard?.proyectos_proximos?.length ?? 0) === 0 ? (
-            <EmptyState compact note="No hay proyectos proximos a vencer." title="Sin alertas de proyecto" />
+            <EmptyState compact note="No hay proyectos próximos a vencer." title="Sin alertas de proyecto" />
           ) : (
             <DataTable columns={["Proyecto", "Fecha", "Prioridad", "Responsable"]}>
               <tbody>
@@ -248,7 +248,7 @@ export default function PMDashboardPage() {
               Revisar tareas
             </ActionButton>
           }
-          subtitle="Tareas vencidas o proximas a vencer."
+          subtitle="Tareas vencidas o próximas a vencer."
           title="Vencimientos operativos"
         >
           <ResultMeta
@@ -257,7 +257,7 @@ export default function PMDashboardPage() {
             total={(dashboard?.proximos_vencimientos?.length ?? 0) + (dashboard?.tareas_vencidas_items?.length ?? 0)}
           />
           {(dashboard?.proximos_vencimientos?.length ?? 0) + (dashboard?.tareas_vencidas_items?.length ?? 0) === 0 ? (
-            <EmptyState compact note="No hay tareas proximas o vencidas." title="Sin vencimientos" />
+            <EmptyState compact note="No hay tareas próximas o vencidas." title="Sin vencimientos" />
           ) : (
             <DataTable columns={["Tarea", "Fecha", "Estatus", "Prioridad"]}>
               <tbody>
@@ -304,9 +304,9 @@ export default function PMDashboardPage() {
       <div className="inventory-content-grid inventory-content-grid-2">
         <DataCard subtitle="Mayor consumo real de materiales por proyecto." title="Top proyectos por costo de materiales">
           {(dashboard?.top_proyectos_por_costo_materiales?.length ?? 0) === 0 ? (
-            <EmptyState compact note="Aun no hay consumo de materiales acumulado." title="Sin costos registrados" />
+            <EmptyState compact note="Aún no hay consumo de materiales acumulado." title="Sin costos registrados" />
           ) : (
-            <DataTable columns={["Proyecto", "Real", "Estimado", "Variacion"]}>
+            <DataTable columns={["Proyecto", "Real", "Estimado", "Variación"]}>
               <tbody>
                 {(dashboard?.top_proyectos_por_costo_materiales ?? []).map((item) => (
                   <tr key={item.project_id}>
@@ -325,7 +325,7 @@ export default function PMDashboardPage() {
           {(dashboard?.proyectos_sobre_presupuesto_materiales?.length ?? 0) === 0 ? (
             <EmptyState compact note="No hay proyectos sobre presupuesto por materiales." title="Sin alertas" />
           ) : (
-            <DataTable columns={["Proyecto", "Costo real", "Presupuesto", "Variacion"]}>
+            <DataTable columns={["Proyecto", "Costo real", "Presupuesto", "Variación"]}>
               <tbody>
                 {(dashboard?.proyectos_sobre_presupuesto_materiales ?? []).map((item) => (
                   <tr key={item.project_id}>
@@ -344,7 +344,7 @@ export default function PMDashboardPage() {
       <div className="inventory-content-grid inventory-content-grid-2">
         <DataCard subtitle="Proyectos con mayor costo real total acumulado." title="Top proyectos por costo total">
           {(dashboard?.top_proyectos_por_costo_total?.length ?? 0) === 0 ? (
-            <EmptyState compact note="Aun no hay costos totales acumulados." title="Sin costos registrados" />
+            <EmptyState compact note="Aún no hay costos totales acumulados." title="Sin costos registrados" />
           ) : (
             <DataTable columns={["Proyecto", "Materiales", "Horas", "Costo total", "Presupuesto"]}>
               <tbody>
@@ -366,7 +366,7 @@ export default function PMDashboardPage() {
           {(dashboard?.proyectos_sobre_presupuesto?.length ?? 0) === 0 ? (
             <EmptyState compact note="No hay proyectos sobre presupuesto total." title="Sin alertas" />
           ) : (
-            <DataTable columns={["Proyecto", "Costo total", "Presupuesto", "Variacion"]}>
+            <DataTable columns={["Proyecto", "Costo total", "Presupuesto", "Variación"]}>
               <tbody>
                 {(dashboard?.proyectos_sobre_presupuesto ?? []).map((item) => (
                   <tr key={`budget-${item.project_id}`}>
@@ -385,7 +385,7 @@ export default function PMDashboardPage() {
       <div className="inventory-content-grid inventory-content-grid-2">
         <DataCard subtitle="Usuarios con mayor carga horaria registrada." title="Top usuarios por horas">
           {(dashboard?.top_usuarios_por_horas?.length ?? 0) === 0 ? (
-            <EmptyState compact note="Aun no hay horas registradas." title="Sin horas" />
+            <EmptyState compact note="Aún no hay horas registradas." title="Sin horas" />
           ) : (
             <DataTable columns={["Usuario", "Horas", "Costo"]}>
               <tbody>
@@ -406,7 +406,7 @@ export default function PMDashboardPage() {
 
         <DataCard subtitle="Usuarios con mayor costo laboral acumulado." title="Top usuarios por costo">
           {(dashboard?.top_usuarios_por_costo?.length ?? 0) === 0 ? (
-            <EmptyState compact note="Aun no hay costos horarios acumulados." title="Sin costos" />
+            <EmptyState compact note="Aún no hay costos horarios acumulados." title="Sin costos" />
           ) : (
             <DataTable columns={["Usuario", "Horas", "Costo"]}>
               <tbody>

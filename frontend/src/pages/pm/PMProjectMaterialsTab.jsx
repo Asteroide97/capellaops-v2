@@ -68,7 +68,7 @@ function getPlanStatusTone(status) {
 
 function getConsumptionOriginLabel(origin) {
   if (origin === "requisicion_surtida") {
-    return "Requisicion surtida";
+    return "Requisición surtida";
   }
   if (origin === "ajuste_admin") {
     return "Ajuste administrativo";
@@ -273,7 +273,7 @@ export default function PMProjectMaterialsTab({
         }));
 
       if (items.length === 0) {
-        throw new Error("Selecciona al menos un material pendiente para crear la requisicion.");
+        throw new Error("Selecciona al menos un material pendiente para crear la requisición.");
       }
 
       const response = await createPmProjectMaterialRequisition({
@@ -286,11 +286,11 @@ export default function PMProjectMaterialsTab({
           items,
         },
       });
-      setSuccess(`Requisicion ${safeDisplayText(response.folio)} creada como borrador.`);
+      setSuccess(`Requisición ${safeDisplayText(response.folio)} creada como borrador.`);
       closeRequisitionModal();
       await loadMaterialsTab();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo crear la requisicion del proyecto.");
+      setError(requestError.message || "No se pudo crear la requisición del proyecto.");
     } finally {
       setSaving(false);
     }
@@ -304,7 +304,7 @@ export default function PMProjectMaterialsTab({
     <div className="inventory-content-grid">
       {(error || success) && (
         <div className={`inventory-form-note ${error ? "inventory-form-note-danger" : "inventory-form-note-success"}`}>
-          <strong>{error ? "No se pudo completar la operacion" : "Operacion completada"}</strong>
+          <strong>{error ? "No se pudo completar la operación" : "Operación completada"}</strong>
           <p className="table-note">{error || success}</p>
         </div>
       )}
@@ -313,7 +313,7 @@ export default function PMProjectMaterialsTab({
         <MetricCard
           icon={<Factory size={18} strokeWidth={1.9} />}
           label="Costo estimado materiales"
-          meta="Planeacion del proyecto"
+          meta="Planeación del proyecto"
           tone="info"
           value={formatMoney(summary?.costo_estimado ?? 0)}
         />
@@ -326,7 +326,7 @@ export default function PMProjectMaterialsTab({
         />
         <MetricCard
           icon={<ClipboardList size={18} strokeWidth={1.9} />}
-          label="Variacion"
+          label="Variación"
           meta="Real vs estimado"
           tone={Number(summary?.variacion ?? 0) > 0 ? "warning" : "neutral"}
           value={formatMoney(summary?.variacion ?? 0)}
@@ -363,7 +363,7 @@ export default function PMProjectMaterialsTab({
               onClick={() => openRequisitionModal()}
               type="button"
             >
-              Crear requisicion
+              Crear requisición
             </ActionButton>
             <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreatePlanModal} tone="primary" type="button">
               Agregar material
@@ -423,7 +423,7 @@ export default function PMProjectMaterialsTab({
                         size="sm"
                         type="button"
                       >
-                        Requisicion
+                        Requisición
                       </ActionButton>
                       <ActionButton onClick={() => handleDeactivatePlan(plan)} size="sm" tone="danger" type="button">
                         Quitar
@@ -442,7 +442,7 @@ export default function PMProjectMaterialsTab({
         {consumptions.length === 0 ? (
           <EmptyState
             compact
-            note="Los consumos apareceran cuando se surtan requisiciones o se registren salidas vinculadas al proyecto."
+            note="Los consumos aparecerán cuando se surtan requisiciones o se registren salidas vinculadas al proyecto."
             title="Sin consumos reales"
           />
         ) : (
@@ -454,7 +454,7 @@ export default function PMProjectMaterialsTab({
               "Costo unitario",
               "Costo total",
               "Origen",
-              "Requisicion",
+              "Requisición",
               "Movimiento",
               "Documento",
               "Notas",
@@ -505,7 +505,7 @@ export default function PMProjectMaterialsTab({
         title={editingPlan ? "Editar material planeado" : "Agregar material planeado"}
       >
         <form className="inventory-modal-form" id="pm-project-material-plan-form" onSubmit={handleSavePlan}>
-          <SectionTitle subtitle="Busca por nombre, SKU o codigo de barras." title="Material" />
+          <SectionTitle subtitle="Busca por nombre, SKU o código de barras." title="Material" />
           <SearchInput
             onChange={(event) => setMaterialSearch(event.target.value)}
             placeholder="Filtrar materiales para seleccionar..."
@@ -552,7 +552,7 @@ export default function PMProjectMaterialsTab({
               />
             </Field>
 
-            <Field hint="Opcional; si se deja vacio usa costo actual del material." label="Costo unitario estimado">
+            <Field hint="Opcional; si se deja vacío usa costo actual del material." label="Costo unitario estimado">
               <input
                 min="0"
                 onChange={(event) => setPlanForm((current) => ({ ...current, costo_unitario_estimado: event.target.value }))}
@@ -580,7 +580,7 @@ export default function PMProjectMaterialsTab({
               Cancelar
             </ActionButton>
             <ActionButton disabled={saving} form="pm-project-material-requisition-form" tone="primary" type="submit">
-              {saving ? "Guardando..." : "Crear requisicion"}
+              {saving ? "Guardando..." : "Crear requisición"}
             </ActionButton>
           </div>
         }
@@ -588,7 +588,7 @@ export default function PMProjectMaterialsTab({
         open={requisitionModalOpen}
         size="large"
         subtitle={`Solicitud de materiales para ${safeDisplayText(project?.nombre, "el proyecto activo")}.`}
-        title="Crear requisicion desde proyecto"
+        title="Crear requisición desde proyecto"
       >
         <form className="inventory-modal-form" id="pm-project-material-requisition-form" onSubmit={handleCreateRequisition}>
           <FormGrid>

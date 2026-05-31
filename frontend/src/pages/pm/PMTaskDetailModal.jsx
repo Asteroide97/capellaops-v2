@@ -355,14 +355,14 @@ export default function PMTaskDetailModal({
 
       {(error || success) && (
         <div className={`inventory-form-note ${error ? "inventory-form-note-danger" : "inventory-form-note-success"}`}>
-          <strong>{error ? "No se pudo completar la operacion" : "Operacion completada"}</strong>
+          <strong>{error ? "No se pudo completar la operación" : "Operación completada"}</strong>
           <p className="table-note">{error || success}</p>
         </div>
       )}
 
       <form className="inventory-modal-form" id="pm-task-form" onSubmit={handleSubmit}>
         <FormGrid>
-          <Field label="Titulo">
+          <Field label="Título">
             <input
               onChange={(event) => setForm((current) => ({ ...current, titulo: event.target.value }))}
               required
@@ -428,7 +428,7 @@ export default function PMTaskDetailModal({
               value={form.fecha_vencimiento}
             />
           </Field>
-          <Field label="Estimacion horas">
+          <Field label="Estimación horas">
             <input
               min="0"
               onChange={(event) => setForm((current) => ({ ...current, estimacion_horas: event.target.value }))}
@@ -456,7 +456,7 @@ export default function PMTaskDetailModal({
               value={form.orden}
             />
           </Field>
-          <Field label="Descripcion" span={2}>
+          <Field label="Descripción" span={2}>
             <textarea
               onChange={(event) => setForm((current) => ({ ...current, descripcion: event.target.value }))}
               rows={4}
@@ -550,7 +550,7 @@ export default function PMTaskDetailModal({
               <span className="inventory-field-label">Nueva subtarea</span>
               <input
                 onChange={(event) => setNewSubtask(event.target.value)}
-                placeholder="Descripcion breve"
+                placeholder="Descripción breve"
                 type="text"
                 value={newSubtask}
               />
@@ -575,7 +575,7 @@ export default function PMTaskDetailModal({
                 ))}
               </div>
             ) : (
-              <EmptyState compact note="Aun no hay subtareas." title="Sin subtareas" />
+              <EmptyState compact note="Aún no hay subtareas." title="Sin subtareas" />
             )}
           </DataCard>
 
@@ -623,7 +623,7 @@ export default function PMTaskDetailModal({
                 ))}
               </div>
             ) : (
-              <EmptyState compact note="Aun no hay checklist." title="Sin checklist" />
+              <EmptyState compact note="Aún no hay checklist." title="Sin checklist" />
             )}
           </DataCard>
 
@@ -666,7 +666,7 @@ export default function PMTaskDetailModal({
                 ))}
               </div>
             ) : (
-              <EmptyState compact note="Aun no hay comentarios." title="Sin comentarios" />
+              <EmptyState compact note="Aún no hay comentarios." title="Sin comentarios" />
             )}
           </DataCard>
         </div>

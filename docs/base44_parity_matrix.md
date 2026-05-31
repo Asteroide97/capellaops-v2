@@ -149,8 +149,13 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | CRM | Logs de automatizacion | Pendiente | Media | CRM F3 | No implementado. | Automatizaciones sin trazabilidad. |
 | PM | PM Core proyectos | Implementado | Alta | PM F1 | CRUD base, dashboard, detalle de proyecto, miembros y desactivacion logica ya existen en `/pm`. | Sin gestion formal de ejecucion. |
 | PM | PM tareas basicas | Implementado | Alta | PM F1 | Tareas, subtareas, checklist, comentarios y actualizacion de avance ya operan dentro del proyecto. | Seguimiento operativo incompleto. |
+| PM | Project Workspace | Implementado | Alta | PM UX | El detalle de proyecto ya opera con vista general, plan de trabajo, selector de vistas y panel de detalle de tarea. | La ejecucion sigue mas fragmentada que una herramienta PM dedicada. |
 | PM | Kanban simple | Parcial | Media | PM F1 | El detalle de proyecto ya muestra columnas simples por estatus, sin drag and drop ni reglas avanzadas. | Visualizacion operativa menos agil. |
-| PM | Calendario / Gantt | Pendiente | Media | PM F2 | No implementado. | Planeacion temporal limitada. |
+| PM | Gantt simple visual | Parcial | Media | PM UX | Ya existe una linea de tiempo simple por tarea usando fechas de inicio y fin, solo para visualizacion. | Sin interaccion avanzada ni reprogramacion visual. |
+| PM | Gantt editable | Pendiente | Media | PM F4 | No existe edicion directa sobre barras ni ajustes de fechas desde la linea de tiempo. | Planeacion temporal aun manual. |
+| PM | Dependencias | Pendiente | Media | PM F4 | No implementado. | Sin secuencia formal entre tareas. |
+| PM | Ruta critica | Pendiente | Media | PM F4 | No implementado. | Priorizacion temporal limitada. |
+| PM | Drag and drop | Pendiente | Media | PM F4 | No implementado en kanban ni Gantt. | Replaneacion visual menos agil. |
 | PM | Materiales PM planeados | Implementado | Alta | PM F2 | Cada proyecto ya puede definir materiales planeados, cantidad, costo estimado y pendiente operativo. | Planeacion material fuera del proyecto. |
 | PM | Consumo real desde inventario | Implementado | Alta | PM F2 | Los surtidos de requisicion y las salidas manuales de inventario con `proyecto_id` ya generan consumo formal PM y actualizan costo real. | Proyecto sin costo real de materiales. |
 | PM | Costos de materiales | Implementado | Alta | PM F2 | Ya existe resumen por proyecto con estimado, real, variacion y dashboard agregado por costo de materiales. | Desviaciones de materiales sin visibilidad. |

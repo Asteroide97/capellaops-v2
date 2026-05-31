@@ -63,6 +63,7 @@ function entryToForm(entry) {
 export default function PMProjectTimeCostsTab({
   empresaId,
   members,
+  onChanged,
   project,
   projectId,
   tasks,
@@ -174,6 +175,7 @@ export default function PMProjectTimeCostsTab({
 
       closeTimeModal();
       await loadTimeCostsTab();
+      await onChanged?.();
     } catch (requestError) {
       setError(requestError.message || "No se pudo guardar el registro de horas.");
     } finally {
@@ -189,6 +191,7 @@ export default function PMProjectTimeCostsTab({
       await deactivatePmTimeEntry({ timeEntryId: entry.id, token, empresaId });
       setSuccess("Registro de horas desactivado.");
       await loadTimeCostsTab();
+      await onChanged?.();
     } catch (requestError) {
       setError(requestError.message || "No se pudo desactivar el registro de horas.");
     } finally {
@@ -204,7 +207,7 @@ export default function PMProjectTimeCostsTab({
     <div className="inventory-content-grid">
       {(error || success) && (
         <div className={`inventory-form-note ${error ? "inventory-form-note-danger" : "inventory-form-note-success"}`}>
-          <strong>{error ? "No se pudo completar la operacion" : "Operacion completada"}</strong>
+          <strong>{error ? "No se pudo completar la operación" : "Operación completada"}</strong>
           <p className="table-note">{error || success}</p>
         </div>
       )}
@@ -228,10 +231,10 @@ export default function PMProjectTimeCostsTab({
       <section className="inventory-metric-grid inventory-metric-grid-6">
         <MetricCard icon={<Clock3 size={18} strokeWidth={1.9} />} label="Horas registradas" meta="Proyecto acumulado" tone="info" value={formatNumber(costs?.horas_totales ?? 0)} />
         <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Costo horas real" meta="Labor acumulada" tone="success" value={formatMoney(costs?.costo_horas_real ?? 0)} />
-        <MetricCard icon={<TriangleAlert size={18} strokeWidth={1.9} />} label="Horas sin tarifa" meta="Requieren configuracion" tone={Number(costs?.horas_sin_tarifa ?? 0) > 0 ? "warning" : "neutral"} value={formatNumber(costs?.horas_sin_tarifa ?? 0)} />
+        <MetricCard icon={<TriangleAlert size={18} strokeWidth={1.9} />} label="Horas sin tarifa" meta="Requieren configuración" tone={Number(costs?.horas_sin_tarifa ?? 0) > 0 ? "warning" : "neutral"} value={formatNumber(costs?.horas_sin_tarifa ?? 0)} />
         <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Costo total real" meta="Materiales + horas" tone="warning" value={formatMoney(costs?.costo_total_real ?? 0)} />
         <MetricCard icon={<AlarmClockCheck size={18} strokeWidth={1.9} />} label="Presupuesto estimado" meta="Base del proyecto" tone="neutral" value={formatMoney(costs?.presupuesto_estimado ?? project?.presupuesto_estimado ?? 0)} />
-        <MetricCard icon={<TriangleAlert size={18} strokeWidth={1.9} />} label="Variacion presupuesto" meta="Presupuesto - costo real" tone={Number(costs?.variacion_presupuesto ?? 0) < 0 ? "danger" : "success"} value={formatMoney(costs?.variacion_presupuesto ?? 0)} />
+        <MetricCard icon={<TriangleAlert size={18} strokeWidth={1.9} />} label="Variación presupuesto" meta="Presupuesto - costo real" tone={Number(costs?.variacion_presupuesto ?? 0) < 0 ? "danger" : "success"} value={formatMoney(costs?.variacion_presupuesto ?? 0)} />
       </section>
 
       <DataCard
@@ -251,7 +254,7 @@ export default function PMProjectTimeCostsTab({
             title="Sin horas registradas"
           />
         ) : (
-          <DataTable columns={["Fecha", "Usuario", "Tarea", "Horas", "Descripcion", "Tarifa aplicada", "Costo total", "Fuente", "Acciones"]}>
+          <DataTable columns={["Fecha", "Usuario", "Tarea", "Horas", "Descripción", "Tarifa aplicada", "Costo total", "Fuente", "Acciones"]}>
             <tbody>
               {timeEntries.map((entry) => (
                 <tr key={entry.id}>
@@ -300,12 +303,12 @@ export default function PMProjectTimeCostsTab({
 
       <DataCard subtitle="Comparativo base de costos reales del proyecto." title="Costos del proyecto">
         <div className="inventory-metric-grid inventory-metric-grid-3">
-          <MetricCard label="Materiales estimados" meta="Planeacion" tone="info" value={formatMoney(costs?.costo_materiales_estimado ?? 0)} />
+          <MetricCard label="Materiales estimados" meta="Planeación" tone="info" value={formatMoney(costs?.costo_materiales_estimado ?? 0)} />
           <MetricCard label="Materiales reales" meta="Consumo real" tone="success" value={formatMoney(costs?.costo_materiales_real ?? 0)} />
           <MetricCard label="Horas reales" meta="Costo laboral" tone="warning" value={formatMoney(costs?.costo_horas_real ?? 0)} />
           <MetricCard label="Total real" meta="Materiales + horas" tone="danger" value={formatMoney(costs?.costo_total_real ?? 0)} />
           <MetricCard label="Presupuesto" meta="Base del proyecto" tone="neutral" value={formatMoney(costs?.presupuesto_estimado ?? project?.presupuesto_estimado ?? 0)} />
-          <MetricCard label="Variacion" meta="Presupuesto - costo real" tone={Number(costs?.variacion_presupuesto ?? 0) < 0 ? "danger" : "success"} value={formatMoney(costs?.variacion_presupuesto ?? 0)} />
+          <MetricCard label="Variación" meta="Presupuesto - costo real" tone={Number(costs?.variacion_presupuesto ?? 0) < 0 ? "danger" : "success"} value={formatMoney(costs?.variacion_presupuesto ?? 0)} />
         </div>
       </DataCard>
 
@@ -323,7 +326,7 @@ export default function PMProjectTimeCostsTab({
         onClose={closeTimeModal}
         open={timeModalOpen}
         size="large"
-        subtitle="Las horas guardan snapshot de la tarifa aplicada. Cambios posteriores de tarifa no alteran el historico."
+        subtitle="Las horas guardan snapshot de la tarifa aplicada. Cambios posteriores de tarifa no alteran el histórico."
         title={editingTimeEntry ? "Editar registro de horas" : "Registrar horas"}
       >
         <form className="inventory-modal-form" id="pm-time-entry-form" onSubmit={handleSaveTimeEntry}>
@@ -342,7 +345,7 @@ export default function PMProjectTimeCostsTab({
                 onChange={(event) => setTimeEntryForm((current) => ({ ...current, usuario_id: event.target.value }))}
                 value={timeEntryForm.usuario_id}
               >
-                <option value="">Yo / sin usuario explicito</option>
+                <option value="">Yo / sin usuario explícito</option>
                 {memberOptions.map((memberOption) => (
                   <option key={memberOption.id} value={memberOption.value}>
                     {memberOption.label}
@@ -374,7 +377,7 @@ export default function PMProjectTimeCostsTab({
                 value={timeEntryForm.horas}
               />
             </Field>
-            <Field label="Descripcion" span={2}>
+            <Field label="Descripción" span={2}>
               <textarea
                 onChange={(event) => setTimeEntryForm((current) => ({ ...current, descripcion: event.target.value }))}
                 rows={4}

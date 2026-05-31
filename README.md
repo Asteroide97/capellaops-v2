@@ -677,6 +677,29 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Portal cliente
 - Gantt
 
+## PM UX tipo Project Workspace
+
+- El detalle de proyecto en `/pm/projects/:id` ya opera como un workspace de proyecto más denso y menos fragmentado.
+- La vista principal ahora se organiza por:
+  - `Vista general`
+  - `Plan de trabajo`
+  - `Kanban`
+  - `Materiales`
+  - `Tiempo y costos`
+  - `Comentarios`
+  - `Documentos`
+- `Plan de trabajo` combina:
+  - tabla de tareas
+  - línea de tiempo tipo Gantt simple
+  - panel de detalle de tarea
+- El Gantt actual es solo visual:
+  - sin drag & drop
+  - sin dependencias
+  - sin ruta crítica
+  - sin edición directa sobre la barra
+- `Materiales` sigue usando la integración PM ↔ Inventario de Fase 2.
+- `Tiempo y costos` sigue usando el componente operativo de Fase 3 sin cambiar lógica de costos.
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.
