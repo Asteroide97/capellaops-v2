@@ -1053,7 +1053,7 @@ def fulfill_requisition(
             ]
             if part
         )
-        apply_inventory_movement(
+        movement = apply_inventory_movement(
             db,
             user=user,
             empresa=empresa,
@@ -1073,6 +1073,18 @@ def fulfill_requisition(
             proyecto_id=movement_project_id,
             proyecto_nombre_snapshot=movement_project_name,
         )
+        if movement_project_id:
+            from app.services.pm import create_project_material_consumption_from_movement
+
+            create_project_material_consumption_from_movement(
+                db,
+                empresa_id=empresa.id,
+                movement_id=movement.id,
+                project_id=movement_project_id,
+                requisition_id=requisition.id,
+                requisition_detail_id=detail.id,
+                origen="requisicion_surtida",
+            )
         detail.cantidad_surtida = decimal_or_zero(detail.cantidad_surtida) + fulfill_quantity
         applied_any = True
 

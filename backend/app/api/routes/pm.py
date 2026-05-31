@@ -16,6 +16,12 @@ from app.schemas.pm import (
     PMConfigOut,
     PMDashboardOut,
     PMProjectMembersListResponse,
+    PMProjectCostsOut,
+    PMCreateProjectRequisitionRequest,
+    PMProyectoMaterialPlanCreate,
+    PMProyectoMaterialPlanOut,
+    PMProyectoMaterialPlanUpdate,
+    PMProyectoMaterialesOut,
     PMProyectoCreate,
     PMProyectoListResponse,
     PMProyectoMiembroCreate,
@@ -33,6 +39,8 @@ from app.schemas.pm import (
 from app.services.pm import (
     PMContext,
     add_project_member,
+    add_project_material_plan,
+    create_project_material_requisition,
     create_checklist_item,
     create_project,
     create_project_comment,
@@ -40,21 +48,26 @@ from app.services.pm import (
     create_task,
     create_task_comment,
     deactivate_project,
+    deactivate_project_material_plan,
     deactivate_project_member,
     deactivate_task,
     get_pm_context,
     get_pm_dashboard,
     get_project,
+    get_project_costs,
     get_task,
+    list_project_material_plan,
     list_project_members,
     list_projects,
     list_tasks,
     serialize_pm_config,
     update_checklist_item,
     update_project,
+    update_project_material_plan,
     update_subtask,
     update_task,
 )
+from app.schemas.procurement import RequisitionResponse
 
 
 router = APIRouter(prefix="/pm", tags=["pm"])
@@ -171,6 +184,121 @@ def get_project_endpoint(
     db: Session = Depends(get_db),
 ) -> PMProyectoOut:
     return get_project(db, pm_context, project_id)
+
+
+@router.get("/projects/{project_id}/materials", response_model=PMProyectoMaterialesOut)
+def get_project_materials_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoMaterialesOut:
+    return list_project_material_plan(db, pm_context, project_id)
+
+
+@router.post("/projects/{project_id}/materials/plan", response_model=PMProyectoMaterialPlanOut, status_code=status.HTTP_201_CREATED)
+def create_project_material_plan_endpoint(
+    project_id: str,
+    payload: PMProyectoMaterialPlanCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoMaterialPlanOut:
+    return run_pm_write(
+        db,
+        "create_project_material_plan",
+        lambda: add_project_material_plan(
+            db,
+            pm_context,
+            project_id=project_id,
+            task_id=payload.tarea_id,
+            material_id=payload.material_id,
+            cantidad_planificada=payload.cantidad_planificada,
+            costo_unitario_estimado=payload.costo_unitario_estimado,
+            observaciones=payload.observaciones,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/projects/{project_id}/materials/plan/{plan_id}", response_model=PMProyectoMaterialPlanOut)
+def update_project_material_plan_endpoint(
+    project_id: str,
+    plan_id: str,
+    payload: PMProyectoMaterialPlanUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoMaterialPlanOut:
+    return run_pm_write(
+        db,
+        "update_project_material_plan",
+        lambda: update_project_material_plan(
+            db,
+            pm_context,
+            project_id=project_id,
+            plan_id=plan_id,
+            task_id=payload.tarea_id,
+            material_id=payload.material_id,
+            cantidad_planificada=payload.cantidad_planificada,
+            costo_unitario_estimado=payload.costo_unitario_estimado,
+            observaciones=payload.observaciones,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/projects/{project_id}/materials/plan/{plan_id}/deactivate", response_model=PMProyectoMaterialPlanOut)
+def deactivate_project_material_plan_endpoint(
+    project_id: str,
+    plan_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoMaterialPlanOut:
+    return run_pm_write(
+        db,
+        "deactivate_project_material_plan",
+        lambda: deactivate_project_material_plan(
+            db,
+            pm_context,
+            project_id=project_id,
+            plan_id=plan_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/projects/{project_id}/materials/create-requisition", response_model=RequisitionResponse, status_code=status.HTTP_201_CREATED)
+def create_project_material_requisition_endpoint(
+    project_id: str,
+    payload: PMCreateProjectRequisitionRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> RequisitionResponse:
+    return run_pm_write(
+        db,
+        "create_project_material_requisition",
+        lambda: create_project_material_requisition(
+            db,
+            pm_context,
+            project_id=project_id,
+            almacen_destino_id=payload.almacen_destino_id,
+            items=[{"plan_id": item.plan_id, "cantidad_solicitada": item.cantidad_solicitada} for item in payload.items],
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/costs", response_model=PMProjectCostsOut)
+def get_project_costs_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProjectCostsOut:
+    return get_project_costs(db, pm_context, project_id)
 
 
 @router.put("/projects/{project_id}", response_model=PMProyectoOut)

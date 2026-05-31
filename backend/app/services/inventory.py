@@ -917,6 +917,16 @@ def apply_bulk_inventory_movement(
             costo_unitario=item.costo_unitario,
         )
         movements.append(movement)
+        if tipo == "salida" and es_proyecto and normalize_optional_text(proyecto_id):
+            from app.services.pm import create_project_material_consumption_from_movement
+
+            create_project_material_consumption_from_movement(
+                db,
+                empresa_id=empresa.id,
+                movement_id=movement.id,
+                project_id=normalize_optional_text(proyecto_id),
+                origen="movimiento_manual",
+            )
 
     return InventoryBulkMovementResponse(
         group_reference=group_reference,

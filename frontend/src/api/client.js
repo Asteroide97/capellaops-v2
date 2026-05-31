@@ -706,6 +706,55 @@ export function getPmProject({ projectId, token, empresaId }) {
 }
 
 
+export function getPmProjectMaterials({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/materials`, { token, empresaId });
+}
+
+
+export function addPmProjectMaterialPlan({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/materials/plan`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmProjectMaterialPlan({ projectId, planId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/materials/plan/${planId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmProjectMaterialPlan({ projectId, planId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/materials/plan/${planId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmProjectMaterialRequisition({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/materials/create-requisition`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmProjectCosts({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/costs`, { token, empresaId });
+}
+
+
 export function updatePmProject({ projectId, token, empresaId, payload }) {
   return apiRequest(`/pm/projects/${projectId}`, {
     method: "PUT",

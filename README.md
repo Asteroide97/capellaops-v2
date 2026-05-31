@@ -570,6 +570,61 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Snapshots y automatizaciones
 - Vinculos comerciales con ventas, facturas y cobranza
 
+## PM Fase 2 - Materiales y consumo de inventario
+
+- El proyecto ya puede planear materiales, generar requisiciones y acumular consumo real a partir de inventario.
+- La integracion se mantiene transaccional y multiempresa por `empresa_id`.
+- El stock sigue viviendo solo en `existencias` + `movimientos_inventario`.
+- Mantenimiento queda explicitamente fuera del alcance actual de V2.
+
+### Incluye en esta fase
+
+- Plan de materiales por proyecto:
+  - `GET /pm/projects/{project_id}/materials`
+  - `POST /pm/projects/{project_id}/materials/plan`
+  - `PUT /pm/projects/{project_id}/materials/plan/{plan_id}`
+  - `POST /pm/projects/{project_id}/materials/plan/{plan_id}/deactivate`
+- Costos de materiales por proyecto:
+  - `GET /pm/projects/{project_id}/costs`
+- Requisicion desde proyecto:
+  - `POST /pm/projects/{project_id}/materials/create-requisition`
+- Resumen extendido en dashboard PM:
+  - costo estimado de materiales
+  - costo real de materiales
+  - variacion de materiales
+  - proyectos con mayor costo de materiales
+  - proyectos sobre presupuesto de materiales
+
+### Modelos principales de PM Fase 2
+
+- `PMProyectoMaterialPlan`
+- `PMProyectoMaterialConsumo`
+- `PMProyectoCostoResumen`
+
+### Reglas operativas
+
+- Los materiales planeados no modifican stock.
+- El consumo real no se captura directo desde PM; se genera desde inventario.
+- El consumo real se crea automaticamente cuando:
+  - se surte una requisicion de proyecto con `proyecto_id`
+  - se registra una salida manual de inventario por `movements/bulk` con `proyecto_id`
+- Si solo existe `proyecto_nombre_snapshot` sin `proyecto_id`, la trazabilidad queda en movimientos, pero no se crea consumo formal PM.
+- `PMProyectoMaterialConsumo` evita duplicados por `movimiento_id`.
+- Los costos reales usan snapshots del movimiento y luego actualizan `PMProyectoCostoResumen`.
+
+### Pendientes de PM Fase 2
+
+- Reservas formales de stock
+- Bloqueo de stock reservado
+- Compras directas desde PM
+- Horas y costos laborales
+- Presupuesto / APU basico
+- Portal cliente
+- Gantt
+- Aprobaciones
+- Vinculos comerciales
+- Cualquier funcionalidad de mantenimiento
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.
@@ -715,11 +770,11 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Cuentas por pagar
 - Integración fiscal
 
-## Ã“rdenes de compra operativas
+## Órdenes de compra operativas
 
-Las Ã³rdenes de compra ya siguen el flujo base:
+Las órdenes de compra ya siguen el flujo base:
 
-`RequisiciÃ³n -> AprobaciÃ³n -> OC -> EmisiÃ³n -> RecepciÃ³n parcial/total -> Entrada a inventario`
+`Requisición -> Aprobación -> OC -> Emisión -> Recepción parcial/total -> Entrada a inventario`
 
 ### Estados de OC
 
@@ -737,18 +792,18 @@ Las Ã³rdenes de compra ya siguen el flujo base:
   - se puede emitir
   - no afecta inventario
 - `emitida`
-  - permite recepciÃ³n
+  - permite recepción
   - ya no se edita libremente
   - no afecta inventario hasta recibir
 - `recibida_parcial`
   - permite recibir faltantes
-  - bloquea sobre-recepciÃ³n
+  - bloquea sobre-recepción
 - `recibida`
   - cierra la orden
-  - no permite recibir mÃ¡s
+  - no permite recibir más
 - `cancelada`
   - no permite emitir ni recibir
-  - la cancelaciÃ³n bÃ¡sica solo opera si no hubo recepciÃ³n previa
+  - la cancelación básica solo opera si no hubo recepción previa
 
 ### Endpoints operativos
 
@@ -760,38 +815,38 @@ Las Ã³rdenes de compra ya siguen el flujo base:
 - `POST /inventory/purchase-orders/{id}/cancel`
 - `POST /inventory/purchase-orders/{id}/receive`
 
-### RecepciÃ³n
+### Recepción
 
-- soporta recepciÃ³n parcial y total por renglÃ³n
-- bloquea recibir mÃ¡s de lo pendiente
+- soporta recepción parcial y total por renglón
+- bloquea recibir más de lo pendiente
 - acepta `documento_referencia` y `notas`
 - crea movimientos tipo `entrada`
 - aumenta `existencias`
-- actualiza `cantidad_recibida` por renglÃ³n
+- actualiza `cantidad_recibida` por renglón
 - cambia estatus a `recibida_parcial` o `recibida`
 
 ### Trazabilidad
 
-- la recepciÃ³n queda trazada en `movimientos_inventario`
+- la recepción queda trazada en `movimientos_inventario`
 - los movimientos guardan:
   - `referencia_tipo = purchase_order_receive`
   - `referencia_id = <order_id>`
   - `documento_referencia` cuando se captura
 - Kardex refleja estas entradas porque se construye desde movimientos reales
 
-### VÃ­nculo con requisiciones
+### Vínculo con requisiciones
 
 - `POST /inventory/requisitions/{id}/create-purchase-order`
-- solo opera con requisiciones `aprobada`
+- opera con requisiciones `aprobada` o `parcial`
 - crea la OC en `borrador`
-- copia renglones y enlaza `requisiciones.orden_compra_id`
+- copia solo cantidades pendientes y enlaza `requisiciones.orden_compra_id`
 
 ### Pendientes de ordenes de compra
 
 - PDF de OC
-- envÃ­o por email al proveedor
+- envío por email al proveedor
 - historial formal de recepciones
-- cancelaciÃ³n avanzada con reversa de inventario
+- cancelación avanzada con reversa de inventario
 - cuentas por pagar
 - adjuntos y remisiones
 

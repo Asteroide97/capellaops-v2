@@ -296,6 +296,19 @@ class PMDashboardKpis(BaseModel):
     tareas_pendientes: int = 0
     tareas_en_progreso: int = 0
     tareas_completadas: int = 0
+    costo_materiales_estimado_total: Decimal = Decimal("0")
+    costo_materiales_real_total: Decimal = Decimal("0")
+    variacion_materiales_total: Decimal = Decimal("0")
+
+
+class PMDashboardProjectCostItem(BaseModel):
+    project_id: str
+    proyecto_nombre: str
+    costo_materiales_real: Decimal = Decimal("0")
+    costo_materiales_estimado: Decimal = Decimal("0")
+    variacion_materiales: Decimal = Decimal("0")
+    presupuesto_estimado: Decimal = Decimal("0")
+    variacion_presupuesto: Decimal = Decimal("0")
 
 
 class PMDashboardOut(BaseModel):
@@ -305,7 +318,116 @@ class PMDashboardOut(BaseModel):
     proximos_vencimientos: list[PMDashboardDueItem] = Field(default_factory=list)
     proyectos_proximos: list[PMDashboardDueItem] = Field(default_factory=list)
     tareas_vencidas_items: list[PMDashboardDueItem] = Field(default_factory=list)
+    top_proyectos_por_costo_materiales: list[PMDashboardProjectCostItem] = Field(default_factory=list)
+    proyectos_sobre_presupuesto_materiales: list[PMDashboardProjectCostItem] = Field(default_factory=list)
 
 
 class PMProjectMembersListResponse(BaseModel):
     items: list[PMProyectoMiembroOut]
+
+
+class PMProyectoMaterialPlanCreate(BaseModel):
+    tarea_id: str | None = None
+    material_id: str
+    cantidad_planificada: Decimal = Field(gt=0)
+    costo_unitario_estimado: Decimal | None = Field(default=None, ge=0)
+    observaciones: str | None = None
+
+
+class PMProyectoMaterialPlanUpdate(BaseModel):
+    tarea_id: str | None = None
+    material_id: str | None = None
+    cantidad_planificada: Decimal | None = Field(default=None, gt=0)
+    costo_unitario_estimado: Decimal | None = Field(default=None, ge=0)
+    observaciones: str | None = None
+    activo: bool | None = None
+
+
+class PMProyectoMaterialPlanOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    tarea_id: str | None = None
+    tarea_titulo: str | None = None
+    material_id: str
+    material_nombre_snapshot: str
+    material_sku_snapshot: str
+    cantidad_planificada: Decimal
+    cantidad_consumida_real: Decimal = Decimal("0")
+    cantidad_pendiente: Decimal = Decimal("0")
+    unidad: str
+    costo_unitario_estimado: Decimal = Decimal("0")
+    costo_total_estimado: Decimal = Decimal("0")
+    estatus: str
+    observaciones: str | None = None
+    activo: bool
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMProyectoMaterialConsumoOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    tarea_id: str | None = None
+    tarea_titulo: str | None = None
+    material_id: str
+    material_nombre_snapshot: str
+    material_sku_snapshot: str
+    movimiento_id: str | None = None
+    requisicion_id: str | None = None
+    requisicion_detalle_id: str | None = None
+    cantidad_consumida: Decimal
+    unidad: str
+    costo_unitario_snapshot: Decimal = Decimal("0")
+    costo_total_snapshot: Decimal = Decimal("0")
+    origen: str
+    documento_referencia: str | None = None
+    notas: str | None = None
+    activo: bool
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMProyectoMaterialSummaryOut(BaseModel):
+    costo_estimado: Decimal = Decimal("0")
+    costo_real: Decimal = Decimal("0")
+    variacion: Decimal = Decimal("0")
+    porcentaje_consumido: Decimal = Decimal("0")
+    materiales_pendientes: int = 0
+    materiales_sobreconsumidos: int = 0
+    total_materiales_planeados: Decimal = Decimal("0")
+    total_materiales_consumidos: Decimal = Decimal("0")
+    planes_count: int = 0
+    consumos_count: int = 0
+
+
+class PMProyectoMaterialesOut(BaseModel):
+    summary: PMProyectoMaterialSummaryOut
+    plans: list[PMProyectoMaterialPlanOut] = Field(default_factory=list)
+    consumptions: list[PMProyectoMaterialConsumoOut] = Field(default_factory=list)
+
+
+class PMCreateProjectRequisitionItem(BaseModel):
+    plan_id: str
+    cantidad_solicitada: Decimal = Field(gt=0)
+
+
+class PMCreateProjectRequisitionRequest(BaseModel):
+    almacen_destino_id: str
+    items: list[PMCreateProjectRequisitionItem] = Field(min_length=1)
+    notas: str | None = None
+
+
+class PMProjectCostsOut(BaseModel):
+    materiales_estimado: Decimal = Decimal("0")
+    materiales_real: Decimal = Decimal("0")
+    variacion_materiales: Decimal = Decimal("0")
+    compras_estimado: Decimal = Decimal("0")
+    horas_real: Decimal = Decimal("0")
+    total_real: Decimal = Decimal("0")
+    presupuesto_estimado: Decimal = Decimal("0")
+    variacion_presupuesto: Decimal = Decimal("0")

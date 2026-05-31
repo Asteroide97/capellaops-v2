@@ -37,6 +37,7 @@ import {
   safeDisplayText,
 } from "../inventory/shared";
 import PMTaskDetailModal from "./PMTaskDetailModal";
+import PMProjectMaterialsTab from "./PMProjectMaterialsTab";
 import {
   formatPercent,
   getPriorityLabel,
@@ -557,7 +558,7 @@ export default function PMProjectDetailPage() {
       ) : null}
 
       {activeTab === "materiales" ? (
-        <PlaceholderTab note="Se conectara en PM <-> Inventario Fase 2." title="Materiales del proyecto" />
+        <PMProjectMaterialsTab empresaId={empresaId} project={project} projectId={id} token={token} />
       ) : null}
       {activeTab === "compras" ? (
         <PlaceholderTab note="Se conectara en PM <-> Compras Fase 4." title="Compras del proyecto" />

@@ -8,6 +8,7 @@ import {
   getMaterials,
   getWarehouses,
   inventoryLookupMaterial,
+  listPmProjects,
 } from "../../api/client";
 import {
   ActionButton,
@@ -120,6 +121,8 @@ export default function MovementsPage() {
   const [filters, setFilters] = useState(defaultFilters);
   const [modalState, setModalState] = useState(defaultModalState);
   const [draft, setDraft] = useState(defaultDraft);
+  const [projects, setProjects] = useState([]);
+  const [projectLookupAvailable, setProjectLookupAvailable] = useState(false);
   const [detailMovement, setDetailMovement] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
 
@@ -220,6 +223,18 @@ export default function MovementsPage() {
     ]);
     setWarehouses(warehouseResponse.items);
     setMaterials(materialResponse.items);
+    try {
+      const projectResponse = await listPmProjects({
+        token,
+        empresaId,
+        filters: { activo: true, estatus: "activo", limit: 100, offset: 0 },
+      });
+      setProjects(projectResponse.items ?? []);
+      setProjectLookupAvailable(true);
+    } catch {
+      setProjects([]);
+      setProjectLookupAvailable(false);
+    }
     return {
       warehouseItems: warehouseResponse.items,
       materialItems: materialResponse.items,
@@ -756,31 +771,62 @@ export default function MovementsPage() {
 
                   {draft.es_proyecto ? (
                     <>
-                      <Field label="ID / referencia de proyecto">
-                        <input
-                          onChange={(event) =>
-                            setDraft((current) => ({
-                              ...current,
-                              proyecto_id: event.target.value,
-                            }))
-                          }
-                          type="text"
-                          value={draft.proyecto_id}
-                        />
-                      </Field>
+                      {projectLookupAvailable ? (
+                        <>
+                          <Field label="Proyecto">
+                            <select
+                              onChange={(event) => {
+                                const project = projects.find((item) => item.id === event.target.value);
+                                setDraft((current) => ({
+                                  ...current,
+                                  proyecto_id: event.target.value,
+                                  proyecto_nombre_snapshot: project?.nombre ?? "",
+                                }));
+                              }}
+                              value={draft.proyecto_id}
+                            >
+                              <option value="">Selecciona un proyecto</option>
+                              {projects.map((project) => (
+                                <option key={project.id} value={project.id}>
+                                  {safeDisplayText(project.codigo, "PM")} · {safeDisplayText(project.nombre)}
+                                </option>
+                              ))}
+                            </select>
+                          </Field>
 
-                      <Field label="Nombre del proyecto">
-                        <input
-                          onChange={(event) =>
-                            setDraft((current) => ({
-                              ...current,
-                              proyecto_nombre_snapshot: event.target.value,
-                            }))
-                          }
-                          type="text"
-                          value={draft.proyecto_nombre_snapshot}
-                        />
-                      </Field>
+                          <Field label="Nombre del proyecto">
+                            <input readOnly type="text" value={draft.proyecto_nombre_snapshot} />
+                          </Field>
+                        </>
+                      ) : (
+                        <>
+                          <Field label="ID / referencia de proyecto">
+                            <input
+                              onChange={(event) =>
+                                setDraft((current) => ({
+                                  ...current,
+                                  proyecto_id: event.target.value,
+                                }))
+                              }
+                              type="text"
+                              value={draft.proyecto_id}
+                            />
+                          </Field>
+
+                          <Field label="Nombre del proyecto">
+                            <input
+                              onChange={(event) =>
+                                setDraft((current) => ({
+                                  ...current,
+                                  proyecto_nombre_snapshot: event.target.value,
+                                }))
+                              }
+                              type="text"
+                              value={draft.proyecto_nombre_snapshot}
+                            />
+                          </Field>
+                        </>
+                      )}
                     </>
                   ) : null}
                 </FormGrid>

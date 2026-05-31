@@ -151,13 +151,19 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | PM tareas basicas | Implementado | Alta | PM F1 | Tareas, subtareas, checklist, comentarios y actualizacion de avance ya operan dentro del proyecto. | Seguimiento operativo incompleto. |
 | PM | Kanban simple | Parcial | Media | PM F1 | El detalle de proyecto ya muestra columnas simples por estatus, sin drag and drop ni reglas avanzadas. | Visualizacion operativa menos agil. |
 | PM | Calendario / Gantt | Pendiente | Media | PM F2 | No implementado. | Planeacion temporal limitada. |
-| PM | Materiales PM | Pendiente | Alta | PM F2 | Solo existe placeholder en el detalle de proyecto; no hay reservas ni consumos reales. | Consumo sin trazabilidad por proyecto. |
-| PM | Tiempo / costos / tarifas | Pendiente | Media | PM F2 | No existe captura de horas, tarifas, costo por usuario ni tablero de costo real. | Dificil medir productividad, margen o desviaciones. |
+| PM | Materiales PM planeados | Implementado | Alta | PM F2 | Cada proyecto ya puede definir materiales planeados, cantidad, costo estimado y pendiente operativo. | Planeacion material fuera del proyecto. |
+| PM | Consumo real desde inventario | Implementado | Alta | PM F2 | Los surtidos de requisicion y las salidas manuales de inventario con `proyecto_id` ya generan consumo formal PM y actualizan costo real. | Proyecto sin costo real de materiales. |
+| PM | Costos de materiales | Implementado | Alta | PM F2 | Ya existe resumen por proyecto con estimado, real, variacion y dashboard agregado por costo de materiales. | Desviaciones de materiales sin visibilidad. |
+| PM | Crear requisicion desde proyecto | Implementado | Alta | PM F2 | La tab de materiales ya puede crear requisiciones en borrador desde faltantes del proyecto con `es_proyecto=true`. | Solicitud de materiales fuera del flujo PM. |
+| PM | Reservas de stock | Pendiente | Media | PM F3 | No existe reserva formal ni bloqueo preventivo de existencias para proyectos. | Sobreasignacion posible entre proyectos y operacion diaria. |
+| PM | Compras directas desde PM | Pendiente | Media | PM F3 | PM todavia crea requisiciones; no lanza compras directas ni recepciones propias. | Flujo PM-Compras aun fragmentado. |
+| PM | Tiempo / costos / tarifas | Pendiente | Media | PM F3 | No existe captura de horas, tarifas, costo por usuario ni tablero laboral real. | Dificil medir productividad, margen o desviaciones. |
 | PM | Documentos | Pendiente | Media | PM F2 | Solo existe placeholder de UI; no hay almacenamiento ni flujos documentales. | Informacion dispersa. |
 | PM | Portal externo | Pendiente | Baja | PM F3 | No implementado. | Experiencia limitada para clientes externos. |
 | PM | Vinculos comerciales | Pendiente | Alta | PM F3 | No existe enlace operativo real con ventas, facturas o cobranza. | Flujo comercial-operativo desconectado. |
 | PM | Automatizaciones / snapshots | Pendiente | Media | PM F3 | No implementado. | Se pierde contexto historico y trabajo repetitivo sigue manual. |
 | PM | Feature flags PM | Implementado | Media | PM F1 | Existe `EmpresaPMConfig` por empresa y el modulo PM sigue gated por plan y `can_access_module`. | Empresas sin acceso correcto o con banderas inconsistentes. |
+| PM | Mantenimiento | Excluido | Media | Fuera de alcance V2 actual | El roadmap actual de V2 no contempla mantenimiento preventivo/correctivo, garantias ni ordenes de trabajo de mantenimiento. | Riesgo de asumir alcance no planificado. |
 | QA / Admin | Paginas QA | Pendiente | Media | Admin F2 | No implementado. | Validacion mas lenta. |
 | QA / Admin | Diagnosticos | Parcial | Media | Admin F1 | Ya existen utilidades como `debug_db`, pero no portal formal. | Soporte tecnico mas manual. |
 | QA / Admin | Logs | Parcial | Alta | Admin F1 | Hay audit logs y logs tecnicos, sin observabilidad integral todavia. | Investigacion lenta de incidentes. |

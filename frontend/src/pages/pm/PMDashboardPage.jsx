@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Calendar, CheckSquare, FolderKanban, Gauge, TriangleAlert } from "lucide-react";
+import { Calendar, CheckSquare, DollarSign, FolderKanban, Gauge, TriangleAlert } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { getPmDashboard } from "../../api/client";
@@ -14,6 +14,7 @@ import {
   ResultMeta,
   StatusBadge,
   formatDate,
+  formatMoney,
   safeDisplayText,
 } from "../inventory/shared";
 import {
@@ -136,6 +137,30 @@ export default function PMDashboardPage() {
         />
       </section>
 
+      <section className="inventory-metric-grid inventory-metric-grid-3">
+        <MetricCard
+          icon={<DollarSign size={18} strokeWidth={1.9} />}
+          label="Costo estimado materiales"
+          meta="Planeacion acumulada"
+          tone="info"
+          value={formatMoney(dashboard?.kpis?.costo_materiales_estimado_total ?? 0)}
+        />
+        <MetricCard
+          icon={<DollarSign size={18} strokeWidth={1.9} />}
+          label="Costo real materiales"
+          meta="Consumo acumulado"
+          tone="success"
+          value={formatMoney(dashboard?.kpis?.costo_materiales_real_total ?? 0)}
+        />
+        <MetricCard
+          icon={<TriangleAlert size={18} strokeWidth={1.9} />}
+          label="Variacion materiales"
+          meta="Real contra estimado"
+          tone={Number(dashboard?.kpis?.variacion_materiales_total ?? 0) > 0 ? "warning" : "neutral"}
+          value={formatMoney(dashboard?.kpis?.variacion_materiales_total ?? 0)}
+        />
+      </section>
+
       <div className="inventory-content-grid inventory-content-grid-2">
         <DataCard subtitle="Distribucion de proyectos activos por estatus." title="Proyectos por estatus">
           <StatusDistribution items={dashboard?.proyectos_por_estatus ?? []} kind="project" />
@@ -241,6 +266,46 @@ export default function PMDashboardPage() {
           />
         </div>
       </DataCard>
+
+      <div className="inventory-content-grid inventory-content-grid-2">
+        <DataCard subtitle="Mayor consumo real de materiales por proyecto." title="Top proyectos por costo de materiales">
+          {(dashboard?.top_proyectos_por_costo_materiales?.length ?? 0) === 0 ? (
+            <EmptyState compact note="Aun no hay consumo de materiales acumulado." title="Sin costos registrados" />
+          ) : (
+            <DataTable columns={["Proyecto", "Real", "Estimado", "Variacion"]}>
+              <tbody>
+                {(dashboard?.top_proyectos_por_costo_materiales ?? []).map((item) => (
+                  <tr key={item.project_id}>
+                    <td>{safeDisplayText(item.proyecto_nombre)}</td>
+                    <td>{formatMoney(item.costo_materiales_real ?? 0)}</td>
+                    <td>{formatMoney(item.costo_materiales_estimado ?? 0)}</td>
+                    <td>{formatMoney(item.variacion_materiales ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </DataCard>
+
+        <DataCard subtitle="Proyectos cuyo costo de materiales ya rebasa el presupuesto cargado." title="Sobre presupuesto materiales">
+          {(dashboard?.proyectos_sobre_presupuesto_materiales?.length ?? 0) === 0 ? (
+            <EmptyState compact note="No hay proyectos sobre presupuesto por materiales." title="Sin alertas" />
+          ) : (
+            <DataTable columns={["Proyecto", "Costo real", "Presupuesto", "Variacion"]}>
+              <tbody>
+                {(dashboard?.proyectos_sobre_presupuesto_materiales ?? []).map((item) => (
+                  <tr key={item.project_id}>
+                    <td>{safeDisplayText(item.proyecto_nombre)}</td>
+                    <td>{formatMoney(item.costo_materiales_real ?? 0)}</td>
+                    <td>{formatMoney(item.presupuesto_estimado ?? 0)}</td>
+                    <td>{formatMoney(item.variacion_presupuesto ?? 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </DataTable>
+          )}
+        </DataCard>
+      </div>
     </div>
   );
 }

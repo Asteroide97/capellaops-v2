@@ -64,6 +64,14 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     members = relationship("PMProyectoMiembro", back_populates="proyecto", cascade="all, delete-orphan")
     tasks = relationship("PMTarea", back_populates="proyecto", cascade="all, delete-orphan")
     comments = relationship("PMComentario", back_populates="proyecto", cascade="all, delete-orphan")
+    material_plans = relationship("PMProyectoMaterialPlan", back_populates="proyecto", cascade="all, delete-orphan")
+    material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
+    material_cost_summary = relationship(
+        "PMProyectoCostoResumen",
+        back_populates="proyecto",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
 
 
 class PMProyectoMiembro(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -149,6 +157,8 @@ class PMTarea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     subtasks = relationship("PMSubtarea", back_populates="tarea", cascade="all, delete-orphan")
     checklist_items = relationship("PMChecklistItem", back_populates="tarea", cascade="all, delete-orphan")
     comments = relationship("PMComentario", back_populates="tarea", cascade="all, delete-orphan")
+    material_plans = relationship("PMProyectoMaterialPlan", back_populates="tarea")
+    material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="tarea")
 
 
 class PMSubtarea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -208,3 +218,128 @@ class PMComentario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     proyecto = relationship("PMProyecto", back_populates="comments")
     tarea = relationship("PMTarea", back_populates="comments")
+
+
+class PMProyectoMaterialPlan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_proyecto_material_plan"
+    __table_args__ = (
+        CheckConstraint("cantidad_planificada > 0", name="ck_pm_material_plan_qty_positive"),
+        CheckConstraint(
+            "costo_unitario_estimado IS NULL OR costo_unitario_estimado >= 0",
+            name="ck_pm_material_plan_unit_cost_non_negative",
+        ),
+        CheckConstraint(
+            "costo_total_estimado IS NULL OR costo_total_estimado >= 0",
+            name="ck_pm_material_plan_total_cost_non_negative",
+        ),
+        Index("ix_pm_material_plan_empresa_id", "empresa_id"),
+        Index("ix_pm_material_plan_proyecto_id", "proyecto_id"),
+        Index("ix_pm_material_plan_tarea_id", "tarea_id"),
+        Index("ix_pm_material_plan_material_id", "material_id"),
+        Index("ix_pm_material_plan_estatus", "estatus"),
+        Index("ix_pm_material_plan_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id"), nullable=True, index=True)
+    material_id: Mapped[str] = mapped_column(ForeignKey("materiales.id"), nullable=False, index=True)
+    material_nombre_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
+    material_sku_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
+    cantidad_planificada: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    unidad: Mapped[str] = mapped_column(String(40), nullable=False)
+    costo_unitario_estimado: Mapped[float | None] = mapped_column(
+        Numeric(18, 4), nullable=True, default=0, server_default="0"
+    )
+    costo_total_estimado: Mapped[float | None] = mapped_column(
+        Numeric(18, 2), nullable=True, default=0, server_default="0"
+    )
+    estatus: Mapped[str] = mapped_column(String(20), nullable=False, default="planeado", server_default="planeado")
+    observaciones: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="material_plans")
+    tarea = relationship("PMTarea", back_populates="material_plans")
+
+
+class PMProyectoMaterialConsumo(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_proyecto_material_consumo"
+    __table_args__ = (
+        CheckConstraint("cantidad_consumida > 0", name="ck_pm_material_consumo_qty_positive"),
+        CheckConstraint(
+            "costo_unitario_snapshot IS NULL OR costo_unitario_snapshot >= 0",
+            name="ck_pm_material_consumo_unit_cost_non_negative",
+        ),
+        CheckConstraint(
+            "costo_total_snapshot IS NULL OR costo_total_snapshot >= 0",
+            name="ck_pm_material_consumo_total_cost_non_negative",
+        ),
+        Index("ix_pm_material_consumo_empresa_id", "empresa_id"),
+        Index("ix_pm_material_consumo_proyecto_id", "proyecto_id"),
+        Index("ix_pm_material_consumo_tarea_id", "tarea_id"),
+        Index("ix_pm_material_consumo_material_id", "material_id"),
+        Index("ix_pm_material_consumo_movimiento_id", "movimiento_id"),
+        Index("ix_pm_material_consumo_requisicion_id", "requisicion_id"),
+        Index(
+            "uq_pm_material_consumo_movimiento_id",
+            "movimiento_id",
+            unique=True,
+            sqlite_where=text("movimiento_id IS NOT NULL"),
+            mssql_where=text("movimiento_id IS NOT NULL"),
+        ),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id"), nullable=True, index=True)
+    material_id: Mapped[str] = mapped_column(ForeignKey("materiales.id"), nullable=False, index=True)
+    material_nombre_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
+    material_sku_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
+    movimiento_id: Mapped[str | None] = mapped_column(ForeignKey("movimientos_inventario.id"), nullable=True, index=True)
+    requisicion_id: Mapped[str | None] = mapped_column(ForeignKey("requisiciones.id"), nullable=True, index=True)
+    requisicion_detalle_id: Mapped[str | None] = mapped_column(
+        ForeignKey("requisiciones_detalles.id"),
+        nullable=True,
+        index=True,
+    )
+    cantidad_consumida: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    unidad: Mapped[str] = mapped_column(String(40), nullable=False)
+    costo_unitario_snapshot: Mapped[float | None] = mapped_column(
+        Numeric(18, 4), nullable=True, default=0, server_default="0"
+    )
+    costo_total_snapshot: Mapped[float | None] = mapped_column(
+        Numeric(18, 2), nullable=True, default=0, server_default="0"
+    )
+    origen: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="movimiento_manual",
+        server_default="movimiento_manual",
+    )
+    documento_referencia: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="material_consumptions")
+    tarea = relationship("PMTarea", back_populates="material_consumptions")
+
+
+class PMProyectoCostoResumen(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_proyecto_costo_resumen"
+    __table_args__ = (
+        Index("ix_pm_costo_resumen_empresa_id", "empresa_id"),
+        Index("uq_pm_costo_resumen_proyecto_id", "proyecto_id", unique=True),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    costo_materiales_estimado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    costo_materiales_real: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    variacion_materiales: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    total_materiales_planeados: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    total_materiales_consumidos: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+
+    proyecto = relationship("PMProyecto", back_populates="material_cost_summary")

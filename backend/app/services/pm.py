@@ -9,11 +9,14 @@ from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import TenantContext
-from app.models import AuditLog, EmpresaUsuario, Usuario
+from app.models import AuditLog, EmpresaModulo, EmpresaUsuario, Material, MovimientoInventario, Requisicion, RequisicionDetalle, Usuario
 from app.models.pm import (
     EmpresaPMConfig,
     PMChecklistItem,
     PMComentario,
+    PMProyectoCostoResumen,
+    PMProyectoMaterialConsumo,
+    PMProyectoMaterialPlan,
     PMProyecto,
     PMProyectoMiembro,
     PMSubtarea,
@@ -24,9 +27,16 @@ from app.schemas.pm import (
     PMCommentOut,
     PMConfigOut,
     PMDashboardDueItem,
+    PMDashboardProjectCostItem,
     PMDashboardKpis,
     PMDashboardOut,
+    PMCreateProjectRequisitionRequest,
     PMProjectMembersListResponse,
+    PMProjectCostsOut,
+    PMProyectoMaterialConsumoOut,
+    PMProyectoMaterialPlanOut,
+    PMProyectoMaterialSummaryOut,
+    PMProyectoMaterialesOut,
     PMProyectoMiembroOut,
     PMProyectoOut,
     PMProyectoListResponse,
@@ -45,6 +55,8 @@ ALLOWED_TASK_STATUS = {"pendiente", "en_progreso", "en_revision", "completada", 
 ALLOWED_PRIORITY = {"baja", "media", "alta", "critica"}
 ALLOWED_MEMBER_ROLE = {"lider", "colaborador", "observador"}
 SUBTASK_STATUS = {"pendiente", "completada"}
+PM_MATERIAL_PLAN_STATUS = {"planeado", "parcial", "completo", "cancelado"}
+PM_MATERIAL_CONSUMPTION_ORIGIN = {"movimiento_manual", "requisicion_surtida", "ajuste_admin"}
 ZERO = Decimal("0")
 
 
@@ -145,7 +157,7 @@ def get_or_create_pm_config(db: Session, empresa_id: str) -> tuple[EmpresaPMConf
         empresa_id=empresa_id,
         pm_enabled=True,
         pm_tareas_enabled=True,
-        pm_materiales_enabled=False,
+        pm_materiales_enabled=True,
         pm_tiempo_enabled=False,
         pm_templates_enabled=False,
         pm_comercial_enabled=False,
@@ -188,6 +200,31 @@ def ensure_pm_tasks_enabled(pm_context: PMContext) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Las tareas de PM estan deshabilitadas para la empresa activa.",
         )
+
+
+def ensure_pm_materials_enabled(pm_context: PMContext) -> None:
+    if not pm_context.config.pm_materiales_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Los materiales de PM estan deshabilitados para la empresa activa.",
+        )
+
+
+def is_pm_materials_enabled_for_company(db: Session, empresa_id: str) -> bool:
+    module_enabled = db.scalar(
+        select(EmpresaModulo.is_enabled).where(
+            EmpresaModulo.empresa_id == empresa_id,
+            EmpresaModulo.module_name == "pm",
+        )
+    )
+    if not module_enabled:
+        return False
+
+    config, created = get_or_create_pm_config(db, empresa_id)
+    if created:
+        config.pm_materiales_enabled = True
+        db.flush()
+    return bool(config.pm_enabled and config.pm_materiales_enabled)
 
 
 def get_company_member_by_user_id(db: Session, empresa_id: str, user_id: str | None) -> Usuario | None:
@@ -1343,6 +1380,763 @@ def create_task_comment(
     return serialize_comment(comment)
 
 
+def get_project_material_plan_for_company(db: Session, empresa_id: str, plan_id: str) -> PMProyectoMaterialPlan:
+    plan = db.scalar(
+        select(PMProyectoMaterialPlan).where(
+            PMProyectoMaterialPlan.id == plan_id,
+            PMProyectoMaterialPlan.empresa_id == empresa_id,
+        )
+    )
+    if not plan:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material planeado no encontrado.")
+    return plan
+
+
+def get_project_material_consumption_for_company(
+    db: Session,
+    empresa_id: str,
+    consumption_id: str,
+) -> PMProyectoMaterialConsumo:
+    consumption = db.scalar(
+        select(PMProyectoMaterialConsumo).where(
+            PMProyectoMaterialConsumo.id == consumption_id,
+            PMProyectoMaterialConsumo.empresa_id == empresa_id,
+        )
+    )
+    if not consumption:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Consumo de material no encontrado.")
+    return consumption
+
+
+def normalize_material_consumption_origin(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Origen").lower()
+    if normalized not in PM_MATERIAL_CONSUMPTION_ORIGIN:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Origen de consumo invalido.")
+    return normalized
+
+
+def get_material_for_company_pm(db: Session, empresa_id: str, material_id: str) -> Material:
+    material = db.scalar(
+        select(Material).where(
+            Material.id == material_id,
+            Material.empresa_id == empresa_id,
+        )
+    )
+    if not material:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material no encontrado.")
+    return material
+
+
+def resolve_project_task(
+    db: Session,
+    empresa_id: str,
+    project_id: str,
+    task_id: str | None,
+) -> PMTarea | None:
+    normalized_task_id = normalize_optional_text(task_id)
+    if not normalized_task_id:
+        return None
+    task = get_task_for_company(db, empresa_id, normalized_task_id)
+    if task.proyecto_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La tarea indicada no pertenece al proyecto seleccionado.",
+        )
+    return task
+
+
+def ensure_unique_project_material_plan(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    material_id: str,
+    task_id: str | None,
+    exclude_plan_id: str | None = None,
+) -> None:
+    query = select(PMProyectoMaterialPlan.id).where(
+        PMProyectoMaterialPlan.empresa_id == empresa_id,
+        PMProyectoMaterialPlan.proyecto_id == project_id,
+        PMProyectoMaterialPlan.material_id == material_id,
+        PMProyectoMaterialPlan.activo == True,
+    )
+    if task_id:
+        query = query.where(PMProyectoMaterialPlan.tarea_id == task_id)
+    else:
+        query = query.where(PMProyectoMaterialPlan.tarea_id.is_(None))
+    if exclude_plan_id:
+        query = query.where(PMProyectoMaterialPlan.id != exclude_plan_id)
+    if db.scalar(query):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe un material planeado activo para esa combinacion de proyecto, tarea y material.",
+        )
+
+
+def calculate_material_consumed_quantity(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    material_id: str,
+    task_id: str | None,
+) -> Decimal:
+    query = select(func.coalesce(func.sum(PMProyectoMaterialConsumo.cantidad_consumida), 0)).where(
+        PMProyectoMaterialConsumo.empresa_id == empresa_id,
+        PMProyectoMaterialConsumo.proyecto_id == project_id,
+        PMProyectoMaterialConsumo.material_id == material_id,
+        PMProyectoMaterialConsumo.activo == True,
+    )
+    if task_id:
+        query = query.where(PMProyectoMaterialConsumo.tarea_id == task_id)
+    else:
+        query = query.where(PMProyectoMaterialConsumo.tarea_id.is_(None))
+    return decimal_or_zero(db.scalar(query))
+
+
+def resolve_material_plan_status(
+    *,
+    cantidad_planificada: Decimal,
+    cantidad_consumida: Decimal,
+    activo: bool,
+) -> str:
+    if not activo:
+        return "cancelado"
+    if cantidad_consumida >= cantidad_planificada and cantidad_planificada > ZERO:
+        return "completo"
+    if cantidad_consumida > ZERO:
+        return "parcial"
+    return "planeado"
+
+
+def serialize_project_material_plan(db: Session, plan: PMProyectoMaterialPlan) -> PMProyectoMaterialPlanOut:
+    consumed = calculate_material_consumed_quantity(
+        db,
+        empresa_id=plan.empresa_id,
+        project_id=plan.proyecto_id,
+        material_id=plan.material_id,
+        task_id=plan.tarea_id,
+    )
+    planned = decimal_or_zero(plan.cantidad_planificada)
+    pending = planned - consumed
+    if pending < ZERO:
+        pending = ZERO
+    task_title = None
+    if plan.tarea_id:
+        task_title = db.scalar(select(PMTarea.titulo).where(PMTarea.id == plan.tarea_id))
+    return PMProyectoMaterialPlanOut(
+        id=plan.id,
+        empresa_id=plan.empresa_id,
+        proyecto_id=plan.proyecto_id,
+        tarea_id=plan.tarea_id,
+        tarea_titulo=task_title,
+        material_id=plan.material_id,
+        material_nombre_snapshot=plan.material_nombre_snapshot,
+        material_sku_snapshot=plan.material_sku_snapshot,
+        cantidad_planificada=planned,
+        cantidad_consumida_real=consumed,
+        cantidad_pendiente=pending,
+        unidad=plan.unidad,
+        costo_unitario_estimado=decimal_or_zero(plan.costo_unitario_estimado),
+        costo_total_estimado=decimal_or_zero(plan.costo_total_estimado),
+        estatus=resolve_material_plan_status(
+            cantidad_planificada=planned,
+            cantidad_consumida=consumed,
+            activo=bool(plan.activo),
+        ),
+        observaciones=plan.observaciones,
+        activo=plan.activo,
+        created_by=plan.created_by,
+        updated_by=plan.updated_by,
+        created_at=plan.created_at,
+        updated_at=plan.updated_at,
+    )
+
+
+def serialize_project_material_consumption(
+    db: Session,
+    consumption: PMProyectoMaterialConsumo,
+) -> PMProyectoMaterialConsumoOut:
+    task_title = None
+    if consumption.tarea_id:
+        task_title = db.scalar(select(PMTarea.titulo).where(PMTarea.id == consumption.tarea_id))
+    return PMProyectoMaterialConsumoOut(
+        id=consumption.id,
+        empresa_id=consumption.empresa_id,
+        proyecto_id=consumption.proyecto_id,
+        tarea_id=consumption.tarea_id,
+        tarea_titulo=task_title,
+        material_id=consumption.material_id,
+        material_nombre_snapshot=consumption.material_nombre_snapshot,
+        material_sku_snapshot=consumption.material_sku_snapshot,
+        movimiento_id=consumption.movimiento_id,
+        requisicion_id=consumption.requisicion_id,
+        requisicion_detalle_id=consumption.requisicion_detalle_id,
+        cantidad_consumida=decimal_or_zero(consumption.cantidad_consumida),
+        unidad=consumption.unidad,
+        costo_unitario_snapshot=decimal_or_zero(consumption.costo_unitario_snapshot),
+        costo_total_snapshot=decimal_or_zero(consumption.costo_total_snapshot),
+        origen=consumption.origen,
+        documento_referencia=consumption.documento_referencia,
+        notas=consumption.notas,
+        activo=consumption.activo,
+        created_by=consumption.created_by,
+        created_at=consumption.created_at,
+        updated_at=consumption.updated_at,
+    )
+
+
+def refresh_project_material_costs(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> PMProyectoMaterialSummaryOut:
+    get_project_for_company(db, empresa_id, project_id)
+    plans = db.scalars(
+        select(PMProyectoMaterialPlan).where(
+            PMProyectoMaterialPlan.empresa_id == empresa_id,
+            PMProyectoMaterialPlan.proyecto_id == project_id,
+            PMProyectoMaterialPlan.activo == True,
+        )
+    ).all()
+    consumptions = db.scalars(
+        select(PMProyectoMaterialConsumo).where(
+            PMProyectoMaterialConsumo.empresa_id == empresa_id,
+            PMProyectoMaterialConsumo.proyecto_id == project_id,
+            PMProyectoMaterialConsumo.activo == True,
+        )
+    ).all()
+
+    total_estimated_cost = ZERO
+    total_real_cost = ZERO
+    total_planned_quantity = ZERO
+    total_consumed_quantity = ZERO
+    pending_count = 0
+    overconsumed_count = 0
+
+    for plan in plans:
+        planned_qty = decimal_or_zero(plan.cantidad_planificada)
+        consumed_qty = calculate_material_consumed_quantity(
+            db,
+            empresa_id=empresa_id,
+            project_id=project_id,
+            material_id=plan.material_id,
+            task_id=plan.tarea_id,
+        )
+        status_name = resolve_material_plan_status(
+            cantidad_planificada=planned_qty,
+            cantidad_consumida=consumed_qty,
+            activo=bool(plan.activo),
+        )
+        plan.estatus = status_name
+
+        if consumed_qty < planned_qty:
+            pending_count += 1
+        if consumed_qty > planned_qty:
+            overconsumed_count += 1
+
+        total_estimated_cost += decimal_or_zero(plan.costo_total_estimado)
+        total_planned_quantity += planned_qty
+
+    for consumption in consumptions:
+        total_real_cost += decimal_or_zero(consumption.costo_total_snapshot)
+        total_consumed_quantity += decimal_or_zero(consumption.cantidad_consumida)
+
+    summary = db.scalar(
+        select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.empresa_id == empresa_id,
+            PMProyectoCostoResumen.proyecto_id == project_id,
+        )
+    )
+    if summary is None:
+        summary = PMProyectoCostoResumen(
+            empresa_id=empresa_id,
+            proyecto_id=project_id,
+        )
+        db.add(summary)
+
+    summary.costo_materiales_estimado = total_estimated_cost
+    summary.costo_materiales_real = total_real_cost
+    summary.variacion_materiales = total_real_cost - total_estimated_cost
+    summary.total_materiales_planeados = total_planned_quantity
+    summary.total_materiales_consumidos = total_consumed_quantity
+    db.flush()
+
+    percentage_consumed = ZERO
+    if total_planned_quantity > ZERO:
+        percentage_consumed = quantize_percentage((total_consumed_quantity / total_planned_quantity) * Decimal("100"))
+
+    return PMProyectoMaterialSummaryOut(
+        costo_estimado=total_estimated_cost,
+        costo_real=total_real_cost,
+        variacion=total_real_cost - total_estimated_cost,
+        porcentaje_consumido=percentage_consumed,
+        materiales_pendientes=pending_count,
+        materiales_sobreconsumidos=overconsumed_count,
+        total_materiales_planeados=total_planned_quantity,
+        total_materiales_consumidos=total_consumed_quantity,
+        planes_count=len(plans),
+        consumos_count=len(consumptions),
+    )
+
+
+def list_project_material_plan(
+    db: Session,
+    pm_context: PMContext,
+    project_id: str,
+) -> PMProyectoMaterialesOut:
+    ensure_pm_materials_enabled(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    summary = refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    plans = db.scalars(
+        select(PMProyectoMaterialPlan)
+        .where(
+            PMProyectoMaterialPlan.empresa_id == pm_context.empresa_id,
+            PMProyectoMaterialPlan.proyecto_id == project_id,
+            PMProyectoMaterialPlan.activo == True,
+        )
+        .order_by(PMProyectoMaterialPlan.created_at.asc(), PMProyectoMaterialPlan.id.asc())
+    ).all()
+    consumptions = db.scalars(
+        select(PMProyectoMaterialConsumo)
+        .where(
+            PMProyectoMaterialConsumo.empresa_id == pm_context.empresa_id,
+            PMProyectoMaterialConsumo.proyecto_id == project_id,
+            PMProyectoMaterialConsumo.activo == True,
+        )
+        .order_by(desc(PMProyectoMaterialConsumo.created_at), desc(PMProyectoMaterialConsumo.id))
+    ).all()
+    return PMProyectoMaterialesOut(
+        summary=summary,
+        plans=[serialize_project_material_plan(db, plan) for plan in plans],
+        consumptions=[serialize_project_material_consumption(db, item) for item in consumptions],
+    )
+
+
+def add_project_material_plan(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    task_id: str | None,
+    material_id: str,
+    cantidad_planificada: Decimal,
+    costo_unitario_estimado: Decimal | None,
+    observaciones: str | None,
+    ip_address: str | None,
+) -> PMProyectoMaterialPlanOut:
+    ensure_pm_materials_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    task = resolve_project_task(db, pm_context.empresa_id, project.id, task_id)
+    material = get_material_for_company_pm(db, pm_context.empresa_id, material_id)
+    ensure_unique_project_material_plan(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project.id,
+        material_id=material.id,
+        task_id=task.id if task else None,
+    )
+    estimated_unit_cost = decimal_or_zero(
+        costo_unitario_estimado
+        if costo_unitario_estimado is not None
+        else material.costo_promedio_actual or material.costo_unitario
+    )
+    planned_quantity = decimal_or_zero(cantidad_planificada)
+    plan = PMProyectoMaterialPlan(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        tarea_id=task.id if task else None,
+        material_id=material.id,
+        material_nombre_snapshot=material.nombre,
+        material_sku_snapshot=material.sku,
+        cantidad_planificada=planned_quantity,
+        unidad=material.unidad,
+        costo_unitario_estimado=estimated_unit_cost,
+        costo_total_estimado=planned_quantity * estimated_unit_cost,
+        estatus="planeado",
+        observaciones=normalize_optional_text(observaciones),
+        activo=True,
+        created_by=pm_context.user.id,
+        updated_by=pm_context.user.id,
+    )
+    db.add(plan)
+    db.flush()
+    refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project.material_plan.create",
+            entity_name="pm_proyecto_material_plan",
+            entity_id=plan.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "material_id": material.id},
+        )
+    )
+    return serialize_project_material_plan(db, plan)
+
+
+def update_project_material_plan(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    plan_id: str,
+    task_id: str | None,
+    material_id: str | None,
+    cantidad_planificada: Decimal | None,
+    costo_unitario_estimado: Decimal | None,
+    observaciones: str | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMProyectoMaterialPlanOut:
+    ensure_pm_materials_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    plan = get_project_material_plan_for_company(db, pm_context.empresa_id, plan_id)
+    if plan.proyecto_id != project.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material planeado no encontrado.")
+
+    next_task = resolve_project_task(
+        db,
+        pm_context.empresa_id,
+        project.id,
+        task_id if task_id is not None else plan.tarea_id,
+    )
+    next_material = get_material_for_company_pm(
+        db,
+        pm_context.empresa_id,
+        material_id if material_id is not None else plan.material_id,
+    )
+    ensure_unique_project_material_plan(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project.id,
+        material_id=next_material.id,
+        task_id=next_task.id if next_task else None,
+        exclude_plan_id=plan.id,
+    )
+
+    plan.tarea_id = next_task.id if next_task else None
+    plan.material_id = next_material.id
+    plan.material_nombre_snapshot = next_material.nombre
+    plan.material_sku_snapshot = next_material.sku
+    plan.unidad = next_material.unidad
+    if cantidad_planificada is not None:
+        plan.cantidad_planificada = decimal_or_zero(cantidad_planificada)
+    if costo_unitario_estimado is not None:
+        plan.costo_unitario_estimado = decimal_or_zero(costo_unitario_estimado)
+    else:
+        plan.costo_unitario_estimado = decimal_or_zero(plan.costo_unitario_estimado or next_material.costo_promedio_actual or next_material.costo_unitario)
+    if observaciones is not None:
+        plan.observaciones = normalize_optional_text(observaciones)
+    if activo is not None:
+        plan.activo = activo
+    plan.costo_total_estimado = decimal_or_zero(plan.cantidad_planificada) * decimal_or_zero(plan.costo_unitario_estimado)
+    plan.updated_by = pm_context.user.id
+    db.flush()
+    refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project.material_plan.update",
+            entity_name="pm_proyecto_material_plan",
+            entity_id=plan.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "material_id": plan.material_id},
+        )
+    )
+    return serialize_project_material_plan(db, plan)
+
+
+def deactivate_project_material_plan(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    plan_id: str,
+    ip_address: str | None,
+) -> PMProyectoMaterialPlanOut:
+    ensure_pm_materials_enabled(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    plan = get_project_material_plan_for_company(db, pm_context.empresa_id, plan_id)
+    if plan.proyecto_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material planeado no encontrado.")
+    plan.activo = False
+    plan.estatus = "cancelado"
+    plan.updated_by = pm_context.user.id
+    db.flush()
+    refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project.material_plan.deactivate",
+            entity_name="pm_proyecto_material_plan",
+            entity_id=plan.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project_id, "material_id": plan.material_id},
+        )
+    )
+    return serialize_project_material_plan(db, plan)
+
+
+def create_project_material_consumption_from_movement(
+    db: Session,
+    *,
+    empresa_id: str,
+    movement_id: str,
+    project_id: str | None = None,
+    tarea_id: str | None = None,
+    requisition_id: str | None = None,
+    requisition_detail_id: str | None = None,
+    origen: str = "movimiento_manual",
+) -> PMProyectoMaterialConsumoOut | None:
+    if not is_pm_materials_enabled_for_company(db, empresa_id):
+        return None
+
+    movement = db.scalar(
+        select(MovimientoInventario).where(
+            MovimientoInventario.id == movement_id,
+            MovimientoInventario.empresa_id == empresa_id,
+        )
+    )
+    if movement is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Movimiento no encontrado.")
+    if movement.tipo != "salida":
+        return None
+
+    existing = db.scalar(
+        select(PMProyectoMaterialConsumo).where(
+            PMProyectoMaterialConsumo.empresa_id == empresa_id,
+            PMProyectoMaterialConsumo.movimiento_id == movement.id,
+        )
+    )
+    if existing:
+        return serialize_project_material_consumption(db, existing)
+
+    resolved_project_id = normalize_optional_text(project_id) or normalize_optional_text(movement.proyecto_id)
+    if not resolved_project_id:
+        return None
+
+    project = get_project_for_company(db, empresa_id, resolved_project_id)
+    task = resolve_project_task(db, empresa_id, project.id, tarea_id)
+    material = get_material_for_company_pm(db, empresa_id, movement.material_id)
+    normalized_origin = normalize_material_consumption_origin(origen)
+    quantity = decimal_or_zero(movement.cantidad)
+    if quantity <= ZERO:
+        return None
+    unit_cost = decimal_or_zero(
+        movement.costo_promedio_snapshot or movement.costo_unitario_snapshot or material.costo_promedio_actual or material.costo_unitario
+    )
+    consumption = PMProyectoMaterialConsumo(
+        empresa_id=empresa_id,
+        proyecto_id=project.id,
+        tarea_id=task.id if task else None,
+        material_id=material.id,
+        material_nombre_snapshot=material.nombre,
+        material_sku_snapshot=material.sku,
+        movimiento_id=movement.id,
+        requisicion_id=normalize_optional_text(requisition_id),
+        requisicion_detalle_id=normalize_optional_text(requisition_detail_id),
+        cantidad_consumida=quantity,
+        unidad=material.unidad,
+        costo_unitario_snapshot=unit_cost,
+        costo_total_snapshot=quantity * unit_cost,
+        origen=normalized_origin,
+        documento_referencia=movement.documento_referencia,
+        notas=movement.notas,
+        activo=True,
+        created_by=movement.created_by,
+    )
+    db.add(consumption)
+    db.flush()
+    refresh_project_material_costs(db, empresa_id=empresa_id, project_id=project.id)
+    db.add(
+        AuditLog(
+            empresa_id=empresa_id,
+            usuario_id=movement.created_by,
+            action="pm.project.material_consumption.create",
+            entity_name="pm_proyecto_material_consumo",
+            entity_id=consumption.id,
+            ip_address=None,
+            metadata_json={"project_id": project.id, "movement_id": movement.id, "origen": normalized_origin},
+        )
+    )
+    return serialize_project_material_consumption(db, consumption)
+
+
+def create_project_material_consumption_manual(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    task_id: str | None,
+    material_id: str,
+    cantidad_consumida: Decimal,
+    costo_unitario_snapshot: Decimal | None,
+    documento_referencia: str | None,
+    notas: str | None,
+    origen: str = "ajuste_admin",
+    ip_address: str | None,
+) -> PMProyectoMaterialConsumoOut:
+    ensure_pm_materials_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    task = resolve_project_task(db, pm_context.empresa_id, project.id, task_id)
+    material = get_material_for_company_pm(db, pm_context.empresa_id, material_id)
+    quantity = decimal_or_zero(cantidad_consumida)
+    if quantity <= ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad consumida debe ser mayor a 0.")
+    unit_cost = decimal_or_zero(
+        costo_unitario_snapshot if costo_unitario_snapshot is not None else material.costo_promedio_actual or material.costo_unitario
+    )
+    consumption = PMProyectoMaterialConsumo(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        tarea_id=task.id if task else None,
+        material_id=material.id,
+        material_nombre_snapshot=material.nombre,
+        material_sku_snapshot=material.sku,
+        movimiento_id=None,
+        requisicion_id=None,
+        requisicion_detalle_id=None,
+        cantidad_consumida=quantity,
+        unidad=material.unidad,
+        costo_unitario_snapshot=unit_cost,
+        costo_total_snapshot=quantity * unit_cost,
+        origen=normalize_material_consumption_origin(origen),
+        documento_referencia=normalize_optional_text(documento_referencia),
+        notas=normalize_optional_text(notas),
+        activo=True,
+        created_by=pm_context.user.id,
+    )
+    db.add(consumption)
+    db.flush()
+    refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project.material_consumption.manual_create",
+            entity_name="pm_proyecto_material_consumo",
+            entity_id=consumption.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "material_id": material.id},
+        )
+    )
+    return serialize_project_material_consumption(db, consumption)
+
+
+def create_project_material_requisition(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    almacen_destino_id: str,
+    items: list[dict[str, Decimal | str]],
+    notas: str | None,
+    ip_address: str | None,
+) -> object:
+    ensure_pm_materials_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    from app.services.inventory import get_warehouse_for_company
+    from app.services.procurement import add_requisition_detail, create_requisition
+
+    get_warehouse_for_company(db, pm_context.empresa_id, almacen_destino_id)
+    if not items:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Debes seleccionar al menos un material.")
+
+    selected_plans: list[PMProyectoMaterialPlan] = []
+    unique_supplier_ids: set[str] = set()
+    for item in items:
+        plan = get_project_material_plan_for_company(db, pm_context.empresa_id, str(item["plan_id"]))
+        if plan.proyecto_id != project.id or not plan.activo:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uno de los materiales planeados ya no esta disponible.")
+        selected_plans.append(plan)
+        material = get_material_for_company_pm(db, pm_context.empresa_id, plan.material_id)
+        if material.proveedor_principal_id:
+            unique_supplier_ids.add(material.proveedor_principal_id)
+
+    supplier_id = next(iter(unique_supplier_ids)) if len(unique_supplier_ids) == 1 else None
+    requisition_response = create_requisition(
+        db,
+        empresa=type("EmpresaProxy", (), {"id": pm_context.empresa_id})(),
+        user=pm_context.user,
+        folio=None,
+        notas=normalize_optional_text(notas),
+        proveedor_sugerido_id=supplier_id,
+        es_proyecto=True,
+        proyecto_id=project.id,
+        proyecto_nombre_snapshot=project.nombre,
+        ip_address=ip_address,
+    )
+    db.flush()
+
+    for item in items:
+        plan = next(plan_row for plan_row in selected_plans if plan_row.id == str(item["plan_id"]))
+        requested_qty = decimal_or_zero(item["cantidad_solicitada"])
+        if requested_qty <= ZERO:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad solicitada debe ser mayor a 0.")
+        serialized_plan = serialize_project_material_plan(db, plan)
+        if requested_qty > serialized_plan.cantidad_pendiente:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"La cantidad solicitada excede el pendiente planeado para {plan.material_nombre_snapshot}.",
+            )
+        add_requisition_detail(
+            db,
+            empresa=type("EmpresaProxy", (), {"id": pm_context.empresa_id})(),
+            user=pm_context.user,
+            requisition_id=requisition_response.id,
+            material_id=plan.material_id,
+            cantidad=requested_qty,
+            notas=f"Proyecto: {project.nombre}",
+            ip_address=ip_address,
+        )
+
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project.material_requisition.create",
+            entity_name="requisicion",
+            entity_id=requisition_response.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "almacen_destino_id": almacen_destino_id},
+        )
+    )
+    db.flush()
+    from app.services.procurement import get_requisition_for_company, serialize_requisition_response
+
+    return serialize_requisition_response(
+        db,
+        get_requisition_for_company(db, pm_context.empresa_id, requisition_response.id),
+    )
+
+
+def get_project_costs(
+    db: Session,
+    pm_context: PMContext,
+    project_id: str,
+) -> PMProjectCostsOut:
+    ensure_pm_materials_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    summary = refresh_project_material_costs(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    presupuesto = decimal_or_zero(project.presupuesto_estimado)
+    total_real = decimal_or_zero(summary.costo_real)
+    return PMProjectCostsOut(
+        materiales_estimado=decimal_or_zero(summary.costo_estimado),
+        materiales_real=total_real,
+        variacion_materiales=decimal_or_zero(summary.variacion),
+        compras_estimado=ZERO,
+        horas_real=ZERO,
+        total_real=total_real,
+        presupuesto_estimado=presupuesto,
+        variacion_presupuesto=total_real - presupuesto,
+    )
+
+
 def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
     ensure_pm_tasks_enabled(pm_context)
     today = today_utc()
@@ -1391,6 +2185,41 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             PMProyecto.activo == True,
         )
         .group_by(PMProyecto.estatus)
+    ).all()
+
+    material_estimated_total = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.costo_materiales_estimado), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    material_real_total = db.scalar(
+        select(func.coalesce(func.sum(PMProyectoCostoResumen.costo_materiales_real), 0)).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+        )
+    ) or ZERO
+    material_variation_total = decimal_or_zero(material_real_total) - decimal_or_zero(material_estimated_total)
+
+    top_material_cost_projects = db.execute(
+        select(PMProyectoCostoResumen, PMProyecto)
+        .join(PMProyecto, PMProyecto.id == PMProyectoCostoResumen.proyecto_id)
+        .where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+        )
+        .order_by(PMProyectoCostoResumen.costo_materiales_real.desc(), PMProyecto.nombre.asc())
+        .limit(5)
+    ).all()
+
+    over_budget_material_projects = db.execute(
+        select(PMProyectoCostoResumen, PMProyecto)
+        .join(PMProyecto, PMProyecto.id == PMProyectoCostoResumen.proyecto_id)
+        .where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+            PMProyectoCostoResumen.costo_materiales_real > func.coalesce(PMProyecto.presupuesto_estimado, 0),
+        )
+        .order_by((PMProyectoCostoResumen.costo_materiales_real - func.coalesce(PMProyecto.presupuesto_estimado, 0)).desc())
+        .limit(5)
     ).all()
 
     upcoming_task_rows = db.execute(
@@ -1444,6 +2273,9 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             tareas_pendientes=task_counts.get("pendiente", 0),
             tareas_en_progreso=task_counts.get("en_progreso", 0),
             tareas_completadas=task_counts.get("completada", 0),
+            costo_materiales_estimado_total=decimal_or_zero(material_estimated_total),
+            costo_materiales_real_total=decimal_or_zero(material_real_total),
+            variacion_materiales_total=decimal_or_zero(material_variation_total),
         ),
         proyectos_por_estatus=build_status_counts(project_rows, ALLOWED_PROJECT_STATUS),
         tareas_por_estatus=build_status_counts(task_rows, ALLOWED_TASK_STATUS),
@@ -1485,6 +2317,30 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
                 responsable_nombre=task.asignado_nombre_snapshot,
             )
             for task, project in overdue_task_rows
+        ],
+        top_proyectos_por_costo_materiales=[
+            PMDashboardProjectCostItem(
+                project_id=project.id,
+                proyecto_nombre=project.nombre,
+                costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
+                costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
+                variacion_materiales=decimal_or_zero(summary.variacion_materiales),
+                presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
+                variacion_presupuesto=decimal_or_zero(summary.costo_materiales_real) - decimal_or_zero(project.presupuesto_estimado),
+            )
+            for summary, project in top_material_cost_projects
+        ],
+        proyectos_sobre_presupuesto_materiales=[
+            PMDashboardProjectCostItem(
+                project_id=project.id,
+                proyecto_nombre=project.nombre,
+                costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
+                costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
+                variacion_materiales=decimal_or_zero(summary.variacion_materiales),
+                presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
+                variacion_presupuesto=decimal_or_zero(summary.costo_materiales_real) - decimal_or_zero(project.presupuesto_estimado),
+            )
+            for summary, project in over_budget_material_projects
         ],
     )
 
