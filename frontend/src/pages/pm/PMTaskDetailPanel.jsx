@@ -5,7 +5,6 @@ import {
   createPmTaskDependency,
   deactivatePmTaskDependency,
   getPmTask,
-  getPmTaskDependencies,
 } from "../../api/client";
 import {
   ActionButton,
@@ -26,6 +25,7 @@ import {
   getPriorityTone,
   getTaskStatusLabel,
   getTaskStatusTone,
+  normalizePmCopy,
 } from "./shared";
 
 
@@ -46,6 +46,8 @@ export default function PMTaskDetailPanel({
   onSelectTask,
   projectId,
   taskId,
+  taskDependencyContext,
+  taskSummary,
   tasks,
   timeEntries,
   token,
@@ -54,10 +56,18 @@ export default function PMTaskDetailPanel({
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [task, setTask] = useState(null);
-  const [dependencies, setDependencies] = useState(null);
   const [dependencyModalOpen, setDependencyModalOpen] = useState(false);
   const [dependencyForm, setDependencyForm] = useState(defaultDependencyForm);
   const [savingDependency, setSavingDependency] = useState(false);
+  const dependencies = taskDependencyContext ?? {
+    blocked: false,
+    dependencies: [],
+    blockers: [],
+    successors: [],
+    is_blocked: false,
+    title: "",
+    detail: "",
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +75,6 @@ export default function PMTaskDetailPanel({
     async function loadTask() {
       if (!taskId || !token || !empresaId) {
         setTask(null);
-        setDependencies(null);
         setError("");
         setSuccess("");
         return;
@@ -74,13 +83,13 @@ export default function PMTaskDetailPanel({
       setLoading(true);
       setError("");
       try {
-        const [taskResponse, dependencyResponse] = await Promise.all([
-          getPmTask({ taskId, token, empresaId }),
-          getPmTaskDependencies({ taskId, token, empresaId }),
-        ]);
+        const taskResponse = await getPmTask({ taskId, token, empresaId });
         if (!cancelled) {
-          setTask(taskResponse);
-          setDependencies(dependencyResponse);
+          setTask({
+            ...taskResponse,
+            is_blocked: taskSummary?.is_blocked ?? taskResponse.is_blocked,
+            blockers: taskSummary?.blockers ?? taskResponse.blockers ?? [],
+          });
         }
       } catch (requestError) {
         if (!cancelled) {
@@ -97,7 +106,23 @@ export default function PMTaskDetailPanel({
     return () => {
       cancelled = true;
     };
-  }, [taskId, token, empresaId, projectId]);
+  }, [taskId, token, empresaId, projectId, taskSummary]);
+
+  useEffect(() => {
+    if (!taskSummary?.id) {
+      return;
+    }
+    setTask((current) => {
+      if (!current || current.id !== taskSummary.id) {
+        return current;
+      }
+      return {
+        ...current,
+        is_blocked: taskSummary.is_blocked,
+        blockers: taskSummary.blockers ?? [],
+      };
+    });
+  }, [taskSummary]);
 
   const relatedTimeEntries = useMemo(
     () => (timeEntries ?? []).filter((entry) => entry.tarea_id === taskId),
@@ -112,6 +137,33 @@ export default function PMTaskDetailPanel({
   const relatedMaterialConsumptions = useMemo(
     () => (materialConsumptions ?? []).filter((consumption) => consumption.tarea_id === taskId && consumption.activo),
     [materialConsumptions, taskId],
+  );
+
+  const dependencyItems = useMemo(
+    () => dependencies?.dependencies ?? [],
+    [dependencies],
+  );
+
+  const pendingBlockers = useMemo(
+    () =>
+      dependencyItems
+        .filter((dependency) => {
+          const status = String(dependency?.resolved_status ?? dependency?.depende_de_tarea_estatus ?? "").toLowerCase();
+          return dependency?.bloqueante !== false && status !== "completada";
+        })
+        .map((dependency) => ({
+          tarea_id: dependency.depende_de_tarea_id,
+          titulo: normalizePmCopy(safeDisplayText(dependency.resolved_title ?? dependency.depende_de_tarea_titulo)),
+          estatus: String(dependency?.resolved_status ?? dependency?.depende_de_tarea_estatus ?? "").toLowerCase(),
+        })),
+    [dependencyItems],
+  );
+
+  const hasDependencies = dependencyItems.length > 0;
+  const isBlocked = Boolean(dependencies?.blocked ?? dependencies?.is_blocked ?? pendingBlockers.length > 0) || pendingBlockers.length > 0;
+  const completedDependencyTitles = useMemo(
+    () => dependencyItems.map((dependency) => normalizePmCopy(safeDisplayText(dependency.resolved_title ?? dependency.depende_de_tarea_titulo))).filter(Boolean),
+    [dependencyItems],
   );
 
   const availablePrerequisiteOptions = useMemo(
@@ -155,12 +207,12 @@ export default function PMTaskDetailPanel({
     if (!taskId || !token || !empresaId) {
       return;
     }
-    const [taskResponse, dependencyResponse] = await Promise.all([
-      getPmTask({ taskId, token, empresaId }),
-      getPmTaskDependencies({ taskId, token, empresaId }),
-    ]);
-    setTask(taskResponse);
-    setDependencies(dependencyResponse);
+    const taskResponse = await getPmTask({ taskId, token, empresaId });
+    setTask((current) => ({
+      ...taskResponse,
+      is_blocked: taskSummary?.is_blocked ?? current?.is_blocked ?? taskResponse.is_blocked,
+      blockers: taskSummary?.blockers ?? current?.blockers ?? taskResponse.blockers ?? [],
+    }));
     await onDependenciesChanged?.();
   }
 
@@ -173,7 +225,7 @@ export default function PMTaskDetailPanel({
     setError("");
     setSuccess("");
     try {
-      const response = await createPmTaskDependency({
+      await createPmTaskDependency({
         taskId,
         token,
         empresaId,
@@ -185,7 +237,6 @@ export default function PMTaskDetailPanel({
           notas: dependencyForm.notas.trim() || null,
         },
       });
-      setDependencies(response);
       setSuccess("Prerrequisito agregado.");
       closeDependencyModal();
       await refreshDependencyContext();
@@ -201,8 +252,7 @@ export default function PMTaskDetailPanel({
     setError("");
     setSuccess("");
     try {
-      const response = await deactivatePmTaskDependency({ dependencyId, token, empresaId });
-      setDependencies(response);
+      await deactivatePmTaskDependency({ dependencyId, token, empresaId });
       setSuccess("Prerrequisito desactivado.");
       await refreshDependencyContext();
     } catch (requestError) {
@@ -251,11 +301,11 @@ export default function PMTaskDetailPanel({
           <div className="pm-task-detail-stack">
             <div className="pm-task-detail-header">
               <div className="pm-task-detail-title">
-                <strong>{safeDisplayText(task.titulo)}</strong>
+                <strong>{normalizePmCopy(safeDisplayText(task.titulo))}</strong>
                 <div className="pm-inline-metadata">
                   <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                   <StatusBadge tone={getPriorityTone(task.prioridad)}>{getPriorityLabel(task.prioridad)}</StatusBadge>
-                  {task.is_blocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
+                  {isBlocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
                 </div>
               </div>
               <div className="pm-task-detail-metrics">
@@ -274,12 +324,19 @@ export default function PMTaskDetailPanel({
               </div>
             </div>
 
-            {dependencies?.is_blocked ? (
+            {hasDependencies && pendingBlockers.length > 0 ? (
               <div className="inventory-form-note inventory-form-note-warning">
                 <strong>Tarea bloqueada</strong>
                 <p className="table-note">
-                  {safeDisplayText(task.titulo)} depende de{" "}
-                  {dependencies.blockers.map((item) => safeDisplayText(item.titulo)).join(", ")}. Completa esos prerrequisitos para desbloquearla.
+                  {normalizePmCopy(safeDisplayText(task.titulo))} depende de{" "}
+                  {pendingBlockers.map((item) => item.titulo).join(", ")}. Completa esos prerrequisitos para desbloquearla.
+                </p>
+              </div>
+            ) : hasDependencies ? (
+              <div className="inventory-form-note inventory-form-note-success">
+                <strong>Prerrequisitos completados</strong>
+                <p className="table-note">
+                  {completedDependencyTitles.join(", ")}
                 </p>
               </div>
             ) : null}
@@ -317,13 +374,13 @@ export default function PMTaskDetailPanel({
                     Editar prerrequisitos
                   </ActionButton>
                 </div>
-                {(dependencies?.dependencies?.length ?? 0) ? (
+                {hasDependencies ? (
                   <div className="pm-detail-list">
-                    {dependencies.dependencies.map((dependency) => (
+                    {dependencyItems.map((dependency) => (
                       <div className="pm-detail-list-item" key={dependency.id}>
                         <div>
-                          <strong>{safeDisplayText(dependency.depende_de_tarea_titulo)}</strong>
-                          <span>Debe completarse antes · {safeDisplayText(getTaskStatusLabel(dependency.depende_de_tarea_estatus), dependency.depende_de_tarea_estatus)}</span>
+                          <strong>{normalizePmCopy(safeDisplayText(dependency.resolved_title ?? dependency.depende_de_tarea_titulo))}</strong>
+                          <span>Debe completarse antes · {safeDisplayText(getTaskStatusLabel(dependency.resolved_status ?? dependency.depende_de_tarea_estatus), dependency.resolved_status ?? dependency.depende_de_tarea_estatus)}</span>
                         </div>
                         <div className="table-actions">
                           <ActionButton onClick={() => onSelectTask?.(dependency.depende_de_tarea_id)} size="sm" type="button">
@@ -351,7 +408,7 @@ export default function PMTaskDetailPanel({
                     {dependencies.successors.map((successor) => (
                       <div className="pm-detail-list-item" key={successor.tarea_id}>
                         <div>
-                          <strong>{safeDisplayText(successor.titulo)}</strong>
+                          <strong>{normalizePmCopy(safeDisplayText(successor.titulo))}</strong>
                           <span>{safeDisplayText(getTaskStatusLabel(successor.estatus), successor.estatus)}</span>
                         </div>
                         <ActionButton onClick={() => onSelectTask?.(successor.tarea_id)} size="sm" type="button">

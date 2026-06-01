@@ -17,6 +17,7 @@ import {
   getTaskStatusLabel,
   getTaskStatusTone,
   isTaskOverdue,
+  normalizePmCopy,
 } from "./shared";
 
 
@@ -41,13 +42,12 @@ function getDurationLabel(task) {
 
 
 function getDependencyLabel(task) {
-  const blockers = task?.blockers ?? [];
-  if (blockers.length > 0) {
-    const firstTitle = safeDisplayText(blockers[0]?.titulo, "otra tarea");
-    if (blockers.length === 1) {
-      return `Depende de ${firstTitle}`;
-    }
-    return `Depende de ${firstTitle} y ${blockers.length - 1} más`;
+  const dependencyState = task?.dependency_state;
+  if (dependencyState?.blocked && dependencyState?.detail) {
+    return dependencyState.detail;
+  }
+  if (dependencyState?.title === "Prerrequisitos completados" && dependencyState?.detail) {
+    return `Prerrequisitos completados: ${dependencyState.detail}`;
   }
 
   if (task?.dependencies_count > 0) {
@@ -78,6 +78,7 @@ export default function PMProjectWorkPlanView({
   projectId,
   refreshing = false,
   selectedTaskId,
+  taskDependencyContextMap,
   tasks,
   timeEntries,
   token,
@@ -170,7 +171,8 @@ export default function PMProjectWorkPlanView({
             {tasks.map((task, index) => {
               const taskMetrics = taskTimeMetrics[task.id] ?? { horas: 0, costo: 0 };
               const selected = selectedTaskId === task.id;
-              const blocked = Boolean(task.is_blocked);
+              const dependencyState = taskDependencyContextMap?.[task.id] ?? task.dependency_state ?? null;
+              const blocked = Boolean(dependencyState?.blocked ?? task.is_blocked);
               const blockerTitle = getFirstBlockerTitle(task);
               return (
                 <div
@@ -188,7 +190,7 @@ export default function PMProjectWorkPlanView({
                 >
                   <span>{task.orden > 0 ? task.orden : index + 1}</span>
                   <span>
-                    <div className="inventory-cell-main">{safeDisplayText(task.titulo)}</div>
+                    <div className="inventory-cell-main">{normalizePmCopy(safeDisplayText(task.titulo))}</div>
                     <div className="inventory-cell-sub">
                       {safeDisplayText(task.descripcion, "Sin descripción")} · {formatNumber(taskMetrics.horas)} h reales · {formatMoney(taskMetrics.costo)}
                     </div>
@@ -214,6 +216,8 @@ export default function PMProjectWorkPlanView({
                           <Lock size={12} strokeWidth={1.9} />
                           Bloqueada
                         </StatusBadge>
+                      ) : dependencyState?.title === "Prerrequisitos completados" ? (
+                        <StatusBadge tone="success">Prerrequisitos completados</StatusBadge>
                       ) : null}
                     </div>
                   </span>
@@ -290,6 +294,8 @@ export default function PMProjectWorkPlanView({
         onSelectTask={onSelectTask}
         projectId={projectId}
         taskId={selectedTaskId}
+        taskDependencyContext={selectedTaskId ? taskDependencyContextMap?.[selectedTaskId] ?? null : null}
+        taskSummary={tasks.find((task) => task.id === selectedTaskId) ?? null}
         tasks={tasks}
         timeEntries={timeEntries}
         token={token}

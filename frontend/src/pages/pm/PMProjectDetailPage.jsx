@@ -140,14 +140,33 @@ function formatTaskTitleList(items) {
 }
 
 
-function getTaskDependencyState(task, dependencies = []) {
-  const blocked = Boolean(task?.is_blocked || Number(task?.blockers_count ?? 0) > 0);
-  const blockerSummary = formatTaskTitleList(getTaskBlockerTitles(task));
-  const dependencyTitles = formatTaskTitleList(
-    (dependencies ?? [])
-      .map((dependency) => safeDisplayText(dependency?.depende_de_tarea_titulo, "").trim())
-      .filter(Boolean),
+function getResolvedDependencyItems(dependencies = [], taskMap = {}) {
+  return (dependencies ?? [])
+    .filter((dependency) => dependency?.activo !== false)
+    .map((dependency) => {
+      const prerequisiteTask = taskMap[dependency.depende_de_tarea_id];
+      const title = normalizePmCopy(
+        safeDisplayText(prerequisiteTask?.titulo ?? dependency?.depende_de_tarea_titulo, "").trim(),
+      );
+      const status = String(prerequisiteTask?.estatus ?? dependency?.depende_de_tarea_estatus ?? "").toLowerCase();
+      return {
+        ...dependency,
+        resolved_title: title,
+        resolved_status: status,
+      };
+    })
+    .filter((dependency) => dependency.resolved_title);
+}
+
+
+function getTaskDependencyState(task, dependencies = [], taskMap = {}) {
+  const resolvedDependencies = getResolvedDependencyItems(dependencies, taskMap);
+  const pendingDependencies = resolvedDependencies.filter(
+    (dependency) => dependency.bloqueante !== false && dependency.resolved_status !== "completada",
   );
+  const blocked = pendingDependencies.length > 0;
+  const blockerSummary = formatTaskTitleList(pendingDependencies.map((dependency) => dependency.resolved_title));
+  const dependencyTitles = formatTaskTitleList(resolvedDependencies.map((dependency) => dependency.resolved_title));
 
   if (blocked) {
     return {
@@ -156,6 +175,12 @@ function getTaskDependencyState(task, dependencies = []) {
       badgeTone: "warning",
       title: "Bloqueada",
       detail: blockerSummary ? `Depende de: ${blockerSummary}` : "Tiene prerrequisitos pendientes.",
+      dependencies: resolvedDependencies,
+      blockers: pendingDependencies.map((dependency) => ({
+        tarea_id: dependency.depende_de_tarea_id,
+        titulo: dependency.resolved_title,
+        estatus: dependency.resolved_status,
+      })),
     };
   }
 
@@ -166,6 +191,8 @@ function getTaskDependencyState(task, dependencies = []) {
       badgeTone: "success",
       title: "Prerrequisitos completados",
       detail: dependencyTitles,
+      dependencies: resolvedDependencies,
+      blockers: [],
     };
   }
 
@@ -175,6 +202,8 @@ function getTaskDependencyState(task, dependencies = []) {
     badgeTone: "success",
     title: "",
     detail: "",
+    dependencies: [],
+    blockers: [],
   };
 }
 
@@ -253,25 +282,14 @@ export default function PMProjectDetailPage() {
     loadProjectBundle();
   }, [token, empresaId, id]);
 
-  const activeMembers = useMemo(() => members.filter((item) => item.activo), [members]);
-  const activeTasks = useMemo(
-    () => tasks.filter((task) => task.activo && !["completada", "cancelada"].includes(String(task.estatus || "").toLowerCase())),
+  const taskMap = useMemo(
+    () =>
+      tasks.reduce((accumulator, task) => {
+        accumulator[task.id] = task;
+        return accumulator;
+      }, {}),
     [tasks],
   );
-  const overdueTasks = useMemo(() => tasks.filter((task) => isTaskOverdue(task)), [tasks]);
-  const tasksByStatus = useMemo(() => {
-    const groups = {
-      pendiente: [],
-      en_progreso: [],
-      en_revision: [],
-      completada: [],
-    };
-    tasks.forEach((task) => {
-      const key = groups[task.estatus] ? task.estatus : "pendiente";
-      groups[key].push(task);
-    });
-    return groups;
-  }, [tasks]);
   const taskDependenciesMap = useMemo(
     () =>
       (projectDependencies ?? []).reduce((accumulator, dependency) => {
@@ -285,17 +303,98 @@ export default function PMProjectDetailPage() {
       }, {}),
     [projectDependencies],
   );
+  const taskSuccessorsMap = useMemo(
+    () =>
+      (projectDependencies ?? []).reduce((accumulator, dependency) => {
+        if (!dependency?.depende_de_tarea_id || dependency.activo === false) {
+          return accumulator;
+        }
+        const bucket = accumulator[dependency.depende_de_tarea_id] ?? [];
+        bucket.push(dependency);
+        accumulator[dependency.depende_de_tarea_id] = bucket;
+        return accumulator;
+      }, {}),
+    [projectDependencies],
+  );
+  const taskDependencyContextMap = useMemo(
+    () =>
+      tasks.reduce((accumulator, task) => {
+        const dependencyState = getTaskDependencyState(task, taskDependenciesMap[task.id] ?? [], taskMap);
+        const successors = (taskSuccessorsMap[task.id] ?? [])
+          .map((dependency) => {
+            const successorTask = taskMap[dependency.tarea_id];
+            const title = normalizePmCopy(
+              safeDisplayText(successorTask?.titulo ?? dependency?.tarea_titulo, "").trim(),
+            );
+            if (!title) {
+              return null;
+            }
+            return {
+              tarea_id: dependency.tarea_id,
+              titulo: title,
+              estatus: String(successorTask?.estatus ?? dependency?.tarea_estatus ?? "").toLowerCase(),
+            };
+          })
+          .filter(Boolean);
+        accumulator[task.id] = {
+          ...dependencyState,
+          dependencies_count: dependencyState.dependencies.length,
+          blockers_count: dependencyState.blockers.length,
+          successors,
+          successors_count: successors.length,
+        };
+        return accumulator;
+      }, {}),
+    [tasks, taskDependenciesMap, taskSuccessorsMap, taskMap],
+  );
+  const resolvedTasks = useMemo(
+    () =>
+      tasks.map((task) => {
+        const dependencyContext = taskDependencyContextMap[task.id] ?? getTaskDependencyState(task, [], taskMap);
+        return {
+          ...task,
+          is_blocked: dependencyContext.blocked,
+          blockers_count: dependencyContext.blockers.length,
+          dependencies_count: dependencyContext.dependencies.length,
+          successors_count: dependencyContext.successors_count ?? 0,
+          blockers: dependencyContext.blockers,
+          dependencies: dependencyContext.dependencies,
+          successors: dependencyContext.successors ?? [],
+          dependency_state: dependencyContext,
+        };
+      }),
+    [tasks, taskDependencyContextMap, taskMap],
+  );
+  const activeMembers = useMemo(() => members.filter((item) => item.activo), [members]);
+  const activeTasks = useMemo(
+    () => resolvedTasks.filter((task) => task.activo && !["completada", "cancelada"].includes(String(task.estatus || "").toLowerCase())),
+    [resolvedTasks],
+  );
+  const overdueTasks = useMemo(() => resolvedTasks.filter((task) => isTaskOverdue(task)), [resolvedTasks]);
+  const tasksByStatus = useMemo(() => {
+    const groups = {
+      pendiente: [],
+      en_progreso: [],
+      en_revision: [],
+      completada: [],
+    };
+    resolvedTasks.forEach((task) => {
+      const key = groups[task.estatus] ? task.estatus : "pendiente";
+      groups[key].push(task);
+    });
+    return groups;
+  }, [resolvedTasks]);
 
   const upcomingTasks = useMemo(
     () =>
-      [...tasks]
+      [...resolvedTasks]
         .filter((task) => task.activo && !["completada", "cancelada"].includes(task.estatus) && task.fecha_vencimiento)
         .sort((left, right) => new Date(left.fecha_vencimiento) - new Date(right.fecha_vencimiento))
         .slice(0, 5),
-    [tasks],
+    [resolvedTasks],
   );
 
-  const recentTasks = useMemo(() => sortByDateDesc(tasks, "updated_at").slice(0, 5), [tasks]);
+  const recentTasks = useMemo(() => sortByDateDesc(resolvedTasks, "updated_at").slice(0, 5), [resolvedTasks]);
   const recentTimeEntries = useMemo(() => sortByDateDesc(projectTimeEntries, "created_at").slice(0, 5), [projectTimeEntries]);
   const recentMaterialConsumptions = useMemo(
     () => sortByDateDesc(projectMaterials?.consumptions ?? [], "created_at").slice(0, 5),
@@ -801,7 +900,8 @@ export default function PMProjectDetailPage() {
           projectId={id}
           refreshing={refreshing}
           selectedTaskId={selectedTaskId}
-          tasks={tasks}
+          taskDependencyContextMap={taskDependencyContextMap}
+          tasks={resolvedTasks}
           timeEntries={projectTimeEntries}
           token={token}
         />
@@ -987,7 +1087,7 @@ export default function PMProjectDetailPage() {
           onChanged={() => loadProjectBundle({ background: true })}
           project={project}
           projectId={id}
-          tasks={tasks}
+          tasks={resolvedTasks}
           token={token}
         />
       ) : null}
@@ -1095,7 +1195,7 @@ export default function PMProjectDetailPage() {
         open={taskModalOpen}
         projectId={id}
         taskId={selectedTaskModalId}
-        tasks={tasks}
+        tasks={resolvedTasks}
         token={token}
       />
     </div>

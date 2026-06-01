@@ -1,7 +1,7 @@
 import { CalendarRange, Link2, Lock } from "lucide-react";
 
 import { DataCard, EmptyState, StatusBadge, formatDate, safeDisplayText } from "../inventory/shared";
-import { formatPercent, getTaskStatusLabel, getTaskStatusTone } from "./shared";
+import { formatPercent, getTaskStatusLabel, getTaskStatusTone, normalizePmCopy } from "./shared";
 
 
 function startOfDay(value) {
@@ -112,15 +112,14 @@ function getProgressWidth(task) {
 
 
 function getDependencyCopy(task) {
-  const blockers = task?.blockers ?? [];
-  if (blockers.length === 0) {
-    return "";
+  const dependencyState = task?.dependency_state;
+  if (dependencyState?.blocked && dependencyState?.detail) {
+    return dependencyState.detail;
   }
-  const firstTitle = safeDisplayText(blockers[0]?.titulo, "otra tarea");
-  if (blockers.length === 1) {
-    return `Depende de: ${firstTitle}`;
+  if (dependencyState?.title === "Prerrequisitos completados" && dependencyState?.detail) {
+    return `Prerrequisitos completados: ${dependencyState.detail}`;
   }
-  return `Depende de: ${firstTitle} y ${blockers.length - 1} más`;
+  return "";
 }
 
 
@@ -175,6 +174,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
               const barStyle = buildBarStyle(task, timeline);
               const isSelected = selectedTaskId === task.id;
               const dependencyCopy = getDependencyCopy(task);
+              const dependencyState = task?.dependency_state;
               return (
                 <button
                   className={`pm-gantt-row ${isSelected ? "is-selected" : ""} ${task.is_blocked ? "is-blocked" : ""}`}
@@ -184,7 +184,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                 >
                   <div className="pm-gantt-row-head">
                     <div className="pm-gantt-row-title">
-                      <strong>{safeDisplayText(task.titulo)}</strong>
+                      <strong>{normalizePmCopy(safeDisplayText(task.titulo))}</strong>
                       <div className="pm-inline-metadata">
                         <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                         <span className="table-note">{getTaskDateCopy(task)}</span>
@@ -194,6 +194,8 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                             <Lock size={12} strokeWidth={1.9} />
                             Bloqueada
                           </span>
+                        ) : dependencyState?.title === "Prerrequisitos completados" ? (
+                          <span className="status-badge success">Prerrequisitos completados</span>
                         ) : null}
                       </div>
                     </div>
