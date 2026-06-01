@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckSquare, ListChecks, MessageSquare } from "lucide-react";
+import { CheckSquare, Link2, ListChecks, Lock, MessageSquare } from "lucide-react";
 
 import {
   createPmChecklistItem,
   createPmSubtask,
   createPmTask,
   createPmTaskComment,
+  createPmTaskDependency,
+  deactivatePmTaskDependency,
   getPmTask,
+  getPmTaskDependencies,
   updatePmChecklistItem,
   updatePmSubtask,
   updatePmTask,
@@ -18,7 +21,6 @@ import {
   Field,
   FormGrid,
   ModalShell,
-  SectionTitle,
   StatusBadge,
   formatDate,
   safeDisplayText,
@@ -51,6 +53,26 @@ const defaultTaskForm = {
   requiere_venta_pos: false,
   requiere_factura: false,
 };
+
+const emptyDependencyContext = {
+  dependencies: [],
+  blockers: [],
+  successors: [],
+  is_blocked: false,
+};
+
+const advancedStatuses = new Set(["en_progreso", "en_revision", "completada"]);
+
+
+function getErrorMessage(error, fallback) {
+  if (typeof error?.message === "string" && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  return fallback;
+}
 
 
 function taskToForm(task) {
@@ -111,6 +133,7 @@ export default function PMTaskDetailModal({
   open,
   projectId,
   taskId,
+  tasks = [],
   token,
 }) {
   const [task, setTask] = useState(null);
@@ -122,8 +145,56 @@ export default function PMTaskDetailModal({
   const [newSubtask, setNewSubtask] = useState("");
   const [newChecklistItem, setNewChecklistItem] = useState("");
   const [newComment, setNewComment] = useState("");
+  const [dependencyContext, setDependencyContext] = useState(emptyDependencyContext);
+  const [selectedPrerequisiteIds, setSelectedPrerequisiteIds] = useState([]);
 
   const currentTaskId = task?.id ?? taskId ?? null;
+
+  const memberSelectOptions = useMemo(
+    () =>
+      (memberOptions ?? []).filter((item) => item.activo).map((item) => ({
+        value: item.usuario_id || "",
+        label: item.nombre_snapshot
+          ? `${item.nombre_snapshot}${item.email ? ` - ${item.email}` : ""}`
+          : item.email || "Miembro",
+      })),
+    [memberOptions],
+  );
+
+  const availablePrerequisiteOptions = useMemo(
+    () =>
+      (tasks ?? [])
+        .filter((candidate) => candidate.id !== currentTaskId && candidate.activo)
+        .map((candidate) => ({
+          ...candidate,
+          statusLabel: getTaskStatusLabel(candidate.estatus),
+        })),
+    [tasks, currentTaskId],
+  );
+
+  function syncSelectedPrerequisites(nextDependencyContext) {
+    setSelectedPrerequisiteIds(
+      (nextDependencyContext?.dependencies ?? [])
+        .filter((dependency) => dependency.activo !== false)
+        .map((dependency) => dependency.depende_de_tarea_id),
+    );
+  }
+
+  async function refreshTaskContext(nextTaskId) {
+    if (!nextTaskId) {
+      return null;
+    }
+
+    const [taskResponse, dependencyResponse] = await Promise.all([
+      getPmTask({ taskId: nextTaskId, token, empresaId }),
+      getPmTaskDependencies({ taskId: nextTaskId, token, empresaId }),
+    ]);
+    setTask(taskResponse);
+    setForm(taskToForm(taskResponse));
+    setDependencyContext(dependencyResponse ?? emptyDependencyContext);
+    syncSelectedPrerequisites(dependencyResponse ?? emptyDependencyContext);
+    return taskResponse;
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -142,19 +213,26 @@ export default function PMTaskDetailModal({
       if (!taskId) {
         setTask(null);
         setForm(defaultTaskForm);
+        setDependencyContext(emptyDependencyContext);
+        setSelectedPrerequisiteIds([]);
         return;
       }
 
       setLoading(true);
       try {
-        const response = await getPmTask({ taskId, token, empresaId });
+        const [taskResponse, dependencyResponse] = await Promise.all([
+          getPmTask({ taskId, token, empresaId }),
+          getPmTaskDependencies({ taskId, token, empresaId }),
+        ]);
         if (!cancelled) {
-          setTask(response);
-          setForm(taskToForm(response));
+          setTask(taskResponse);
+          setForm(taskToForm(taskResponse));
+          setDependencyContext(dependencyResponse ?? emptyDependencyContext);
+          syncSelectedPrerequisites(dependencyResponse ?? emptyDependencyContext);
         }
       } catch (requestError) {
         if (!cancelled) {
-          setError(requestError.message || "No se pudo cargar la tarea.");
+          setError(getErrorMessage(requestError, "No se pudo cargar la tarea."));
         }
       } finally {
         if (!cancelled) {
@@ -170,30 +248,71 @@ export default function PMTaskDetailModal({
     };
   }, [open, taskId, token, empresaId]);
 
-  const memberSelectOptions = useMemo(
-    () =>
-      (memberOptions ?? []).filter((item) => item.activo).map((item) => ({
-        value: item.usuario_id || "",
-        label: item.nombre_snapshot
-          ? `${item.nombre_snapshot}${item.email ? ` - ${item.email}` : ""}`
-          : item.email || "Miembro",
-      })),
-    [memberOptions],
-  );
+  function togglePrerequisite(taskOptionId) {
+    setSelectedPrerequisiteIds((current) => (
+      current.includes(taskOptionId)
+        ? current.filter((item) => item !== taskOptionId)
+        : [...current, taskOptionId]
+    ));
+  }
 
-  async function reloadTask(nextTaskId = currentTaskId) {
+  function getPendingSelectedPrerequisites() {
+    const selectedIds = new Set(selectedPrerequisiteIds);
+    return availablePrerequisiteOptions.filter((candidate) => (
+      selectedIds.has(candidate.id) && String(candidate.estatus ?? "").toLowerCase() !== "completada"
+    ));
+  }
+
+  async function syncTaskDependencies(nextTaskId) {
     if (!nextTaskId) {
       return;
     }
 
-    const response = await getPmTask({ taskId: nextTaskId, token, empresaId });
-    setTask(response);
-    setForm(taskToForm(response));
-    onSaved?.(response);
+    const activeDependencies = (dependencyContext?.dependencies ?? []).filter((dependency) => dependency.activo !== false);
+    const selectedIds = new Set(selectedPrerequisiteIds);
+    const existingIds = new Set(activeDependencies.map((dependency) => dependency.depende_de_tarea_id));
+    const dependenciesToCreate = [...selectedIds].filter((dependencyTaskId) => !existingIds.has(dependencyTaskId));
+    const dependenciesToRemove = activeDependencies.filter((dependency) => !selectedIds.has(dependency.depende_de_tarea_id));
+
+    for (const dependencyTaskId of dependenciesToCreate) {
+      await createPmTaskDependency({
+        taskId: nextTaskId,
+        token,
+        empresaId,
+        payload: {
+          depende_de_tarea_id: dependencyTaskId,
+          tipo_dependencia: "finish_to_start",
+          lag_dias: 0,
+          bloqueante: true,
+          notas: null,
+        },
+      });
+    }
+
+    for (const dependency of dependenciesToRemove) {
+      await deactivatePmTaskDependency({ dependencyId: dependency.id, token, empresaId });
+    }
+
+    const dependencyResponse = await getPmTaskDependencies({ taskId: nextTaskId, token, empresaId });
+    setDependencyContext(dependencyResponse ?? emptyDependencyContext);
+    syncSelectedPrerequisites(dependencyResponse ?? emptyDependencyContext);
+  }
+
+  async function reloadTask(nextTaskId = currentTaskId) {
+    const nextTask = await refreshTaskContext(nextTaskId);
+    if (nextTask) {
+      onSaved?.(nextTask);
+    }
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
+    const pendingPrerequisites = getPendingSelectedPrerequisites();
+    if (advancedStatuses.has(form.estatus) && pendingPrerequisites.length > 0) {
+      setError(`No puedes avanzar esta tarea porque depende de ${pendingPrerequisites.map((item) => safeDisplayText(item.titulo)).join(", ")}.`);
+      return;
+    }
+
     setSaving(true);
     setError("");
     setSuccess("");
@@ -203,12 +322,26 @@ export default function PMTaskDetailModal({
       const response = currentTaskId
         ? await updatePmTask({ taskId: currentTaskId, token, empresaId, payload })
         : await createPmTask({ projectId, token, empresaId, payload });
-      setTask(response);
-      setForm(taskToForm(response));
-      setSuccess(currentTaskId ? "Tarea actualizada." : "Tarea creada.");
-      onSaved?.(response);
+      const nextTaskId = response?.id ?? currentTaskId;
+      if (response?.id) {
+        setTask(response);
+        setForm(taskToForm(response));
+      }
+      await syncTaskDependencies(nextTaskId);
+      const nextTask = await refreshTaskContext(nextTaskId);
+      const hasSelectedPrerequisites = selectedPrerequisiteIds.length > 0;
+      setSuccess(
+        currentTaskId
+          ? hasSelectedPrerequisites
+            ? "Tarea y prerrequisitos actualizados."
+            : "Tarea actualizada."
+          : hasSelectedPrerequisites
+            ? "Tarea creada con prerrequisitos."
+            : "Tarea creada.",
+      );
+      onSaved?.(nextTask ?? response);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar la tarea.");
+      setError(getErrorMessage(requestError, "No se pudo guardar la tarea."));
     } finally {
       setSaving(false);
     }
@@ -235,7 +368,7 @@ export default function PMTaskDetailModal({
       setNewSubtask("");
       await reloadTask(currentTaskId);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo agregar la subtarea.");
+      setError(getErrorMessage(requestError, "No se pudo agregar la subtarea."));
     } finally {
       setSaving(false);
     }
@@ -255,7 +388,7 @@ export default function PMTaskDetailModal({
       });
       await reloadTask(currentTaskId);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo actualizar la subtarea.");
+      setError(getErrorMessage(requestError, "No se pudo actualizar la subtarea."));
     } finally {
       setSaving(false);
     }
@@ -282,7 +415,7 @@ export default function PMTaskDetailModal({
       setNewChecklistItem("");
       await reloadTask(currentTaskId);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo agregar el checklist.");
+      setError(getErrorMessage(requestError, "No se pudo agregar el checklist."));
     } finally {
       setSaving(false);
     }
@@ -302,7 +435,7 @@ export default function PMTaskDetailModal({
       });
       await reloadTask(currentTaskId);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo actualizar el checklist.");
+      setError(getErrorMessage(requestError, "No se pudo actualizar el checklist."));
     } finally {
       setSaving(false);
     }
@@ -325,7 +458,7 @@ export default function PMTaskDetailModal({
       setNewComment("");
       await reloadTask(currentTaskId);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar el comentario.");
+      setError(getErrorMessage(requestError, "No se pudo guardar el comentario."));
     } finally {
       setSaving(false);
     }
@@ -348,7 +481,7 @@ export default function PMTaskDetailModal({
       onClose={onClose}
       open={open}
       size="xl"
-      subtitle="Tareas, checklist, subtareas y comentarios basicos del proyecto."
+      subtitle="Tareas, checklist, subtareas, comentarios y prerrequisitos del proyecto."
       title={currentTaskId ? "Detalle de tarea" : "Nueva tarea"}
     >
       {loading ? <div className="table-note">Cargando tarea...</div> : null}
@@ -507,32 +640,75 @@ export default function PMTaskDetailModal({
             Requiere factura
           </label>
         </div>
+
+        <div className="pm-task-prereq-section">
+          <div className="pm-task-prereq-header">
+            <div>
+              <strong>Prerrequisitos</strong>
+              <p className="table-note">Selecciona tareas que deben completarse antes de iniciar esta tarea.</p>
+            </div>
+            {selectedPrerequisiteIds.length > 0 ? (
+              <StatusBadge tone="warning">
+                <Lock size={12} strokeWidth={1.9} />
+                {selectedPrerequisiteIds.length} seleccionados
+              </StatusBadge>
+            ) : null}
+          </div>
+
+          {availablePrerequisiteOptions.length === 0 ? (
+            <EmptyState compact note="Aún no hay otras tareas para usar como prerrequisito." title="Sin prerrequisitos disponibles" />
+          ) : (
+            <div className="pm-task-prereq-list">
+              {availablePrerequisiteOptions.map((candidate) => {
+                const checked = selectedPrerequisiteIds.includes(candidate.id);
+                return (
+                  <label className={`pm-task-prereq-option ${checked ? "is-selected" : ""}`} key={candidate.id}>
+                    <input
+                      checked={checked}
+                      onChange={() => togglePrerequisite(candidate.id)}
+                      type="checkbox"
+                    />
+                    <div className="pm-task-prereq-copy">
+                      <strong>{safeDisplayText(candidate.titulo)}</strong>
+                      <span>{safeDisplayText(candidate.statusLabel, candidate.estatus)}</span>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          )}
+
+          {selectedPrerequisiteIds.length > 0 ? (
+            <div className="inventory-form-note inventory-form-note-warning">
+              <strong>La tarea quedará bloqueada</strong>
+              <p className="table-note">Completa primero los prerrequisitos seleccionados para poder avanzar esta tarea.</p>
+            </div>
+          ) : null}
+        </div>
       </form>
 
       {currentTaskId ? (
         <div className="inventory-content-grid inventory-content-grid-2 pm-detail-secondary-grid">
-          <DataCard
-            subtitle="Desglose basico de ejecucion."
-            title="Resumen"
-          >
+          <DataCard subtitle="Desglose básico de ejecución." title="Resumen">
             <div className="pm-inline-metadata">
               <StatusBadge tone={getTaskStatusTone(task?.estatus)}>{getTaskStatusLabel(task?.estatus)}</StatusBadge>
               <StatusBadge tone={getPriorityTone(task?.prioridad)}>{getPriorityLabel(task?.prioridad)}</StatusBadge>
+              {dependencyContext?.is_blocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
             </div>
             <div className="pm-meta-list">
               <div>
                 <strong>Vence</strong>
-                <span>{safeDisplayText(formatDate(task?.fecha_vencimiento), "-")}</span>
+                <span>{safeDisplayText(formatDate(task?.fecha_vencimiento), "—")}</span>
               </div>
               <div>
                 <strong>Asignado</strong>
-                <span>{safeDisplayText(task?.asignado_nombre_snapshot, "Sin asignacion")}</span>
+                <span>{safeDisplayText(task?.asignado_nombre_snapshot, "Sin asignación")}</span>
               </div>
             </div>
           </DataCard>
 
           <DataCard
-            actions={
+            actions={(
               <ActionButton
                 disabled={saving || !newSubtask.trim()}
                 onClick={handleAddSubtask}
@@ -542,7 +718,7 @@ export default function PMTaskDetailModal({
               >
                 Agregar
               </ActionButton>
-            }
+            )}
             subtitle="Control simple de pendientes hijos."
             title="Subtareas"
           >
@@ -580,7 +756,7 @@ export default function PMTaskDetailModal({
           </DataCard>
 
           <DataCard
-            actions={
+            actions={(
               <ActionButton
                 disabled={saving || !newChecklistItem.trim()}
                 onClick={handleAddChecklistItem}
@@ -590,12 +766,12 @@ export default function PMTaskDetailModal({
               >
                 Agregar
               </ActionButton>
-            }
-            subtitle="Checklist basico por tarea."
+            )}
+            subtitle="Checklist básico por tarea."
             title="Checklist"
           >
             <label className="inventory-search-field">
-              <span className="inventory-field-label">Nuevo item</span>
+              <span className="inventory-field-label">Nuevo ítem</span>
               <input
                 onChange={(event) => setNewChecklistItem(event.target.value)}
                 placeholder="Actividad a validar"
@@ -628,7 +804,7 @@ export default function PMTaskDetailModal({
           </DataCard>
 
           <DataCard
-            actions={
+            actions={(
               <ActionButton
                 disabled={saving || !newComment.trim()}
                 onClick={handleAddComment}
@@ -638,8 +814,8 @@ export default function PMTaskDetailModal({
               >
                 Comentar
               </ActionButton>
-            }
-            subtitle="Conversacion operativa asociada a la tarea."
+            )}
+            subtitle="Conversación operativa asociada a la tarea."
             title="Comentarios"
           >
             <label className="inventory-search-field">
@@ -661,7 +837,7 @@ export default function PMTaskDetailModal({
                       <strong>{safeDisplayText(comment.created_by_nombre_snapshot, "Usuario")}</strong>
                     </div>
                     <p>{safeDisplayText(comment.body, "")}</p>
-                    <span className="inventory-cell-sub">{safeDisplayText(formatDate(comment.created_at), "-")}</span>
+                    <span className="inventory-cell-sub">{safeDisplayText(formatDate(comment.created_at), "—")}</span>
                   </article>
                 ))}
               </div>
@@ -671,10 +847,8 @@ export default function PMTaskDetailModal({
           </DataCard>
         </div>
       ) : (
-        <DataCard title="Flujo siguiente">
-          <p className="table-note">
-            Guarda la tarea para habilitar subtareas, checklist y comentarios.
-          </p>
+        <DataCard title="Siguiente paso">
+          <p className="table-note">Guarda la tarea para habilitar subtareas, checklist y comentarios.</p>
         </DataCard>
       )}
     </ModalShell>

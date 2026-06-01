@@ -819,6 +819,11 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - plan de trabajo
   - panel de detalle de tarea
   - Gantt simple
+- La UX del plan de trabajo ahora agrega:
+  - botón `Nueva tarea` sticky dentro de la vista
+  - creación y edición de tarea con prerrequisitos desde el mismo modal
+  - tabla y Gantt simple integrados en una sola vista operativa
+  - Kanban separado como vista propia
 - Queda pendiente:
   - dependencias avanzadas
   - lag real sobre fechas

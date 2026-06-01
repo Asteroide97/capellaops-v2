@@ -73,18 +73,38 @@ function normalizeApiMessage(value, fallback = "Error inesperado") {
   }
 
   if (typeof value === "object") {
-    return (
-      value.detail ||
-      value.message ||
-      value.msg ||
-      value.error ||
-      value.nombre ||
-      value.name ||
-      value.label ||
-      value.title ||
-      value.id ||
-      fallback
-    );
+    if (value.detail !== undefined) {
+      return normalizeApiMessage(value.detail, fallback);
+    }
+    if (value.message !== undefined) {
+      return normalizeApiMessage(value.message, fallback);
+    }
+    if (value.msg !== undefined) {
+      return normalizeApiMessage(value.msg, fallback);
+    }
+    if (value.error !== undefined) {
+      return normalizeApiMessage(value.error, fallback);
+    }
+    if (value.nombre !== undefined) {
+      return normalizeApiMessage(value.nombre, fallback);
+    }
+    if (value.name !== undefined) {
+      return normalizeApiMessage(value.name, fallback);
+    }
+    if (value.label !== undefined) {
+      return normalizeApiMessage(value.label, fallback);
+    }
+    if (value.title !== undefined) {
+      return normalizeApiMessage(value.title, fallback);
+    }
+    if (value.id !== undefined) {
+      return normalizeApiMessage(value.id, fallback);
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return fallback;
+    }
   }
 
   return fallback;

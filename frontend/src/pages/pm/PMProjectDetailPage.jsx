@@ -268,7 +268,11 @@ export default function PMProjectDetailPage() {
     setMemberForm(defaultMemberForm);
   }
 
-  async function handleTaskSaved() {
+  async function handleTaskSaved(savedTask) {
+    if (savedTask?.id) {
+      setSelectedTaskId(savedTask.id);
+      setSelectedTaskModalId(savedTask.id);
+    }
     await loadProjectBundle({ background: true });
   }
 
@@ -673,9 +677,11 @@ export default function PMProjectDetailPage() {
           onDeactivateTask={handleDeactivateTask}
           onDependenciesChanged={() => loadProjectBundle({ background: true })}
           onEditTask={openExistingTaskModal}
+          onRefresh={() => loadProjectBundle({ background: true })}
           onSelectTask={setSelectedTaskId}
           onSetTaskStatus={handleTaskStatusChange}
           projectId={id}
+          refreshing={refreshing}
           selectedTaskId={selectedTaskId}
           tasks={tasks}
           timeEntries={projectTimeEntries}
@@ -864,6 +870,7 @@ export default function PMProjectDetailPage() {
         open={taskModalOpen}
         projectId={id}
         taskId={selectedTaskModalId}
+        tasks={tasks}
         token={token}
       />
     </div>

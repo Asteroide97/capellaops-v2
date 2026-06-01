@@ -156,6 +156,9 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | Gantt editable | Pendiente | Media | PM F4 | No existe edicion directa sobre barras ni ajustes de fechas desde la linea de tiempo. | Planeacion temporal aun manual. |
 | PM | Dependencias | Implementado | Media | PM F4.5 | Ya existen dependencias `finish_to_start` entre tareas del mismo proyecto, con validacion backend y conteos en plan de trabajo. | Sin secuencia formal entre tareas. |
 | PM | Prerrequisitos bloqueantes | Implementado | Media | PM F4.5 | Una tarea bloqueada no puede avanzar a `en_progreso`, `en_revision` o `completada` mientras su prerrequisito siga pendiente. | Ejecucion fuera de secuencia si la validacion falla. |
+| PM | Prerrequisitos desde creacion de tarea | Implementado | Media | PM F4.5 UX | El modal de nueva tarea ya permite seleccionar prerrequisitos del mismo proyecto y guardarlos junto con la tarea. | Alta friccion si la dependencia solo pudiera agregarse despues. |
+| PM | Gantt simple integrado | Parcial | Media | PM F4.5 UX | Plan de trabajo ya integra tabla, Gantt y detalle con una barra sticky de acciones y una vista mas compacta. | La experiencia sigue sin reprogramacion visual avanzada. |
+| PM | Kanban separado | Implementado | Baja | PM F4.5 UX | Kanban se mantiene como vista separada del plan de trabajo para evitar mezclar seguimiento visual con dependencias. | Menor claridad si ambas vistas se mezclan en un solo bloque. |
 | PM | Dependencias avanzadas | Pendiente | Media | PM futura | No existen `start_to_start`, `finish_to_finish`, `start_to_finish` ni lag real sobre fechas. | Planeacion avanzada aun limitada. |
 | PM | Ruta critica | Pendiente | Media | PM F4 | No implementado. | Priorizacion temporal limitada. |
 | PM | Drag and drop | Pendiente | Media | PM F4 | No implementado en kanban ni Gantt. | Replaneacion visual menos agil. |

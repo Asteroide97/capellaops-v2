@@ -1,7 +1,7 @@
 import { CalendarRange, Link2, Lock } from "lucide-react";
 
-import { DataCard, EmptyState, formatDate, safeDisplayText } from "../inventory/shared";
-import { formatPercent, getTaskStatusTone } from "./shared";
+import { DataCard, EmptyState, StatusBadge, formatDate, safeDisplayText } from "../inventory/shared";
+import { formatPercent, getTaskStatusLabel, getTaskStatusTone } from "./shared";
 
 
 function startOfDay(value) {
@@ -124,12 +124,22 @@ function getDependencyCopy(task) {
 }
 
 
+function getTaskDateCopy(task) {
+  const startLabel = formatDate(task?.fecha_inicio);
+  const endLabel = formatDate(task?.fecha_vencimiento);
+  if (startLabel && endLabel) {
+    return `${startLabel} → ${endLabel}`;
+  }
+  return startLabel || endLabel || "Sin fechas";
+}
+
+
 export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask }) {
   const timeline = buildTimeline(tasks);
 
   if ((tasks ?? []).length === 0) {
     return (
-      <DataCard subtitle="Las barras aparecerán cuando existan tareas." title="Línea de tiempo">
+      <DataCard className="pm-gantt-card" subtitle="Las barras aparecerán cuando existan tareas." title="Línea de tiempo">
         <EmptyState compact note="Crea la primera tarea para ver la vista tipo Gantt." title="Sin tareas" />
       </DataCard>
     );
@@ -137,8 +147,9 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
 
   return (
     <DataCard
+      className="pm-gantt-card"
       subtitle={timeline ? `Escala ${timeline.scale === "days" ? "diaria" : "semanal"} para el plan vigente.` : "Agrega fechas a las tareas para visualizar la línea de tiempo."}
-      title="Gantt simple"
+      title="Línea de tiempo"
     >
       {!timeline ? (
         <EmptyState
@@ -173,9 +184,11 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                 >
                   <div className="pm-gantt-row-head">
                     <div className="pm-gantt-row-title">
-                      <span className={`status-badge ${getTaskStatusTone(task.estatus)}`}>{safeDisplayText(task.titulo)}</span>
+                      <strong>{safeDisplayText(task.titulo)}</strong>
                       <div className="pm-inline-metadata">
-                        <span className="table-note">{barStyle ? formatDate(task.fecha_vencimiento || task.fecha_inicio) : "Sin fechas"}</span>
+                        <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
+                        <span className="table-note">{getTaskDateCopy(task)}</span>
+                        <span className="table-note">{formatPercent(task.porcentaje_avance)} avance</span>
                         {task.is_blocked ? (
                           <span className="status-badge warning">
                             <Lock size={12} strokeWidth={1.9} />

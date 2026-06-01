@@ -1,4 +1,4 @@
-import { CheckCheck, CircleOff, Link2, Lock, Pencil, Play } from "lucide-react";
+import { CheckCheck, CircleOff, Eye, Link2, Lock, Pencil, Plus, RefreshCw } from "lucide-react";
 
 import {
   ActionButton,
@@ -14,8 +14,6 @@ import PMProjectGanttLite from "./PMProjectGanttLite";
 import PMTaskDetailPanel from "./PMTaskDetailPanel";
 import {
   formatPercent,
-  getPriorityLabel,
-  getPriorityTone,
   getTaskStatusLabel,
   getTaskStatusTone,
   isTaskOverdue,
@@ -44,14 +42,25 @@ function getDurationLabel(task) {
 
 function getDependencyLabel(task) {
   const blockers = task?.blockers ?? [];
-  if (blockers.length === 0) {
-    return task?.dependencies_count > 0 ? `${formatNumber(task.dependencies_count)} prerrequisitos` : "Sin prerrequisitos";
+  if (blockers.length > 0) {
+    const firstTitle = safeDisplayText(blockers[0]?.titulo, "otra tarea");
+    if (blockers.length === 1) {
+      return `Depende de ${firstTitle}`;
+    }
+    return `Depende de ${firstTitle} y ${blockers.length - 1} más`;
   }
-  const firstTitle = safeDisplayText(blockers[0]?.titulo, "otra tarea");
-  if (blockers.length === 1) {
-    return `Depende de ${firstTitle}`;
+
+  if (task?.dependencies_count > 0) {
+    return `${formatNumber(task.dependencies_count)} prerrequisitos`;
   }
-  return `Depende de ${firstTitle} y ${blockers.length - 1} más`;
+
+  return "—";
+}
+
+
+function getFirstBlockerTitle(task) {
+  const blockers = task?.blockers ?? [];
+  return blockers.length > 0 ? safeDisplayText(blockers[0]?.titulo, "otra tarea") : "";
 }
 
 
@@ -63,9 +72,11 @@ export default function PMProjectWorkPlanView({
   onDeactivateTask,
   onDependenciesChanged,
   onEditTask,
+  onRefresh,
   onSelectTask,
   onSetTaskStatus,
   projectId,
+  refreshing = false,
   selectedTaskId,
   tasks,
   timeEntries,
@@ -82,42 +93,66 @@ export default function PMProjectWorkPlanView({
     return accumulator;
   }, {});
 
+  const headerActions = (
+    <>
+      <ActionButton icon={<RefreshCw size={16} strokeWidth={1.9} />} onClick={onRefresh} type="button">
+        {refreshing ? "Actualizando..." : "Actualizar"}
+      </ActionButton>
+      <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={onCreateTask} tone="primary" type="button">
+        Nueva tarea
+      </ActionButton>
+    </>
+  );
+
   if ((tasks ?? []).length === 0) {
     return (
-      <DataCard
-        actions={(
-          <ActionButton onClick={onCreateTask} tone="primary" type="button">
-            Nueva tarea
-          </ActionButton>
-        )}
-        subtitle="La tabla y la línea de tiempo se activan cuando existe plan de trabajo."
-        title="Plan de trabajo"
-      >
-        <EmptyState
-          action={(
-            <ActionButton onClick={onCreateTask} tone="primary" type="button">
-              Crear primera tarea
-            </ActionButton>
-          )}
-          note="Agrega tareas con fechas para visualizar el plan de trabajo y sus dependencias."
-          title="Sin tareas"
-        />
-      </DataCard>
+      <section className="pm-workplan-stack">
+        <div className="pm-workplan-toolbar">
+          <div className="pm-workplan-toolbar-copy">
+            <strong>Plan de trabajo</strong>
+            <span>Tareas, fechas, responsables y prerrequisitos.</span>
+          </div>
+          <div className="inventory-actions inventory-actions-wrap">
+            {headerActions}
+          </div>
+        </div>
+
+        <DataCard subtitle="La tabla y la línea de tiempo se activan cuando existe plan de trabajo." title="Plan de trabajo">
+          <EmptyState
+            action={(
+              <ActionButton onClick={onCreateTask} tone="primary" type="button">
+                Crear primera tarea
+              </ActionButton>
+            )}
+            note="Agrega tareas con fechas para visualizar el plan de trabajo y sus prerrequisitos."
+            title="Sin tareas"
+          />
+        </DataCard>
+
+        <ActionButton className="pm-workplan-fab" icon={<Plus size={18} strokeWidth={2} />} onClick={onCreateTask} tone="primary" type="button">
+          + Tarea
+        </ActionButton>
+      </section>
     );
   }
 
   return (
-    <div className="inventory-content-grid">
-      <div className="pm-workspace-grid">
+    <section className="pm-workplan-stack">
+      <div className="pm-workplan-toolbar">
+        <div className="pm-workplan-toolbar-copy">
+          <strong>Plan de trabajo</strong>
+          <span>Tareas, fechas, responsables y prerrequisitos.</span>
+        </div>
+        <div className="inventory-actions inventory-actions-wrap">
+          {headerActions}
+        </div>
+      </div>
+
+      <div className="pm-workplan-layout">
         <DataCard
-          actions={(
-            <ActionButton onClick={onCreateTask} tone="primary" type="button">
-              Nueva tarea
-            </ActionButton>
-          )}
           className="pm-workplan-card"
-          subtitle="Tabla operativa con prerrequisitos, fechas, horas y costo real por tarea."
-          title="Plan de trabajo"
+          subtitle="Tabla operativa con tareas, fechas, responsables y bloqueo por prerrequisitos."
+          title="Tabla de tareas"
         >
           <div className="pm-workplan-table">
             <div className="pm-workplan-row pm-workplan-row-head">
@@ -128,18 +163,15 @@ export default function PMProjectWorkPlanView({
               <span>Inicio</span>
               <span>Fin</span>
               <span>Duración</span>
-              <span>Avance %</span>
-              <span>Horas estimadas</span>
-              <span>Horas reales</span>
-              <span>Costo real</span>
-              <span>Bloqueo</span>
               <span>Prerrequisitos</span>
+              <span>Avance</span>
               <span>Acciones</span>
             </div>
             {tasks.map((task, index) => {
               const taskMetrics = taskTimeMetrics[task.id] ?? { horas: 0, costo: 0 };
               const selected = selectedTaskId === task.id;
               const blocked = Boolean(task.is_blocked);
+              const blockerTitle = getFirstBlockerTitle(task);
               return (
                 <div
                   className={`pm-workplan-row ${selected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""}`}
@@ -157,40 +189,48 @@ export default function PMProjectWorkPlanView({
                   <span>{task.orden > 0 ? task.orden : index + 1}</span>
                   <span>
                     <div className="inventory-cell-main">{safeDisplayText(task.titulo)}</div>
-                    <div className="inventory-cell-sub">{safeDisplayText(task.descripcion, "Sin descripción")}</div>
+                    <div className="inventory-cell-sub">
+                      {safeDisplayText(task.descripcion, "Sin descripción")} · {formatNumber(taskMetrics.horas)} h reales · {formatMoney(taskMetrics.costo)}
+                    </div>
                   </span>
                   <span>
                     <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                   </span>
                   <span>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</span>
-                  <span>{safeDisplayText(formatDate(task.fecha_inicio), "-")}</span>
+                  <span>{safeDisplayText(formatDate(task.fecha_inicio), "—")}</span>
                   <span>
-                    <div>{safeDisplayText(formatDate(task.fecha_vencimiento), "-")}</div>
+                    <div>{safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</div>
                     {isTaskOverdue(task) ? <div className="inventory-cell-sub">Vencida</div> : null}
                   </span>
                   <span>{getDurationLabel(task)}</span>
-                  <span>{formatPercent(task.porcentaje_avance)}</span>
-                  <span>{formatNumber(task.estimacion_horas ?? 0)}</span>
-                  <span>{formatNumber(taskMetrics.horas)}</span>
-                  <span>{formatMoney(taskMetrics.costo)}</span>
                   <span>
-                    {blocked ? (
-                      <StatusBadge tone="warning">
-                        <Lock size={12} strokeWidth={1.9} />
-                        Bloqueada
-                      </StatusBadge>
-                    ) : (
-                      <StatusBadge tone="success">Lista</StatusBadge>
-                    )}
-                  </span>
-                  <span>
-                    <div className="pm-workplan-dependency-copy">
-                      {task.dependencies_count > 0 ? <Link2 size={12} strokeWidth={1.9} /> : null}
-                      <span>{getDependencyLabel(task)}</span>
+                    <div className="pm-workplan-dependency-stack">
+                      <div className="pm-workplan-dependency-copy">
+                        {task.dependencies_count > 0 ? <Link2 size={12} strokeWidth={1.9} /> : null}
+                        <span>{getDependencyLabel(task)}</span>
+                      </div>
+                      {blocked ? (
+                        <StatusBadge tone="warning">
+                          <Lock size={12} strokeWidth={1.9} />
+                          Bloqueada
+                        </StatusBadge>
+                      ) : null}
                     </div>
                   </span>
+                  <span>{formatPercent(task.porcentaje_avance)}</span>
                   <span>
                     <div className="table-actions">
+                      <ActionButton
+                        icon={<Eye size={14} strokeWidth={1.9} />}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onSelectTask?.(task.id);
+                        }}
+                        size="sm"
+                        type="button"
+                      >
+                        Ver
+                      </ActionButton>
                       <ActionButton
                         icon={<Pencil size={14} strokeWidth={1.9} />}
                         onClick={(event) => {
@@ -202,21 +242,6 @@ export default function PMProjectWorkPlanView({
                       >
                         Editar
                       </ActionButton>
-                      {task.estatus !== "en_progreso" && task.estatus !== "completada" && task.estatus !== "cancelada" ? (
-                        <ActionButton
-                          disabled={blocked}
-                          icon={<Play size={14} strokeWidth={1.9} />}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onSetTaskStatus?.(task, "en_progreso");
-                          }}
-                          size="sm"
-                          title={blocked ? "Completa los prerrequisitos antes de iniciar esta tarea." : undefined}
-                          type="button"
-                        >
-                          En progreso
-                        </ActionButton>
-                      ) : null}
                       {task.estatus !== "completada" && task.estatus !== "cancelada" ? (
                         <ActionButton
                           disabled={blocked}
@@ -226,7 +251,7 @@ export default function PMProjectWorkPlanView({
                             onSetTaskStatus?.(task, "completada");
                           }}
                           size="sm"
-                          title={blocked ? "Completa los prerrequisitos antes de terminar esta tarea." : undefined}
+                          title={blocked && blockerTitle ? `Completa primero: ${blockerTitle}.` : undefined}
                           tone="primary"
                           type="button"
                         >
@@ -269,6 +294,10 @@ export default function PMProjectWorkPlanView({
         timeEntries={timeEntries}
         token={token}
       />
-    </div>
+
+      <ActionButton className="pm-workplan-fab" icon={<Plus size={18} strokeWidth={2} />} onClick={onCreateTask} tone="primary" type="button">
+        + Tarea
+      </ActionButton>
+    </section>
   );
 }

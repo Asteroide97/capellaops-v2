@@ -228,6 +228,9 @@ export default function PMTaskDetailPanel({
             <ActionButton disabled={!taskId} onClick={() => onEditTask?.(taskId)} tone="primary" type="button">
               Editar tarea
             </ActionButton>
+            <ActionButton disabled={!taskId} onClick={() => onEditTask?.(taskId)} type="button">
+              Editar prerrequisitos
+            </ActionButton>
             <ActionButton disabled={!taskId} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openDependencyModal} type="button">
               Agregar prerrequisito
             </ActionButton>
@@ -310,6 +313,9 @@ export default function PMTaskDetailPanel({
                 <div className="pm-detail-block-header">
                   <Link2 size={16} strokeWidth={1.9} />
                   <strong>Prerrequisitos</strong>
+                  <ActionButton onClick={() => onEditTask?.(taskId)} size="sm" type="button">
+                    Editar prerrequisitos
+                  </ActionButton>
                 </div>
                 {(dependencies?.dependencies?.length ?? 0) ? (
                   <div className="pm-detail-list">

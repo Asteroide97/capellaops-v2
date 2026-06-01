@@ -4,7 +4,6 @@ import {
   Calculator,
   ClipboardList,
   Factory,
-  Hammer,
   PackageOpen,
   Plus,
   RefreshCw,
@@ -165,6 +164,17 @@ function numericValue(value) {
 }
 
 
+function getErrorMessage(error, fallback) {
+  if (typeof error?.message === "string" && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  return fallback;
+}
+
+
 function buildBudgetForm(budget, fallbackName) {
   if (!budget) {
     return {
@@ -259,6 +269,30 @@ function buildTree(activeItems) {
   };
 }
 
+function getBudgetItemTotals(item) {
+  const cost = numericValue(item?.subtotal_costo);
+  const sale = numericValue(item?.subtotal_venta);
+  return {
+    cost,
+    sale,
+    margin: sale - cost,
+  };
+}
+
+function getChapterDisplayTotals(chapter, chapterItems) {
+  const fallbackTotals = getBudgetItemTotals(chapter);
+  if (!chapterItems.length) {
+    return fallbackTotals;
+  }
+  const cost = chapterItems.reduce((sum, item) => sum + numericValue(item?.subtotal_costo), 0);
+  const sale = chapterItems.reduce((sum, item) => sum + numericValue(item?.subtotal_venta), 0);
+  return {
+    cost,
+    sale,
+    margin: sale - cost,
+  };
+}
+
 
 export default function PMProjectBudgetTab({
   empresaId,
@@ -273,12 +307,7 @@ export default function PMProjectBudgetTab({
   const [success, setSuccess] = useState("");
   const [bundle, setBundle] = useState(null);
   const [materialsCatalog, setMaterialsCatalog] = useState([]);
-
-  const [budgetModalOpen, setBudgetModalOpen] = useState(false);
-  const [itemModalOpen, setItemModalOpen] = useState(false);
-  const [materialModalOpen, setMaterialModalOpen] = useState(false);
-  const [laborModalOpen, setLaborModalOpen] = useState(false);
-  const [indirectModalOpen, setIndirectModalOpen] = useState(false);
+  const [activeBudgetModal, setActiveBudgetModal] = useState("");
 
   const [editingBudget, setEditingBudget] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
@@ -294,7 +323,6 @@ export default function PMProjectBudgetTab({
   const [selectedItemId, setSelectedItemId] = useState(null);
 
   const budget = bundle?.budget ?? null;
-  const summary = bundle?.summary ?? null;
   const vsActual = bundle?.vs_actual ?? null;
   const items = useMemo(() => budget?.items ?? [], [budget]);
   const indirects = useMemo(() => budget?.indirects ?? [], [budget]);
@@ -309,6 +337,13 @@ export default function PMProjectBudgetTab({
     [activeItems, selectedItemId],
   );
   const selectedOperationalItem = selectedBudgetItem?.tipo === "partida" ? selectedBudgetItem : null;
+  const projectBudgetBase = numericValue(project?.presupuesto_estimado);
+  const budgetCalculatedCost = numericValue(budget?.total_costo ?? vsActual?.presupuesto_detallado_costo);
+  const budgetSaleTotal = numericValue(budget?.total_venta ?? vsActual?.presupuesto_detallado_venta);
+  const budgetEstimatedMargin = numericValue(budget?.margen_estimado ?? vsActual?.margen_estimado);
+  const projectActualCost = numericValue(vsActual?.costo_real_total);
+  const varianceAgainstActual = numericValue(vsActual?.variacion ?? (budgetCalculatedCost - projectActualCost));
+  const selectedOperationalItemMarginAmount = numericValue(selectedOperationalItem?.subtotal_venta) - numericValue(selectedOperationalItem?.subtotal_costo);
 
   async function loadBudgetTab({ background = false } = {}) {
     if (!token || !empresaId || !projectId) {
@@ -333,7 +368,7 @@ export default function PMProjectBudgetTab({
         return nextItems.find((item) => item.tipo === "partida")?.id ?? nextItems[0]?.id ?? null;
       });
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cargar el presupuesto del proyecto.");
+      setError(getErrorMessage(requestError, "No se pudo cargar el presupuesto del proyecto."));
     } finally {
       setLoading(false);
     }
@@ -351,128 +386,140 @@ export default function PMProjectBudgetTab({
     if (saving) {
       return;
     }
+    setActiveBudgetModal("");
     setEditingBudget(null);
-    setBudgetModalOpen(false);
+    setEditingItem(null);
+    setEditingMaterial(null);
+    setEditingLabor(null);
+    setEditingIndirect(null);
     setBudgetForm(defaultBudgetForm);
+    setItemForm(defaultItemForm);
+    setMaterialForm(defaultMaterialForm);
+    setLaborForm(defaultLaborForm);
+    setIndirectForm(defaultIndirectForm);
+  }
+
+  function openBudgetModal(type, payload = null, event = null) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    setError("");
+    setSuccess("");
+
+    if (type !== "budget" && !budget?.id) {
+      setError("Primero crea el presupuesto del proyecto.");
+      return;
+    }
+
+    if ((type === "material" || type === "labor") && !selectedOperationalItem && !payload) {
+      setError("Primero crea o selecciona una partida.");
+      return;
+    }
+
+    setEditingBudget(null);
+    setEditingItem(null);
+    setEditingMaterial(null);
+    setEditingLabor(null);
+    setEditingIndirect(null);
+
+    if (type === "budget") {
+      const targetBudget = payload ?? budget ?? null;
+      setEditingBudget(targetBudget);
+      setBudgetForm(buildBudgetForm(targetBudget, targetBudget?.nombre ?? "Presupuesto base"));
+      setActiveBudgetModal("budget");
+      return;
+    }
+
+    if (type === "chapter" || type === "item") {
+      const targetItem = payload ?? null;
+      setEditingItem(targetItem);
+      if (targetItem) {
+        setItemForm(buildItemForm(targetItem));
+      } else {
+        setItemForm({
+          ...defaultItemForm,
+          tipo: type === "chapter" ? "capitulo" : "partida",
+          parent_id: type === "item" ? chapterOptions[0]?.id ?? "" : "",
+        });
+      }
+      setActiveBudgetModal(type);
+      return;
+    }
+
+    if (type === "material") {
+      setEditingMaterial(payload ?? null);
+      setMaterialForm(payload ? buildMaterialForm(payload) : defaultMaterialForm);
+      setActiveBudgetModal("material");
+      return;
+    }
+
+    if (type === "labor") {
+      setEditingLabor(payload ?? null);
+      setLaborForm(payload ? buildLaborForm(payload) : defaultLaborForm);
+      setActiveBudgetModal("labor");
+      return;
+    }
+
+    if (type === "indirect") {
+      setEditingIndirect(payload ?? null);
+      setIndirectForm(payload ? buildIndirectForm(payload) : defaultIndirectForm);
+      setActiveBudgetModal("indirect");
+    }
   }
 
   function closeItemModal() {
-    if (saving) {
-      return;
-    }
-    setEditingItem(null);
-    setItemModalOpen(false);
-    setItemForm(defaultItemForm);
+    closeBudgetModal();
   }
 
   function closeMaterialModal() {
-    if (saving) {
-      return;
-    }
-    setEditingMaterial(null);
-    setMaterialModalOpen(false);
-    setMaterialForm(defaultMaterialForm);
+    closeBudgetModal();
   }
 
   function closeLaborModal() {
-    if (saving) {
-      return;
-    }
-    setEditingLabor(null);
-    setLaborModalOpen(false);
-    setLaborForm(defaultLaborForm);
+    closeBudgetModal();
   }
 
   function closeIndirectModal() {
-    if (saving) {
-      return;
-    }
-    setEditingIndirect(null);
-    setIndirectModalOpen(false);
-    setIndirectForm(defaultIndirectForm);
+    closeBudgetModal();
   }
 
-  function openCreateBudgetModal() {
-    setEditingBudget(null);
-    setBudgetForm(buildBudgetForm(null, "Presupuesto base"));
-    setBudgetModalOpen(true);
+  function openCreateBudgetModal(event) {
+    openBudgetModal("budget", null, event);
   }
 
-  function openEditBudgetModal() {
-    if (!budget) {
-      return;
-    }
-    setEditingBudget(budget);
-    setBudgetForm(buildBudgetForm(budget, budget.nombre));
-    setBudgetModalOpen(true);
+  function openEditBudgetModal(event) {
+    openBudgetModal("budget", budget, event);
   }
 
-  function openCreateItemModal(type = "partida") {
-    if (!budget?.id) {
-      setError("Primero crea el presupuesto del proyecto.");
-      return;
-    }
-    setEditingItem(null);
-    setItemForm({
-      ...defaultItemForm,
-      tipo,
-      parent_id: type === "partida" ? chapterOptions[0]?.id ?? "" : "",
-    });
-    setItemModalOpen(true);
+  function openCreateItemModal(type = "partida", event = null) {
+    openBudgetModal(type === "capitulo" ? "chapter" : "item", null, event);
   }
 
-  function openEditItemModal(item) {
-    setEditingItem(item);
-    setItemForm(buildItemForm(item));
-    setItemModalOpen(true);
+  function openEditItemModal(item, event = null) {
+    openBudgetModal(item?.tipo === "capitulo" ? "chapter" : "item", item, event);
   }
 
-  function openCreateMaterialModal() {
-    if (!selectedOperationalItem) {
-      setError("Primero crea o selecciona una partida.");
-      return;
-    }
-    setEditingMaterial(null);
-    setMaterialForm(defaultMaterialForm);
-    setMaterialModalOpen(true);
+  function openCreateMaterialModal(event) {
+    openBudgetModal("material", null, event);
   }
 
-  function openEditMaterialModal(component) {
-    setEditingMaterial(component);
-    setMaterialForm(buildMaterialForm(component));
-    setMaterialModalOpen(true);
+  function openEditMaterialModal(component, event = null) {
+    openBudgetModal("material", component, event);
   }
 
-  function openCreateLaborModal() {
-    if (!selectedOperationalItem) {
-      setError("Primero crea o selecciona una partida.");
-      return;
-    }
-    setEditingLabor(null);
-    setLaborForm(defaultLaborForm);
-    setLaborModalOpen(true);
+  function openCreateLaborModal(event) {
+    openBudgetModal("labor", null, event);
   }
 
-  function openEditLaborModal(component) {
-    setEditingLabor(component);
-    setLaborForm(buildLaborForm(component));
-    setLaborModalOpen(true);
+  function openEditLaborModal(component, event = null) {
+    openBudgetModal("labor", component, event);
   }
 
-  function openCreateIndirectModal() {
-    if (!budget?.id) {
-      setError("Primero crea el presupuesto del proyecto.");
-      return;
-    }
-    setEditingIndirect(null);
-    setIndirectForm(defaultIndirectForm);
-    setIndirectModalOpen(true);
+  function openCreateIndirectModal(event) {
+    openBudgetModal("indirect", null, event);
   }
 
-  function openEditIndirectModal(indirect) {
-    setEditingIndirect(indirect);
-    setIndirectForm(buildIndirectForm(indirect));
-    setIndirectModalOpen(true);
+  function openEditIndirectModal(indirect, event = null) {
+    openBudgetModal("indirect", indirect, event);
   }
 
   async function handleQuickCreateBudget({ useProjectBase = false } = {}) {
@@ -498,7 +545,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo crear el presupuesto.");
+      setError(getErrorMessage(requestError, "No se pudo crear el presupuesto."));
     } finally {
       setSaving(false);
     }
@@ -528,7 +575,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar el presupuesto.");
+      setError(getErrorMessage(requestError, "No se pudo guardar el presupuesto."));
     } finally {
       setSaving(false);
     }
@@ -554,7 +601,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo aprobar el presupuesto.");
+      setError(getErrorMessage(requestError, "No se pudo aprobar el presupuesto."));
     } finally {
       setSaving(false);
     }
@@ -573,7 +620,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cancelar el presupuesto.");
+      setError(getErrorMessage(requestError, "No se pudo cancelar el presupuesto."));
     } finally {
       setSaving(false);
     }
@@ -592,7 +639,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudieron refrescar los totales.");
+      setError(getErrorMessage(requestError, "No se pudieron refrescar los totales."));
     } finally {
       setSaving(false);
     }
@@ -633,7 +680,7 @@ export default function PMProjectBudgetTab({
       setSelectedItemId(response?.id ?? selectedItemId);
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar la partida.");
+      setError(getErrorMessage(requestError, "No se pudo guardar la partida."));
     } finally {
       setSaving(false);
     }
@@ -652,7 +699,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo desactivar la partida.");
+      setError(getErrorMessage(requestError, "No se pudo desactivar la partida."));
     } finally {
       setSaving(false);
     }
@@ -704,7 +751,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar el material.");
+      setError(getErrorMessage(requestError, "No se pudo guardar el material."));
     } finally {
       setSaving(false);
     }
@@ -723,7 +770,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo quitar el material.");
+      setError(getErrorMessage(requestError, "No se pudo quitar el material."));
     } finally {
       setSaving(false);
     }
@@ -756,7 +803,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar la mano de obra.");
+      setError(getErrorMessage(requestError, "No se pudo guardar la mano de obra."));
     } finally {
       setSaving(false);
     }
@@ -775,7 +822,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo quitar la mano de obra.");
+      setError(getErrorMessage(requestError, "No se pudo quitar la mano de obra."));
     } finally {
       setSaving(false);
     }
@@ -808,7 +855,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar el costo indirecto.");
+      setError(getErrorMessage(requestError, "No se pudo guardar el costo indirecto."));
     } finally {
       setSaving(false);
     }
@@ -827,7 +874,7 @@ export default function PMProjectBudgetTab({
       await loadBudgetTab({ background: true });
       notifyChanged();
     } catch (requestError) {
-      setError(requestError.message || "No se pudo desactivar el costo indirecto.");
+      setError(getErrorMessage(requestError, "No se pudo desactivar el costo indirecto."));
     } finally {
       setSaving(false);
     }
@@ -846,7 +893,7 @@ export default function PMProjectBudgetTab({
         </div>
       )}
 
-      {Number(vsActual?.presupuesto_detallado_costo ?? 0) > 0 && Number(vsActual?.costo_real_total ?? 0) > Number(vsActual?.presupuesto_detallado_costo ?? 0) ? (
+      {budgetCalculatedCost > 0 && projectActualCost > budgetCalculatedCost ? (
         <div className="inventory-form-note inventory-form-note-danger">
           <strong>Presupuesto superado</strong>
           <p className="table-note">El costo real ya rebasa el presupuesto detallado del proyecto.</p>
@@ -959,22 +1006,22 @@ export default function PMProjectBudgetTab({
       </DataCard>
 
       <section className="inventory-metric-grid inventory-metric-grid-6">
-        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Costo presupuestado" meta="Total costo" tone="info" value={formatMoney(vsActual?.presupuesto_detallado_costo ?? 0)} />
-        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Precio de venta" meta="Total venta" tone="success" value={formatMoney(vsActual?.presupuesto_detallado_venta ?? 0)} />
-        <MetricCard icon={<Calculator size={18} strokeWidth={1.9} />} label="Margen estimado" meta="Venta - costo" tone={numericValue(vsActual?.margen_estimado ?? 0) < 0 ? "danger" : "warning"} value={formatMoney(vsActual?.margen_estimado ?? 0)} />
-        <MetricCard icon={<Factory size={18} strokeWidth={1.9} />} label="Costo real actual" meta="Materiales + horas" tone="danger" value={formatMoney(vsActual?.costo_real_total ?? 0)} />
-        <MetricCard icon={<TriangleAlert size={18} strokeWidth={1.9} />} label="Variación contra real" meta="Presupuesto - costo real" tone={numericValue(vsActual?.variacion ?? 0) < 0 ? "danger" : "success"} value={formatMoney(vsActual?.variacion ?? 0)} />
-        <MetricCard icon={<RefreshCw size={18} strokeWidth={1.9} />} label="% consumido" meta="Costo real sobre presupuesto" tone={numericValue(vsActual?.porcentaje_consumido ?? 0) > 100 ? "danger" : "neutral"} value={formatPercent(vsActual?.porcentaje_consumido ?? 0)} />
+        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Presupuesto base" meta="Referencia del proyecto" tone="neutral" value={formatMoney(projectBudgetBase)} />
+        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Costo calculado" meta="Partidas + indirectos" tone="info" value={formatMoney(budgetCalculatedCost)} />
+        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Precio de venta" meta="Total venta" tone="success" value={formatMoney(budgetSaleTotal)} />
+        <MetricCard icon={<Calculator size={18} strokeWidth={1.9} />} label="Margen estimado" meta="Venta - costo" tone={budgetEstimatedMargin < 0 ? "danger" : "warning"} value={formatMoney(budgetEstimatedMargin)} />
+        <MetricCard icon={<Factory size={18} strokeWidth={1.9} />} label="Costo real actual" meta="Materiales + horas" tone="danger" value={formatMoney(projectActualCost)} />
+        <MetricCard icon={<TriangleAlert size={18} strokeWidth={1.9} />} label="Variación contra real" meta="Costo calculado - costo real" tone={varianceAgainstActual < 0 ? "danger" : "success"} value={formatMoney(varianceAgainstActual)} />
       </section>
 
       <div className="inventory-content-grid inventory-content-grid-2 pm-budget-workspace">
         <DataCard
           actions={(
             <div className="inventory-actions inventory-actions-wrap">
-              <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={() => openCreateItemModal("capitulo")} type="button">
+              <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={(event) => openCreateItemModal("capitulo", event)} type="button">
                 Agregar capítulo
               </ActionButton>
-              <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={() => openCreateItemModal("partida")} tone="primary" type="button">
+              <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={(event) => openCreateItemModal("partida", event)} tone="primary" type="button">
                 Agregar partida
               </ActionButton>
             </div>
@@ -988,10 +1035,10 @@ export default function PMProjectBudgetTab({
             <EmptyState
               action={(
                 <div className="inventory-actions inventory-actions-wrap">
-                  <ActionButton onClick={() => openCreateItemModal("capitulo")} type="button">
+                  <ActionButton onClick={(event) => openCreateItemModal("capitulo", event)} type="button">
                     Agregar capítulo
                   </ActionButton>
-                  <ActionButton onClick={() => openCreateItemModal("partida")} tone="primary" type="button">
+                  <ActionButton onClick={(event) => openCreateItemModal("partida", event)} tone="primary" type="button">
                     Agregar primera partida
                   </ActionButton>
                 </div>
@@ -1002,17 +1049,22 @@ export default function PMProjectBudgetTab({
             />
           ) : (
             <div className="pm-budget-tree">
-              {budgetTree.chapters.map(({ chapter, items: chapterItems }) => (
+              {budgetTree.chapters.map(({ chapter, items: chapterItems }) => {
+                const chapterTotals = getChapterDisplayTotals(chapter, chapterItems);
+                return (
                 <div className="pm-budget-tree-group" key={chapter.id}>
                   <div className={`pm-budget-tree-node is-chapter ${selectedBudgetItem?.id === chapter.id ? "is-selected" : ""}`}>
                     <button className="pm-budget-tree-button" onClick={() => setSelectedItemId(chapter.id)} type="button">
-                      <div>
+                      <div className="pm-budget-tree-copy">
                         <strong>{safeDisplayText(chapter.codigo ? `${chapter.codigo} · ${chapter.nombre}` : chapter.nombre)}</strong>
-                        <span>{itemTypeLabels[chapter.tipo]} · {formatMoney(chapter.subtotal_costo ?? 0)}</span>
+                        <span>{itemTypeLabels[chapter.tipo]}</span>
+                        <span className="pm-budget-tree-summary">
+                          Costo {formatMoney(chapterTotals.cost)} · Venta {formatMoney(chapterTotals.sale)} · Margen {formatMoney(chapterTotals.margin)}
+                        </span>
                       </div>
                     </button>
                     <div className="table-actions">
-                      <ActionButton onClick={() => openEditItemModal(chapter)} size="sm" type="button">
+                      <ActionButton onClick={(event) => openEditItemModal(chapter, event)} size="sm" type="button">
                         Editar
                       </ActionButton>
                       <ActionButton onClick={() => handleDeactivateItem(chapter)} size="sm" tone="danger" type="button">
@@ -1028,16 +1080,19 @@ export default function PMProjectBudgetTab({
                       {chapterItems.map((item) => (
                         <div className={`pm-budget-tree-node ${selectedBudgetItem?.id === item.id ? "is-selected" : ""}`} key={item.id}>
                           <button className="pm-budget-tree-button" onClick={() => setSelectedItemId(item.id)} type="button">
-                            <div>
+                            <div className="pm-budget-tree-copy">
                               <strong>{safeDisplayText(item.codigo ? `${item.codigo} · ${item.nombre}` : item.nombre)}</strong>
                               <span>
-                                {safeDisplayText(item.unidad, "Sin unidad")} · {formatNumber(item.cantidad ?? 0)} · {formatMoney(item.subtotal_costo ?? 0)}
+                                Cantidad {formatNumber(item.cantidad ?? 0)} · Unidad {safeDisplayText(item.unidad, "Sin unidad")}
+                              </span>
+                              <span className="pm-budget-tree-summary">
+                                Costo {formatMoney(getBudgetItemTotals(item).cost)} · Venta {formatMoney(getBudgetItemTotals(item).sale)} · Margen {formatMoney(getBudgetItemTotals(item).margin)}
                               </span>
                             </div>
                             <StatusBadge tone={getItemTypeTone(item.tipo)}>{itemTypeLabels[item.tipo] ?? safeDisplayText(item.tipo)}</StatusBadge>
                           </button>
                           <div className="table-actions">
-                            <ActionButton onClick={() => openEditItemModal(item)} size="sm" type="button">
+                            <ActionButton onClick={(event) => openEditItemModal(item, event)} size="sm" type="button">
                               Editar
                             </ActionButton>
                             <ActionButton onClick={() => handleDeactivateItem(item)} size="sm" tone="danger" type="button">
@@ -1049,7 +1104,8 @@ export default function PMProjectBudgetTab({
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
 
               {budgetTree.looseItems.length > 0 ? (
                 <div className="pm-budget-tree-group">
@@ -1058,15 +1114,18 @@ export default function PMProjectBudgetTab({
                     {budgetTree.looseItems.map((item) => (
                       <div className={`pm-budget-tree-node ${selectedBudgetItem?.id === item.id ? "is-selected" : ""}`} key={item.id}>
                         <button className="pm-budget-tree-button" onClick={() => setSelectedItemId(item.id)} type="button">
-                          <div>
+                          <div className="pm-budget-tree-copy">
                             <strong>{safeDisplayText(item.codigo ? `${item.codigo} · ${item.nombre}` : item.nombre)}</strong>
                             <span>
-                              {safeDisplayText(item.unidad, "Sin unidad")} · {formatNumber(item.cantidad ?? 0)} · {formatMoney(item.subtotal_costo ?? 0)}
+                              Cantidad {formatNumber(item.cantidad ?? 0)} · Unidad {safeDisplayText(item.unidad, "Sin unidad")}
+                            </span>
+                            <span className="pm-budget-tree-summary">
+                              Costo {formatMoney(getBudgetItemTotals(item).cost)} · Venta {formatMoney(getBudgetItemTotals(item).sale)} · Margen {formatMoney(getBudgetItemTotals(item).margin)}
                             </span>
                           </div>
                         </button>
                         <div className="table-actions">
-                          <ActionButton onClick={() => openEditItemModal(item)} size="sm" type="button">
+                          <ActionButton onClick={(event) => openEditItemModal(item, event)} size="sm" type="button">
                             Editar
                           </ActionButton>
                           <ActionButton onClick={() => handleDeactivateItem(item)} size="sm" tone="danger" type="button">
@@ -1097,14 +1156,14 @@ export default function PMProjectBudgetTab({
             subtitle={selectedOperationalItem
               ? "Agrega los materiales y la mano de obra necesarios para calcular el costo unitario. También conocido como APU."
               : "Selecciona una partida para revisar su desglose de costo."}
-            title={selectedOperationalItem ? `Desglose de costo de la partida · ${safeDisplayText(selectedOperationalItem.nombre)}` : "Desglose de costo de la partida"}
+            title={selectedOperationalItem ? `Desglose de costos de la partida · ${safeDisplayText(selectedOperationalItem.nombre)}` : "Desglose de costos de la partida"}
           >
             {!budget ? (
               <EmptyState compact note="Primero crea el presupuesto del proyecto." title="Sin presupuesto" />
             ) : !selectedOperationalItem ? (
               <EmptyState
                 action={(
-                  <ActionButton onClick={() => openCreateItemModal("partida")} tone="primary" type="button">
+                  <ActionButton onClick={(event) => openCreateItemModal("partida", event)} tone="primary" type="button">
                     Agregar partida
                   </ActionButton>
                 )}
@@ -1117,10 +1176,11 @@ export default function PMProjectBudgetTab({
                 <div className="inventory-metric-grid inventory-metric-grid-3">
                   <MetricCard icon={<PackageOpen size={18} strokeWidth={1.9} />} label="Costo unitario" meta="Materiales + mano de obra" tone="info" value={formatMoney(selectedOperationalItem.costo_unitario ?? 0)} />
                   <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Precio unitario" meta="Venta por unidad" tone="success" value={formatMoney(selectedOperationalItem.precio_unitario ?? 0)} />
-                  <MetricCard icon={<Calculator size={18} strokeWidth={1.9} />} label="Margen" meta="Aplicado a la partida" tone="warning" value={formatPercent(selectedOperationalItem.margen_pct ?? 0)} />
+                  <MetricCard icon={<Calculator size={18} strokeWidth={1.9} />} label="Margen aplicado (%)" meta="Porcentaje configurado" tone="warning" value={formatPercent(selectedOperationalItem.margen_pct ?? 0)} />
+                  <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Margen en pesos" meta="Venta - costo" tone={selectedOperationalItemMarginAmount < 0 ? "danger" : "success"} value={formatMoney(selectedOperationalItemMarginAmount)} />
                   <MetricCard icon={<ClipboardList size={18} strokeWidth={1.9} />} label="Cantidad" meta="Volumen de partida" tone="neutral" value={formatNumber(selectedOperationalItem.cantidad ?? 0)} />
-                  <MetricCard icon={<Factory size={18} strokeWidth={1.9} />} label="Subtotal costo" meta="Cantidad × costo unitario" tone="info" value={formatMoney(selectedOperationalItem.subtotal_costo ?? 0)} />
-                  <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Subtotal venta" meta="Cantidad × precio unitario" tone="success" value={formatMoney(selectedOperationalItem.subtotal_venta ?? 0)} />
+                  <MetricCard icon={<Factory size={18} strokeWidth={1.9} />} label="Costo de la partida" meta="Cantidad × costo unitario" tone="info" value={formatMoney(selectedOperationalItem.subtotal_costo ?? 0)} />
+                  <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Venta de la partida" meta="Cantidad × precio unitario" tone="success" value={formatMoney(selectedOperationalItem.subtotal_venta ?? 0)} />
                 </div>
 
                 <DataCard subtitle="Materiales requeridos por unidad de esta partida." title="Materiales de la partida">
@@ -1140,7 +1200,7 @@ export default function PMProjectBudgetTab({
                             <td>{formatMoney(component.costo_total ?? 0)}</td>
                             <td>
                               <div className="table-actions">
-                                <ActionButton onClick={() => openEditMaterialModal(component)} size="sm" type="button">
+                                <ActionButton onClick={(event) => openEditMaterialModal(component, event)} size="sm" type="button">
                                   Editar
                                 </ActionButton>
                                 <ActionButton onClick={() => handleDeactivateMaterial(component)} size="sm" tone="danger" type="button">
@@ -1172,7 +1232,7 @@ export default function PMProjectBudgetTab({
                             <td>{formatMoney(component.costo_total ?? 0)}</td>
                             <td>
                               <div className="table-actions">
-                                <ActionButton onClick={() => openEditLaborModal(component)} size="sm" type="button">
+                                <ActionButton onClick={(event) => openEditLaborModal(component, event)} size="sm" type="button">
                                   Editar
                                 </ActionButton>
                                 <ActionButton onClick={() => handleDeactivateLabor(component)} size="sm" tone="danger" type="button">
@@ -1212,7 +1272,7 @@ export default function PMProjectBudgetTab({
                       <td>{formatMoney(indirect.monto ?? 0)}</td>
                       <td>
                         <div className="table-actions">
-                          <ActionButton onClick={() => openEditIndirectModal(indirect)} size="sm" type="button">
+                          <ActionButton onClick={(event) => openEditIndirectModal(indirect, event)} size="sm" type="button">
                             Editar
                           </ActionButton>
                           <ActionButton onClick={() => handleDeactivateIndirect(indirect)} size="sm" tone="danger" type="button">
@@ -1231,10 +1291,17 @@ export default function PMProjectBudgetTab({
             <div className="pm-detail-list">
               <div className="pm-detail-list-item">
                 <div>
-                  <strong>Presupuesto costo</strong>
+                  <strong>Presupuesto base</strong>
+                  <span>Referencia guardada en el proyecto</span>
+                </div>
+                <strong>{formatMoney(projectBudgetBase)}</strong>
+              </div>
+              <div className="pm-detail-list-item">
+                <div>
+                  <strong>Costo calculado</strong>
                   <span>{vsActual?.presupuesto_origen === "detallado" ? "Presupuesto detallado activo" : "Presupuesto simple"}</span>
                 </div>
-                <strong>{formatMoney(vsActual?.presupuesto_detallado_costo ?? 0)}</strong>
+                <strong>{formatMoney(budgetCalculatedCost)}</strong>
               </div>
               <div className="pm-detail-list-item">
                 <div>
@@ -1260,9 +1327,9 @@ export default function PMProjectBudgetTab({
               <div className="pm-detail-list-item">
                 <div>
                   <strong>Variación</strong>
-                  <span>Presupuesto - costo real</span>
+                  <span>Costo calculado - costo real</span>
                 </div>
-                <strong>{formatMoney(vsActual?.variacion ?? 0)}</strong>
+                <strong>{formatMoney(varianceAgainstActual)}</strong>
               </div>
               <div className="pm-detail-list-item">
                 <div>
@@ -1288,7 +1355,7 @@ export default function PMProjectBudgetTab({
           </div>
         )}
         onClose={closeBudgetModal}
-        open={budgetModalOpen}
+        open={activeBudgetModal === "budget"}
         subtitle="Crea el presupuesto del proyecto y define moneda, margen e indirectos generales."
         title={editingBudget ? "Editar presupuesto" : "Crear presupuesto"}
       >
@@ -1340,7 +1407,7 @@ export default function PMProjectBudgetTab({
           </div>
         )}
         onClose={closeItemModal}
-        open={itemModalOpen}
+        open={activeBudgetModal === "chapter" || activeBudgetModal === "item"}
         subtitle={itemForm.tipo === "capitulo" ? "Organiza el presupuesto en grandes frentes de trabajo." : "Registra una partida operativa para después agregar materiales y mano de obra."}
         title={editingItem ? "Editar partida" : itemForm.tipo === "capitulo" ? "Agregar capítulo" : "Agregar partida"}
       >
@@ -1415,7 +1482,7 @@ export default function PMProjectBudgetTab({
           </div>
         )}
         onClose={closeMaterialModal}
-        open={materialModalOpen}
+        open={activeBudgetModal === "material"}
         subtitle="Agrega materiales necesarios para calcular el costo unitario de la partida."
         title={editingMaterial ? "Editar material" : "Agregar material"}
       >
@@ -1469,7 +1536,7 @@ export default function PMProjectBudgetTab({
           </div>
         )}
         onClose={closeLaborModal}
-        open={laborModalOpen}
+        open={activeBudgetModal === "labor"}
         subtitle="Agrega horas estimadas y tarifa para calcular el costo unitario de la partida."
         title={editingLabor ? "Editar mano de obra" : "Agregar mano de obra"}
       >
@@ -1510,7 +1577,7 @@ export default function PMProjectBudgetTab({
           </div>
         )}
         onClose={closeIndirectModal}
-        open={indirectModalOpen}
+        open={activeBudgetModal === "indirect"}
         subtitle="Agrega gastos generales, administración, fletes, supervisión u otros costos del proyecto."
         title={editingIndirect ? "Editar costo indirecto" : "Agregar costo indirecto"}
       >
