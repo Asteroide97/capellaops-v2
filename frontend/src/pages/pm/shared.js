@@ -40,17 +40,36 @@ export const pmRateRoleOptions = [
   { value: "observador", label: "Observador" },
 ];
 
+const pmVisualCopyFixups = [
+  [/Construccion/g, "Construcción"],
+  [/construccion/g, "construcción"],
+  [/Operacion/g, "Operación"],
+  [/operacion/g, "operación"],
+  [/Ejecucion/g, "Ejecución"],
+  [/ejecucion/g, "ejecución"],
+];
+
+
+export function normalizePmCopy(value) {
+  const text = String(value ?? "");
+  return pmVisualCopyFixups.reduce((current, [pattern, replacement]) => current.replace(pattern, replacement), text);
+}
+
+
 export function getProjectStatusLabel(value) {
   return projectStatusOptions.find((item) => item.value === value)?.label ?? value ?? "Borrador";
 }
+
 
 export function getTaskStatusLabel(value) {
   return taskStatusOptions.find((item) => item.value === value)?.label ?? value ?? "Pendiente";
 }
 
+
 export function getPriorityLabel(value) {
   return priorityOptions.find((item) => item.value === value)?.label ?? value ?? "Media";
 }
+
 
 export function getProjectStatusTone(value) {
   const normalized = String(value ?? "").toLowerCase();
@@ -69,6 +88,7 @@ export function getProjectStatusTone(value) {
   return "neutral";
 }
 
+
 export function getTaskStatusTone(value) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized === "en_progreso") {
@@ -86,6 +106,7 @@ export function getTaskStatusTone(value) {
   return "neutral";
 }
 
+
 export function getPriorityTone(value) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized === "alta") {
@@ -100,10 +121,12 @@ export function getPriorityTone(value) {
   return "neutral";
 }
 
+
 export function formatPercent(value) {
   const numericValue = Number(value ?? 0);
   return `${formatNumber(Number.isNaN(numericValue) ? 0 : numericValue)}%`;
 }
+
 
 export function isTaskOverdue(task) {
   if (!task?.fecha_vencimiento) {
@@ -119,6 +142,7 @@ export function isTaskOverdue(task) {
   return due < today;
 }
 
+
 export function getRateSourceLabel(value) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized === "usuario") {
@@ -132,6 +156,7 @@ export function getRateSourceLabel(value) {
   }
   return "Sin tarifa";
 }
+
 
 export function getRateSourceTone(value) {
   const normalized = String(value ?? "").toLowerCase();

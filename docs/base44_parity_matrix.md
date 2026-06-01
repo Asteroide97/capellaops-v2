@@ -159,6 +159,7 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | Prerrequisitos desde creacion de tarea | Implementado | Media | PM F4.5 UX | El modal de nueva tarea ya permite seleccionar prerrequisitos del mismo proyecto y guardarlos junto con la tarea. | Alta friccion si la dependencia solo pudiera agregarse despues. |
 | PM | Gantt simple integrado | Parcial | Media | PM F4.5 UX | Plan de trabajo ya integra tabla, Gantt y detalle con una barra sticky de acciones y una vista mas compacta. | La experiencia sigue sin reprogramacion visual avanzada. |
 | PM | Kanban separado | Implementado | Baja | PM F4.5 UX | Kanban se mantiene como vista separada del plan de trabajo para evitar mezclar seguimiento visual con dependencias. | Menor claridad si ambas vistas se mezclan en un solo bloque. |
+| PM | Kanban con bloqueo por prerrequisitos | Implementado | Media | PM F4.5 UX | Cada card Kanban ya muestra si la tarea esta bloqueada, de que tarea depende y bloquea el avance directo mientras el prerrequisito siga pendiente. | Ejecucion fuera de secuencia si la vista rapida no comunica el bloqueo. |
 | PM | Dependencias avanzadas | Pendiente | Media | PM futura | No existen `start_to_start`, `finish_to_finish`, `start_to_finish` ni lag real sobre fechas. | Planeacion avanzada aun limitada. |
 | PM | Ruta critica | Pendiente | Media | PM F4 | No implementado. | Priorizacion temporal limitada. |
 | PM | Drag and drop | Pendiente | Media | PM F4 | No implementado en kanban ni Gantt. | Replaneacion visual menos agil. |

@@ -3,13 +3,18 @@ import {
   ArrowLeft,
   BadgeDollarSign,
   Calendar,
+  CheckCheck,
   CheckSquare,
   Clock3,
+  Eye,
   FileText,
   FolderKanban,
   Gauge,
+  Link2,
+  Lock,
   MessageSquare,
   PackageOpen,
+  Pencil,
   Plus,
   RefreshCw,
   Users,
@@ -25,6 +30,7 @@ import {
   getPmProjectCosts,
   getPmProjectMaterials,
   listPmProjectMembers,
+  listPmProjectDependencies,
   listPmProjectTimeEntries,
   listPmTasks,
   updatePmTask,
@@ -60,6 +66,7 @@ import {
   getTaskStatusLabel,
   getTaskStatusTone,
   isTaskOverdue,
+  normalizePmCopy,
   projectMemberRoleOptions,
 } from "./shared";
 
@@ -96,6 +103,82 @@ function sortByDateDesc(items, field) {
 }
 
 
+function getTaskBlockerTitles(task) {
+  return (task?.blockers ?? [])
+    .map((blocker) => safeDisplayText(blocker?.titulo, "").trim())
+    .filter(Boolean);
+}
+
+
+function getTaskBlockerSummary(task) {
+  const titles = getTaskBlockerTitles(task);
+  if (titles.length === 0) {
+    return "";
+  }
+  if (titles.length === 1) {
+    return titles[0];
+  }
+  if (titles.length === 2) {
+    return `${titles[0]} y ${titles[1]}`;
+  }
+  return `${titles[0]}, ${titles[1]} y ${titles.length - 2} más`;
+}
+
+
+function formatTaskTitleList(items) {
+  const titles = [...new Set((items ?? []).filter(Boolean))];
+  if (titles.length === 0) {
+    return "";
+  }
+  if (titles.length === 1) {
+    return titles[0];
+  }
+  if (titles.length === 2) {
+    return `${titles[0]} y ${titles[1]}`;
+  }
+  return `${titles[0]}, ${titles[1]} y ${titles.length - 2} más`;
+}
+
+
+function getTaskDependencyState(task, dependencies = []) {
+  const blocked = Boolean(task?.is_blocked || Number(task?.blockers_count ?? 0) > 0);
+  const blockerSummary = formatTaskTitleList(getTaskBlockerTitles(task));
+  const dependencyTitles = formatTaskTitleList(
+    (dependencies ?? [])
+      .map((dependency) => safeDisplayText(dependency?.depende_de_tarea_titulo, "").trim())
+      .filter(Boolean),
+  );
+
+  if (blocked) {
+    return {
+      blocked: true,
+      badgeLabel: "Bloqueada",
+      badgeTone: "warning",
+      title: "Bloqueada",
+      detail: blockerSummary ? `Depende de: ${blockerSummary}` : "Tiene prerrequisitos pendientes.",
+    };
+  }
+
+  if (dependencyTitles) {
+    return {
+      blocked: false,
+      badgeLabel: null,
+      badgeTone: "success",
+      title: "Prerrequisitos completados",
+      detail: dependencyTitles,
+    };
+  }
+
+  return {
+    blocked: false,
+    badgeLabel: null,
+    badgeTone: "success",
+    title: "",
+    detail: "",
+  };
+}
+
+
 export default function PMProjectDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -109,6 +192,7 @@ export default function PMProjectDetailPage() {
   const [project, setProject] = useState(null);
   const [projectCosts, setProjectCosts] = useState(null);
   const [projectMaterials, setProjectMaterials] = useState(null);
+  const [projectDependencies, setProjectDependencies] = useState([]);
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [projectTimeEntries, setProjectTimeEntries] = useState([]);
@@ -133,10 +217,11 @@ export default function PMProjectDetailPage() {
     setError("");
 
     try {
-      const [projectResponse, costsResponse, materialsResponse, membersResponse, tasksResponse, timeEntriesResponse] = await Promise.all([
+      const [projectResponse, costsResponse, materialsResponse, dependenciesResponse, membersResponse, tasksResponse, timeEntriesResponse] = await Promise.all([
         getPmProject({ projectId: id, token, empresaId }),
         getPmProjectCosts({ projectId: id, token, empresaId }),
         getPmProjectMaterials({ projectId: id, token, empresaId }),
+        listPmProjectDependencies({ projectId: id, token, empresaId }),
         listPmProjectMembers({ projectId: id, token, empresaId }),
         listPmTasks({ projectId: id, token, empresaId, filters: { limit: 100, offset: 0, activo: true } }),
         listPmProjectTimeEntries({ projectId: id, token, empresaId, filters: { limit: 200, offset: 0, activo: true } }),
@@ -146,6 +231,7 @@ export default function PMProjectDetailPage() {
       setProject(projectResponse);
       setProjectCosts(costsResponse);
       setProjectMaterials(materialsResponse);
+      setProjectDependencies(dependenciesResponse ?? []);
       setMembers(membersResponse.items ?? []);
       setTasks(nextTasks);
       setProjectTimeEntries(timeEntriesResponse.items ?? []);
@@ -186,6 +272,19 @@ export default function PMProjectDetailPage() {
     });
     return groups;
   }, [tasks]);
+  const taskDependenciesMap = useMemo(
+    () =>
+      (projectDependencies ?? []).reduce((accumulator, dependency) => {
+        if (!dependency?.tarea_id || dependency.activo === false) {
+          return accumulator;
+        }
+        const bucket = accumulator[dependency.tarea_id] ?? [];
+        bucket.push(dependency);
+        accumulator[dependency.tarea_id] = bucket;
+        return accumulator;
+      }, {}),
+    [projectDependencies],
+  );
 
   const upcomingTasks = useMemo(
     () =>
@@ -268,12 +367,31 @@ export default function PMProjectDetailPage() {
     setMemberForm(defaultMemberForm);
   }
 
+  function openTaskInPlan(taskId) {
+    if (!taskId) {
+      return;
+    }
+    setSelectedTaskId(taskId);
+    setSelectedTaskModalId(null);
+    setActiveView("plan");
+  }
+
   async function handleTaskSaved(savedTask) {
     if (savedTask?.id) {
       setSelectedTaskId(savedTask.id);
       setSelectedTaskModalId(savedTask.id);
     }
     await loadProjectBundle({ background: true });
+  }
+
+  function handleBlockedTaskAttempt(task) {
+    const blockerSummary = getTaskBlockerSummary(task);
+    setSuccess("");
+    setError(
+      blockerSummary
+        ? `No puedes avanzar esta tarea. Completa primero: ${blockerSummary}.`
+        : "No puedes avanzar esta tarea porque tiene prerrequisitos pendientes.",
+    );
   }
 
   async function handleTaskStatusChange(task, nextStatus) {
@@ -406,7 +524,7 @@ export default function PMProjectDetailPage() {
     <div className="inventory-shell inventory-screen pm-screen">
       <PageHeader
         eyebrow="Gestión de proyectos"
-        title={project.nombre}
+        title={normalizePmCopy(safeDisplayText(project.nombre, "Proyecto PM"))}
         subtitle="Workspace operativo del proyecto con tareas, fechas, materiales, horas y costos en una sola vista."
         actions={
           <div className="inventory-actions">
@@ -696,7 +814,7 @@ export default function PMProjectDetailPage() {
               Nueva tarea
             </ActionButton>
           }
-          subtitle="Vista por columnas para seguimiento rápido del flujo."
+          subtitle="Vista rápida de ejecución por estados, con bloqueo visible por prerrequisitos."
           title="Kanban"
         >
           {(tasks ?? []).length === 0 ? (
@@ -710,28 +828,135 @@ export default function PMProjectDetailPage() {
                     <strong>{tasksByStatus[statusKey]?.length ?? 0}</strong>
                   </div>
                   {(tasksByStatus[statusKey]?.length ?? 0) === 0 ? (
-                    <EmptyState compact note="Sin tareas en esta columna." title="Vacío" />
+                    <EmptyState compact note="Sin tareas" title="Sin tareas" />
                   ) : (
                     <div className="pm-kanban-card-stack">
-                      {tasksByStatus[statusKey].map((task) => (
-                        <button
-                          className="pm-task-card"
-                          key={task.id}
-                          onClick={() => openExistingTaskModal(task.id)}
-                          type="button"
-                        >
-                          <div className="pm-task-card-head">
-                            <strong>{safeDisplayText(task.titulo)}</strong>
-                            <StatusBadge tone={getPriorityTone(task.prioridad)}>{getPriorityLabel(task.prioridad)}</StatusBadge>
-                          </div>
-                          <div className="inventory-cell-sub">{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</div>
-                          <div className="pm-inline-metadata">
-                            <span className="table-note">{safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</span>
-                            <span className="table-note">{formatPercent(task.porcentaje_avance)}</span>
-                            {isTaskOverdue(task) ? <StatusBadge tone="danger">Vencida</StatusBadge> : null}
-                          </div>
-                        </button>
-                      ))}
+                      {tasksByStatus[statusKey].map((task) => {
+                        const dependencyState = getTaskDependencyState(task, taskDependenciesMap[task.id] ?? []);
+                        const blocked = dependencyState.blocked;
+                        const blockerSummary = getTaskBlockerSummary(task);
+                        const normalizedStatus = String(task.estatus ?? "").toLowerCase();
+                        const isCompleted = normalizedStatus === "completada";
+                        const isPending = normalizedStatus === "pendiente";
+                        const isInProgress = normalizedStatus === "en_progreso";
+                        const isInReview = normalizedStatus === "en_revision";
+                        const hasDependencies = Boolean((taskDependenciesMap[task.id] ?? []).length);
+
+                        return (
+                          <article className={`pm-task-card ${blocked ? "is-blocked" : ""}`} key={task.id}>
+                            <div className="pm-task-card-head">
+                              <div className="pm-task-card-title-block">
+                                <strong>{normalizePmCopy(safeDisplayText(task.titulo))}</strong>
+                                <span className="inventory-cell-sub">{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</span>
+                              </div>
+                              <div className="pm-task-card-badges">
+                                <StatusBadge tone={getPriorityTone(task.prioridad)}>{getPriorityLabel(task.prioridad)}</StatusBadge>
+                                <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
+                              </div>
+                            </div>
+
+                            <div className="pm-task-card-meta-grid">
+                              <div>
+                                <span>Vence</span>
+                                <strong>{safeDisplayText(formatDate(task.fecha_vencimiento), "Sin fecha")}</strong>
+                              </div>
+                              <div>
+                                <span>Avance</span>
+                                <strong>{formatPercent(task.porcentaje_avance)}</strong>
+                              </div>
+                            </div>
+
+                            <div className="pm-task-card-status-row">
+                              {blocked && dependencyState.badgeLabel ? (
+                                <StatusBadge tone={dependencyState.badgeTone}>
+                                  <Lock size={12} strokeWidth={1.9} />
+                                  {dependencyState.badgeLabel}
+                                </StatusBadge>
+                              ) : null}
+                              {!blocked && dependencyState.title ? (
+                                <StatusBadge tone="success">
+                                  <CheckCheck size={12} strokeWidth={1.9} />
+                                  {dependencyState.title}
+                                </StatusBadge>
+                              ) : null}
+                              {isTaskOverdue(task) ? <StatusBadge tone="danger">Vencida</StatusBadge> : null}
+                            </div>
+
+                            {dependencyState.detail ? (
+                              <div className={`pm-task-card-alert ${blocked ? "is-blocked" : ""}`}>
+                                <strong>{dependencyState.title}</strong>
+                                <span>{dependencyState.detail}</span>
+                              </div>
+                            ) : null}
+
+                            <div className="pm-task-card-actions">
+                              <ActionButton
+                                icon={<Eye size={14} strokeWidth={1.9} />}
+                                onClick={() => openTaskInPlan(task.id)}
+                                size="sm"
+                                type="button"
+                              >
+                                Ver detalle
+                              </ActionButton>
+                              <ActionButton
+                                icon={<Pencil size={14} strokeWidth={1.9} />}
+                                onClick={() => openExistingTaskModal(task.id)}
+                                size="sm"
+                                type="button"
+                              >
+                                Editar
+                              </ActionButton>
+                              {isPending ? (
+                                <ActionButton
+                                  icon={<CheckSquare size={14} strokeWidth={1.9} />}
+                                  className={blocked ? "is-soft-disabled" : ""}
+                                  onClick={() => {
+                                    if (blocked) {
+                                      handleBlockedTaskAttempt(task);
+                                      return;
+                                    }
+                                    handleTaskStatusChange(task, "en_progreso");
+                                  }}
+                                  size="sm"
+                                  title={blocked ? "Completa primero los prerrequisitos" : undefined}
+                                  type="button"
+                                >
+                                  Marcar en progreso
+                                </ActionButton>
+                              ) : null}
+                              {isPending || isInProgress || isInReview ? (
+                                <ActionButton
+                                  icon={<CheckCheck size={14} strokeWidth={1.9} />}
+                                  className={blocked ? "is-soft-disabled" : ""}
+                                  onClick={() => {
+                                    if (blocked) {
+                                      handleBlockedTaskAttempt(task);
+                                      return;
+                                    }
+                                    handleTaskStatusChange(task, "completada");
+                                  }}
+                                  size="sm"
+                                  title={blocked ? "Completa primero los prerrequisitos" : undefined}
+                                  tone={blocked ? "warning" : "primary"}
+                                  type="button"
+                                >
+                                  Completar
+                                </ActionButton>
+                              ) : null}
+                              {hasDependencies && !isCompleted ? (
+                                <ActionButton
+                                  icon={<Link2 size={14} strokeWidth={1.9} />}
+                                  onClick={() => openTaskInPlan(task.id)}
+                                  size="sm"
+                                  type="button"
+                                >
+                                  Ver prerrequisitos
+                                </ActionButton>
+                              ) : null}
+                            </div>
+                          </article>
+                        );
+                      })}
                     </div>
                   )}
                 </div>

@@ -819,6 +819,10 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - plan de trabajo
   - panel de detalle de tarea
   - Gantt simple
+- Kanban tambien muestra:
+  - cards con bloqueo visible
+  - tarea de la que depende
+  - acciones para ver detalle, editar y avanzar
 - La UX del plan de trabajo ahora agrega:
   - botón `Nueva tarea` sticky dentro de la vista
   - creación y edición de tarea con prerrequisitos desde el mismo modal
