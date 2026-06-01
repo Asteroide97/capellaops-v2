@@ -80,7 +80,19 @@ export default function PMTaskDetailPanel({
         return;
       }
 
-      setLoading(true);
+      if (taskSummary?.id === taskId) {
+        setTask((current) => ({
+          subtasks: current?.id === taskId ? current.subtasks ?? [] : [],
+          checklist_items: current?.id === taskId ? current.checklist_items ?? [] : [],
+          comments: current?.id === taskId ? current.comments ?? [] : [],
+          ...current,
+          ...taskSummary,
+          is_blocked: taskSummary.is_blocked,
+          blockers: taskSummary.blockers ?? [],
+        }));
+      }
+
+      setLoading(!(taskSummary?.id === taskId));
       setError("");
       try {
         const taskResponse = await getPmTask({ taskId, token, empresaId });
@@ -106,7 +118,7 @@ export default function PMTaskDetailPanel({
     return () => {
       cancelled = true;
     };
-  }, [taskId, token, empresaId, projectId, taskSummary]);
+  }, [taskId, token, empresaId, projectId]);
 
   useEffect(() => {
     if (!taskSummary?.id) {
@@ -118,6 +130,15 @@ export default function PMTaskDetailPanel({
       }
       return {
         ...current,
+        titulo: taskSummary.titulo ?? current.titulo,
+        descripcion: taskSummary.descripcion ?? current.descripcion,
+        estatus: taskSummary.estatus ?? current.estatus,
+        prioridad: taskSummary.prioridad ?? current.prioridad,
+        porcentaje_avance: taskSummary.porcentaje_avance ?? current.porcentaje_avance,
+        asignado_nombre_snapshot: taskSummary.asignado_nombre_snapshot ?? current.asignado_nombre_snapshot,
+        fecha_inicio: taskSummary.fecha_inicio ?? current.fecha_inicio,
+        fecha_vencimiento: taskSummary.fecha_vencimiento ?? current.fecha_vencimiento,
+        estimacion_horas: taskSummary.estimacion_horas ?? current.estimacion_horas,
         is_blocked: taskSummary.is_blocked,
         blockers: taskSummary.blockers ?? [],
       };
@@ -386,8 +407,8 @@ export default function PMTaskDetailPanel({
                           <ActionButton onClick={() => onSelectTask?.(dependency.depende_de_tarea_id)} size="sm" type="button">
                             Ver tarea
                           </ActionButton>
-                          <ActionButton onClick={() => handleDeactivateDependency(dependency.id)} size="sm" tone="danger" type="button">
-                            Quitar
+                          <ActionButton className={savingDependency ? "pm-button-loading" : ""} disabled={savingDependency} onClick={() => handleDeactivateDependency(dependency.id)} size="sm" tone="danger" type="button">
+                            {savingDependency ? "Quitando..." : "Quitar"}
                           </ActionButton>
                         </div>
                       </div>

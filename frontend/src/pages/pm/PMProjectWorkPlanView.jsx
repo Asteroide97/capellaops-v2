@@ -78,6 +78,7 @@ export default function PMProjectWorkPlanView({
   projectId,
   refreshing = false,
   selectedTaskId,
+  taskActionLoading,
   taskDependencyContextMap,
   tasks,
   timeEntries,
@@ -96,7 +97,7 @@ export default function PMProjectWorkPlanView({
 
   const headerActions = (
     <>
-      <ActionButton icon={<RefreshCw size={16} strokeWidth={1.9} />} onClick={onRefresh} type="button">
+      <ActionButton className={refreshing ? "pm-button-loading" : ""} disabled={refreshing} icon={<RefreshCw size={16} strokeWidth={1.9} />} onClick={onRefresh} type="button">
         {refreshing ? "Actualizando..." : "Actualizar"}
       </ActionButton>
       <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={onCreateTask} tone="primary" type="button">
@@ -174,9 +175,11 @@ export default function PMProjectWorkPlanView({
               const dependencyState = taskDependencyContextMap?.[task.id] ?? task.dependency_state ?? null;
               const blocked = Boolean(dependencyState?.blocked ?? task.is_blocked);
               const blockerTitle = getFirstBlockerTitle(task);
+              const completing = Boolean(taskActionLoading?.[`${task.id}:complete`]);
+              const deactivating = Boolean(taskActionLoading?.[`${task.id}:deactivate`]);
               return (
                 <div
-                  className={`pm-workplan-row ${selected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""}`}
+                  className={`pm-workplan-row ${selected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""} ${completing || deactivating ? "pm-card-updating" : ""}`}
                   key={task.id}
                   onClick={() => onSelectTask?.(task.id)}
                   onKeyDown={(event) => {
@@ -248,7 +251,8 @@ export default function PMProjectWorkPlanView({
                       </ActionButton>
                       {task.estatus !== "completada" && task.estatus !== "cancelada" ? (
                         <ActionButton
-                          disabled={blocked}
+                          className={completing ? "pm-button-loading" : ""}
+                          disabled={blocked || completing || deactivating}
                           icon={<CheckCheck size={14} strokeWidth={1.9} />}
                           onClick={(event) => {
                             event.stopPropagation();
@@ -259,10 +263,12 @@ export default function PMProjectWorkPlanView({
                           tone="primary"
                           type="button"
                         >
-                          Completar
+                          {completing ? "Completando..." : "Completar"}
                         </ActionButton>
                       ) : null}
                       <ActionButton
+                        className={deactivating ? "pm-button-loading" : ""}
+                        disabled={completing || deactivating}
                         icon={<CircleOff size={14} strokeWidth={1.9} />}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -272,7 +278,7 @@ export default function PMProjectWorkPlanView({
                         tone="danger"
                         type="button"
                       >
-                        Desactivar
+                        {deactivating ? "Desactivando..." : "Desactivar"}
                       </ActionButton>
                     </div>
                   </span>

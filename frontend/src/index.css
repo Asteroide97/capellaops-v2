@@ -2317,6 +2317,27 @@ textarea {
   transform: none;
 }
 
+.inventory-button.pm-button-loading,
+.pm-workplan-row .inventory-button.pm-button-loading,
+.pm-task-card .inventory-button.pm-button-loading {
+  opacity: 0.75;
+  cursor: progress;
+}
+
+.inventory-button.pm-button-loading:hover,
+.pm-workplan-row .inventory-button.pm-button-loading:hover,
+.pm-task-card .inventory-button.pm-button-loading:hover {
+  transform: none;
+}
+
+.pm-card-updating {
+  opacity: 0.92;
+}
+
+.pm-card-updating .inventory-button:not(.pm-button-loading):disabled {
+  opacity: 0.55;
+}
+
 .pm-kanban-column .empty-state,
 .pm-kanban-column .empty-state.empty-state-compact {
   gap: 0.35rem;

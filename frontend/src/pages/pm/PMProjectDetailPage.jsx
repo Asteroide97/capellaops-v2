@@ -208,6 +208,11 @@ function getTaskDependencyState(task, dependencies = [], taskMap = {}) {
 }
 
 
+function getTaskActionKey(taskId, action) {
+  return `${taskId}:${action}`;
+}
+
+
 export default function PMProjectDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -225,6 +230,7 @@ export default function PMProjectDetailPage() {
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [projectTimeEntries, setProjectTimeEntries] = useState([]);
+  const [taskActionLoading, setTaskActionLoading] = useState({});
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
@@ -232,6 +238,100 @@ export default function PMProjectDetailPage() {
   const [memberForm, setMemberForm] = useState(defaultMemberForm);
   const [commentBody, setCommentBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  function setTaskLoading(taskId, action, isLoading) {
+    const key = getTaskActionKey(taskId, action);
+    setTaskActionLoading((current) => {
+      if (isLoading) {
+        return { ...current, [key]: true };
+      }
+      if (!current[key]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function isTaskActionPending(taskId, action) {
+    return Boolean(taskActionLoading[getTaskActionKey(taskId, action)]);
+  }
+
+  function syncSelectedTask(nextTasks) {
+    setSelectedTaskId((current) => {
+      if (current && nextTasks.some((task) => task.id === current)) {
+        return current;
+      }
+      return nextTasks[0]?.id ?? null;
+    });
+  }
+
+  function applyWorkPlanSnapshot(projectResponse, dependenciesResponse, tasksResponse) {
+    const nextTasks = tasksResponse.items ?? [];
+    setProject(projectResponse);
+    setProjectDependencies(dependenciesResponse ?? []);
+    setTasks(nextTasks);
+    syncSelectedTask(nextTasks);
+    return nextTasks;
+  }
+
+  function upsertLocalTask(nextTask) {
+    if (!nextTask?.id) {
+      return;
+    }
+    setTasks((current) => {
+      const existingIndex = current.findIndex((task) => task.id === nextTask.id);
+      if (existingIndex === -1) {
+        return [...current, nextTask];
+      }
+      return current.map((task) => (task.id === nextTask.id ? { ...task, ...nextTask } : task));
+    });
+  }
+
+  function patchLocalTask(taskId, updater) {
+    if (!taskId || typeof updater !== "function") {
+      return;
+    }
+    setTasks((current) => current.map((task) => (task.id === taskId ? updater(task) : task)));
+  }
+
+  async function refreshPmWorkPlanLight({ background = false } = {}) {
+    if (!token || !empresaId || !id) {
+      return;
+    }
+
+    if (background) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+    setError("");
+
+    try {
+      const [projectResponse, dependenciesResponse, tasksResponse] = await Promise.all([
+        getPmProject({ projectId: id, token, empresaId }),
+        listPmProjectDependencies({ projectId: id, token, empresaId }),
+        listPmTasks({ projectId: id, token, empresaId, filters: { limit: 100, offset: 0, activo: true } }),
+      ]);
+      applyWorkPlanSnapshot(projectResponse, dependenciesResponse, tasksResponse);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo actualizar el plan de trabajo.");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }
+
+  function getOptimisticTaskPatch(task, nextStatus) {
+    return {
+      ...task,
+      estatus: nextStatus,
+      porcentaje_avance: nextStatus === "completada"
+        ? 100
+        : Math.max(Number(task?.porcentaje_avance || 0), 15),
+    };
+  }
 
   async function loadProjectBundle({ background = false } = {}) {
     if (!token || !empresaId || !id) {
@@ -256,20 +356,11 @@ export default function PMProjectDetailPage() {
         listPmProjectTimeEntries({ projectId: id, token, empresaId, filters: { limit: 200, offset: 0, activo: true } }),
       ]);
 
-      const nextTasks = tasksResponse.items ?? [];
-      setProject(projectResponse);
       setProjectCosts(costsResponse);
       setProjectMaterials(materialsResponse);
-      setProjectDependencies(dependenciesResponse ?? []);
       setMembers(membersResponse.items ?? []);
-      setTasks(nextTasks);
       setProjectTimeEntries(timeEntriesResponse.items ?? []);
-      setSelectedTaskId((current) => {
-        if (current && nextTasks.some((task) => task.id === current)) {
-          return current;
-        }
-        return nextTasks[0]?.id ?? null;
-      });
+      applyWorkPlanSnapshot(projectResponse, dependenciesResponse, tasksResponse);
     } catch (requestError) {
       setError(requestError.message || "No se pudo cargar el proyecto.");
     } finally {
@@ -479,8 +570,9 @@ export default function PMProjectDetailPage() {
     if (savedTask?.id) {
       setSelectedTaskId(savedTask.id);
       setSelectedTaskModalId(savedTask.id);
+      upsertLocalTask(savedTask);
     }
-    await loadProjectBundle({ background: true });
+    await refreshPmWorkPlanLight({ background: true });
   }
 
   function handleBlockedTaskAttempt(task) {
@@ -498,8 +590,26 @@ export default function PMProjectDetailPage() {
       return;
     }
 
+    const currentTask = resolvedTasks.find((item) => item.id === task.id) ?? task;
+    const action = nextStatus === "completada" ? "complete" : nextStatus === "en_progreso" ? "start" : "update";
+    if (currentTask.is_blocked) {
+      handleBlockedTaskAttempt(currentTask);
+      return;
+    }
+    if (isTaskActionPending(task.id, action)) {
+      return;
+    }
+
+    const rollbackTask = {
+      estatus: currentTask.estatus,
+      porcentaje_avance: currentTask.porcentaje_avance,
+    };
+    const optimisticTask = getOptimisticTaskPatch(currentTask, nextStatus);
+
     setError("");
     setSuccess("");
+    setTaskLoading(task.id, action, true);
+    patchLocalTask(task.id, () => optimisticTask);
     try {
       await updatePmTask({
         taskId: task.id,
@@ -507,15 +617,20 @@ export default function PMProjectDetailPage() {
         empresaId,
         payload: {
           estatus: nextStatus,
-          porcentaje_avance: nextStatus === "completada"
-            ? 100
-            : Math.max(Number(task.porcentaje_avance || 0), 15),
+          porcentaje_avance: optimisticTask.porcentaje_avance,
         },
       });
       setSuccess(`Tarea "${safeDisplayText(task.titulo)}" actualizada.`);
-      await loadProjectBundle({ background: true });
+      await refreshPmWorkPlanLight({ background: true });
     } catch (requestError) {
+      patchLocalTask(task.id, (current) => ({
+        ...current,
+        estatus: rollbackTask.estatus,
+        porcentaje_avance: rollbackTask.porcentaje_avance,
+      }));
       setError(requestError.message || "No se pudo actualizar el estatus de la tarea.");
+    } finally {
+      setTaskLoading(task.id, action, false);
     }
   }
 
@@ -523,14 +638,20 @@ export default function PMProjectDetailPage() {
     if (!task?.id) {
       return;
     }
+    if (isTaskActionPending(task.id, "deactivate")) {
+      return;
+    }
     setError("");
     setSuccess("");
+    setTaskLoading(task.id, "deactivate", true);
     try {
       await deactivatePmTask({ taskId: task.id, token, empresaId });
       setSuccess(`Tarea "${safeDisplayText(task.titulo)}" desactivada.`);
-      await loadProjectBundle({ background: true });
+      await refreshPmWorkPlanLight({ background: true });
     } catch (requestError) {
       setError(requestError.message || "No se pudo desactivar la tarea.");
+    } finally {
+      setTaskLoading(task.id, "deactivate", false);
     }
   }
 
@@ -601,6 +722,14 @@ export default function PMProjectDetailPage() {
     }
   }
 
+  function handleRefreshCurrentView() {
+    if (activeView === "plan" || activeView === "kanban") {
+      refreshPmWorkPlanLight({ background: true });
+      return;
+    }
+    loadProjectBundle({ background: true });
+  }
+
   if (loading) {
     return <div className="screen-center">Cargando proyecto PM...</div>;
   }
@@ -633,7 +762,7 @@ export default function PMProjectDetailPage() {
             <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openNewTaskModal} tone="primary" type="button">
               Nueva tarea
             </ActionButton>
-            <ActionButton icon={<RefreshCw size={16} strokeWidth={1.9} />} onClick={() => loadProjectBundle({ background: true })} type="button">
+            <ActionButton icon={<RefreshCw size={16} strokeWidth={1.9} />} onClick={handleRefreshCurrentView} type="button">
               {refreshing ? "Actualizando..." : "Actualizar"}
             </ActionButton>
           </div>
@@ -892,14 +1021,15 @@ export default function PMProjectDetailPage() {
           materialPlans={projectMaterials?.plans ?? []}
           onCreateTask={openNewTaskModal}
           onDeactivateTask={handleDeactivateTask}
-          onDependenciesChanged={() => loadProjectBundle({ background: true })}
+          onDependenciesChanged={() => refreshPmWorkPlanLight({ background: true })}
           onEditTask={openExistingTaskModal}
-          onRefresh={() => loadProjectBundle({ background: true })}
+          onRefresh={handleRefreshCurrentView}
           onSelectTask={setSelectedTaskId}
           onSetTaskStatus={handleTaskStatusChange}
           projectId={id}
           refreshing={refreshing}
           selectedTaskId={selectedTaskId}
+          taskActionLoading={taskActionLoading}
           taskDependencyContextMap={taskDependencyContextMap}
           tasks={resolvedTasks}
           timeEntries={projectTimeEntries}
@@ -932,7 +1062,7 @@ export default function PMProjectDetailPage() {
                   ) : (
                     <div className="pm-kanban-card-stack">
                       {tasksByStatus[statusKey].map((task) => {
-                        const dependencyState = getTaskDependencyState(task, taskDependenciesMap[task.id] ?? []);
+                        const dependencyState = task.dependency_state ?? getTaskDependencyState(task, taskDependenciesMap[task.id] ?? [], taskMap);
                         const blocked = dependencyState.blocked;
                         const blockerSummary = getTaskBlockerSummary(task);
                         const normalizedStatus = String(task.estatus ?? "").toLowerCase();
@@ -941,9 +1071,12 @@ export default function PMProjectDetailPage() {
                         const isInProgress = normalizedStatus === "en_progreso";
                         const isInReview = normalizedStatus === "en_revision";
                         const hasDependencies = Boolean((taskDependenciesMap[task.id] ?? []).length);
+                        const completing = isTaskActionPending(task.id, "complete");
+                        const starting = isTaskActionPending(task.id, "start");
+                        const deactivating = isTaskActionPending(task.id, "deactivate");
 
                         return (
-                          <article className={`pm-task-card ${blocked ? "is-blocked" : ""}`} key={task.id}>
+                          <article className={`pm-task-card ${blocked ? "is-blocked" : ""} ${completing || starting || deactivating ? "pm-card-updating" : ""}`} key={task.id}>
                             <div className="pm-task-card-head">
                               <div className="pm-task-card-title-block">
                                 <strong>{normalizePmCopy(safeDisplayText(task.titulo))}</strong>
@@ -1009,7 +1142,8 @@ export default function PMProjectDetailPage() {
                               {isPending ? (
                                 <ActionButton
                                   icon={<CheckSquare size={14} strokeWidth={1.9} />}
-                                  className={blocked ? "is-soft-disabled" : ""}
+                                  className={`${blocked ? "is-soft-disabled" : ""} ${starting ? "pm-button-loading" : ""}`.trim()}
+                                  disabled={starting || completing || deactivating}
                                   onClick={() => {
                                     if (blocked) {
                                       handleBlockedTaskAttempt(task);
@@ -1021,13 +1155,14 @@ export default function PMProjectDetailPage() {
                                   title={blocked ? "Completa primero los prerrequisitos" : undefined}
                                   type="button"
                                 >
-                                  Marcar en progreso
+                                  {starting ? "Actualizando..." : "Marcar en progreso"}
                                 </ActionButton>
                               ) : null}
                               {isPending || isInProgress || isInReview ? (
                                 <ActionButton
                                   icon={<CheckCheck size={14} strokeWidth={1.9} />}
-                                  className={blocked ? "is-soft-disabled" : ""}
+                                  className={`${blocked ? "is-soft-disabled" : ""} ${completing ? "pm-button-loading" : ""}`.trim()}
+                                  disabled={starting || completing || deactivating}
                                   onClick={() => {
                                     if (blocked) {
                                       handleBlockedTaskAttempt(task);
@@ -1040,7 +1175,7 @@ export default function PMProjectDetailPage() {
                                   tone={blocked ? "warning" : "primary"}
                                   type="button"
                                 >
-                                  Completar
+                                  {completing ? "Completando..." : "Completar"}
                                 </ActionButton>
                               ) : null}
                               {hasDependencies && !isCompleted ? (

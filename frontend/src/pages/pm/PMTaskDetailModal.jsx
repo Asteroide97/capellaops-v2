@@ -55,10 +55,13 @@ const defaultTaskForm = {
 };
 
 const emptyDependencyContext = {
+  blocked: false,
   dependencies: [],
   blockers: [],
   successors: [],
   is_blocked: false,
+  title: "",
+  detail: "",
 };
 
 const advancedStatuses = new Set(["en_progreso", "en_revision", "completada"]);
@@ -125,6 +128,19 @@ function toTaskPayload(form) {
 }
 
 
+function taskToDependencyContext(task) {
+  return {
+    blocked: Boolean(task?.dependency_state?.blocked ?? task?.is_blocked),
+    dependencies: task?.dependencies ?? [],
+    blockers: task?.blockers ?? [],
+    successors: task?.successors ?? [],
+    is_blocked: Boolean(task?.is_blocked),
+    title: task?.dependency_state?.title ?? "",
+    detail: task?.dependency_state?.detail ?? "",
+  };
+}
+
+
 export default function PMTaskDetailModal({
   empresaId,
   memberOptions,
@@ -149,6 +165,10 @@ export default function PMTaskDetailModal({
   const [selectedPrerequisiteIds, setSelectedPrerequisiteIds] = useState([]);
 
   const currentTaskId = task?.id ?? taskId ?? null;
+  const localTaskSeed = useMemo(
+    () => (tasks ?? []).find((candidate) => candidate.id === taskId) ?? null,
+    [tasks, taskId],
+  );
 
   const memberSelectOptions = useMemo(
     () =>
@@ -218,7 +238,15 @@ export default function PMTaskDetailModal({
         return;
       }
 
-      setLoading(true);
+      if (localTaskSeed) {
+        setTask(localTaskSeed);
+        setForm(taskToForm(localTaskSeed));
+        const localDependencyContext = taskToDependencyContext(localTaskSeed);
+        setDependencyContext(localDependencyContext);
+        syncSelectedPrerequisites(localDependencyContext);
+      }
+
+      setLoading(!localTaskSeed);
       try {
         const [taskResponse, dependencyResponse] = await Promise.all([
           getPmTask({ taskId, token, empresaId }),
@@ -693,7 +721,7 @@ export default function PMTaskDetailModal({
             <div className="pm-inline-metadata">
               <StatusBadge tone={getTaskStatusTone(task?.estatus)}>{getTaskStatusLabel(task?.estatus)}</StatusBadge>
               <StatusBadge tone={getPriorityTone(task?.prioridad)}>{getPriorityLabel(task?.prioridad)}</StatusBadge>
-              {dependencyContext?.is_blocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
+              {dependencyContext?.blocked || dependencyContext?.is_blocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
             </div>
             <div className="pm-meta-list">
               <div>

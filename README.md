@@ -828,6 +828,11 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - creación y edición de tarea con prerrequisitos desde el mismo modal
   - tabla y Gantt simple integrados en una sola vista operativa
   - Kanban separado como vista propia
+- PM UX performance:
+  - acciones de tarea con loading granular por botón
+  - actualización optimista segura para `Marcar en progreso` y `Completar`
+  - refresh ligero de plan de trabajo cargando solo proyecto, tareas y dependencias
+  - reducción de recargas completas del workspace para acciones operativas de PM
 - Queda pendiente:
   - dependencias avanzadas
   - lag real sobre fechas
