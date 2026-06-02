@@ -64,6 +64,10 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     members = relationship("PMProyectoMiembro", back_populates="proyecto", cascade="all, delete-orphan")
     tasks = relationship("PMTarea", back_populates="proyecto", cascade="all, delete-orphan")
     comments = relationship("PMComentario", back_populates="proyecto", cascade="all, delete-orphan")
+    documents = relationship("PMDocumento", back_populates="proyecto", cascade="all, delete-orphan")
+    approvals = relationship("PMAprobacion", back_populates="proyecto", cascade="all, delete-orphan")
+    external_invites = relationship("PMInvitadoExterno", back_populates="proyecto", cascade="all, delete-orphan")
+    portal_access_logs = relationship("PMPortalAccessLog", back_populates="proyecto", cascade="all, delete-orphan")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="proyecto", cascade="all, delete-orphan")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
     time_entries = relationship("PMTimeEntry", back_populates="proyecto", cascade="all, delete-orphan")
@@ -270,10 +274,18 @@ class PMComentario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
     created_by_nombre_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    externo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    autor_nombre_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    invitado_externo_id: Mapped[str | None] = mapped_column(
+        ForeignKey("pm_invitados_externos.id"),
+        nullable=True,
+        index=True,
+    )
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
 
     proyecto = relationship("PMProyecto", back_populates="comments")
     tarea = relationship("PMTarea", back_populates="comments")
+    invitado_externo = relationship("PMInvitadoExterno", back_populates="comments")
 
 
 class PMProyectoMaterialPlan(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -639,3 +651,114 @@ class PMTarifaHoraRol(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     activa: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+
+class PMDocumento(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_documentos"
+    __table_args__ = (
+        Index("ix_pm_documentos_empresa_id", "empresa_id"),
+        Index("ix_pm_documentos_proyecto_id", "proyecto_id"),
+        Index("ix_pm_documentos_tipo", "tipo_documento"),
+        Index("ix_pm_documentos_visible_externo", "visible_externo"),
+        Index("ix_pm_documentos_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    tipo_documento: Mapped[str] = mapped_column(String(40), nullable=False, default="otro", server_default="otro")
+    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    url_archivo: Mapped[str] = mapped_column(String(500), nullable=False)
+    nombre_archivo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    mime_type: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    visible_externo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="documents")
+
+
+class PMAprobacion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_aprobaciones"
+    __table_args__ = (
+        Index("ix_pm_aprobaciones_empresa_id", "empresa_id"),
+        Index("ix_pm_aprobaciones_proyecto_id", "proyecto_id"),
+        Index("ix_pm_aprobaciones_tipo", "tipo_aprobacion"),
+        Index("ix_pm_aprobaciones_estatus", "estatus"),
+        Index("ix_pm_aprobaciones_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    tipo_aprobacion: Mapped[str] = mapped_column(String(40), nullable=False, default="otro", server_default="otro")
+    titulo: Mapped[str] = mapped_column(String(180), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estatus: Mapped[str] = mapped_column(String(20), nullable=False, default="pendiente", server_default="pendiente")
+    entidad_tipo: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    entidad_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    solicitado_por: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    solicitado_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resuelto_por: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    resuelto_en: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    comentario_resolucion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+
+    proyecto = relationship("PMProyecto", back_populates="approvals")
+
+
+class PMInvitadoExterno(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_invitados_externos"
+    __table_args__ = (
+        Index("ix_pm_invitados_externos_empresa_id", "empresa_id"),
+        Index("ix_pm_invitados_externos_proyecto_id", "proyecto_id"),
+        Index("ix_pm_invitados_externos_activo", "activo"),
+        Index("ix_pm_invitados_externos_token_preview", "token_preview"),
+        Index("uq_pm_invitados_externos_token_hash", "token_hash", unique=True),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    modo_acceso: Mapped[str] = mapped_column(String(20), nullable=False, default="solo_lectura", server_default="solo_lectura")
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    token_preview: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    revocado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expira_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ultimo_acceso_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    total_accesos: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="external_invites")
+    comments = relationship("PMComentario", back_populates="invitado_externo")
+    access_logs = relationship("PMPortalAccessLog", back_populates="invitado_externo", cascade="all, delete-orphan")
+
+
+class PMPortalAccessLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_portal_access_logs"
+    __table_args__ = (
+        Index("ix_pm_portal_logs_empresa_id", "empresa_id"),
+        Index("ix_pm_portal_logs_proyecto_id", "proyecto_id"),
+        Index("ix_pm_portal_logs_invitado_id", "invitado_externo_id"),
+        Index("ix_pm_portal_logs_accion", "accion"),
+        Index("ix_pm_portal_logs_resultado", "resultado"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    invitado_externo_id: Mapped[str | None] = mapped_column(
+        ForeignKey("pm_invitados_externos.id"),
+        nullable=True,
+        index=True,
+    )
+    accion: Mapped[str] = mapped_column(String(60), nullable=False)
+    resultado: Mapped[str] = mapped_column(String(40), nullable=False, default="ok", server_default="ok")
+    detalle: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    proyecto = relationship("PMProyecto", back_populates="portal_access_logs")
+    invitado_externo = relationship("PMInvitadoExterno", back_populates="access_logs")

@@ -15,6 +15,7 @@ import RegisterPage from "./pages/RegisterPage";
 import SuperadminPage from "./pages/SuperadminPage";
 import PMDashboardPage from "./pages/pm/PMDashboardPage";
 import PMProjectDetailPage from "./pages/pm/PMProjectDetailPage";
+import PMPublicPortalPage from "./pages/pm/PMPublicPortalPage";
 import PMProjectsPage from "./pages/pm/PMProjectsPage";
 import PMRatesPage from "./pages/pm/PMRatesPage";
 import AssetsPage from "./pages/inventory/AssetsPage";
@@ -119,6 +120,7 @@ export default function App() {
           </PublicOnlyRoute>
         }
       />
+      <Route path="/portal/pm/:token" element={<PMPublicPortalPage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route path="/configuracion-inicial/almacen" element={<FirstWarehouseSetupPage />} />

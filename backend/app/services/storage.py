@@ -19,10 +19,20 @@ except ModuleNotFoundError:  # pragma: no cover - handled at runtime when depend
 
 
 MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024
+MAX_PM_DOCUMENT_SIZE_BYTES = 15 * 1024 * 1024
 ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
+}
+ALLOWED_PM_DOCUMENT_CONTENT_TYPES = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "text/plain": ".txt",
 }
 
 
@@ -38,6 +48,14 @@ class UploadedMaterialImage:
     size_bytes: int
 
 
+@dataclass
+class UploadedProjectDocument:
+    archivo_url: str
+    filename: str
+    content_type: str
+    size_bytes: int
+
+
 def validate_image_content_type(content_type: str | None) -> str:
     normalized = (content_type or "").strip().lower()
     if normalized not in ALLOWED_IMAGE_CONTENT_TYPES:
@@ -48,9 +66,24 @@ def validate_image_content_type(content_type: str | None) -> str:
     return normalized
 
 
-def build_blob_path(*, empresa_id: str, extension: str) -> str:
+def validate_pm_document_content_type(content_type: str | None) -> str:
+    normalized = (content_type or "").strip().lower()
+    if normalized not in ALLOWED_PM_DOCUMENT_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Formato de documento no permitido.",
+        )
+    return normalized
+
+
+def build_material_blob_path(*, empresa_id: str, extension: str) -> str:
     current = datetime.now(timezone.utc)
     return f"{empresa_id}/materials/{current:%Y/%m}/{uuid4().hex}{extension}"
+
+
+def build_pm_document_blob_path(*, empresa_id: str, project_id: str, extension: str) -> str:
+    current = datetime.now(timezone.utc)
+    return f"{empresa_id}/pm/projects/{project_id}/documents/{current:%Y/%m}/{uuid4().hex}{extension}"
 
 
 def build_public_url(*, blob_path: str, default_url: str) -> str:
@@ -77,6 +110,22 @@ async def validate_image_file(file: UploadFile) -> tuple[bytes, str]:
     return data, content_type
 
 
+async def validate_pm_document_file(file: UploadFile) -> tuple[bytes, str]:
+    content_type = validate_pm_document_content_type(file.content_type)
+    data = await file.read(MAX_PM_DOCUMENT_SIZE_BYTES + 1)
+    if not data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Debes seleccionar un documento.",
+        )
+    if len(data) > MAX_PM_DOCUMENT_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El documento excede el tamaño máximo de 15 MB.",
+        )
+    return data, content_type
+
+
 def get_blob_service_client() -> BlobServiceClient:
     settings = get_settings()
     connection_string = (settings.azure_storage_connection_string or "").strip()
@@ -99,7 +148,7 @@ async def upload_material_image(file: UploadFile, empresa_id: str) -> UploadedMa
 
     data, content_type = await validate_image_file(file)
     extension = ALLOWED_IMAGE_CONTENT_TYPES[content_type]
-    blob_path = build_blob_path(empresa_id=empresa_id, extension=extension)
+    blob_path = build_material_blob_path(empresa_id=empresa_id, extension=extension)
     filename = Path(blob_path).name
 
     try:
@@ -120,6 +169,41 @@ async def upload_material_image(file: UploadFile, empresa_id: str) -> UploadedMa
 
     return UploadedMaterialImage(
         imagen_url=build_public_url(blob_path=blob_path, default_url=blob_client.url),
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(data),
+    )
+
+
+async def upload_pm_document(file: UploadFile, empresa_id: str, project_id: str) -> UploadedProjectDocument:
+    settings = get_settings()
+    container = (settings.azure_storage_container or "").strip()
+    if not container:
+        raise StorageConfigurationError("El almacenamiento de documentos no está configurado.")
+
+    data, content_type = await validate_pm_document_file(file)
+    extension = ALLOWED_PM_DOCUMENT_CONTENT_TYPES[content_type]
+    blob_path = build_pm_document_blob_path(empresa_id=empresa_id, project_id=project_id, extension=extension)
+    filename = Path(blob_path).name
+
+    try:
+        blob_service = get_blob_service_client()
+        blob_client = blob_service.get_blob_client(container=container, blob=blob_path)
+        blob_client.upload_blob(
+            data,
+            overwrite=False,
+            content_settings=ContentSettings(content_type=content_type),
+        )
+    except StorageConfigurationError as exc:
+        raise StorageConfigurationError("El almacenamiento de documentos no está configurado.") from exc
+    except AzureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo almacenar el documento del proyecto.",
+        ) from exc
+
+    return UploadedProjectDocument(
+        archivo_url=build_public_url(blob_path=blob_path, default_url=blob_client.url),
         filename=filename,
         content_type=content_type,
         size_bytes=len(data),

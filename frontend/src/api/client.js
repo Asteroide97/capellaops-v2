@@ -124,12 +124,14 @@ function clampLimit(limit, fallback = 50, max = 100) {
 async function parseResponse(response) {
   const isJson = response.headers.get("content-type")?.includes("application/json");
   const data = isJson ? await response.json() : null;
+  const text = isJson ? "" : (await response.text()).trim();
 
   if (!response.ok) {
     const detail = data?.detail;
     const detailMessage = normalizeApiMessage(detail, "");
     const message =
       detailMessage ||
+      text ||
       (response.status >= 500 ? "Error interno de servidor" : "No se pudo completar la solicitud.");
     logApiDebug("response", {
       url: response.url,
@@ -1255,6 +1257,141 @@ export function createPmTaskComment({ taskId, token, empresaId, payload }) {
     body: payload,
     token,
     empresaId,
+  });
+}
+
+
+export function listPmProjectDocuments({ projectId, token, empresaId, includeInactive = false }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "include_inactive", includeInactive ? "true" : undefined);
+  const suffix = query.toString();
+  return apiRequest(`/pm/projects/${projectId}/documents${suffix ? `?${suffix}` : ""}`, {
+    token,
+    empresaId,
+  });
+}
+
+
+export function uploadPmProjectDocument({ projectId, token, empresaId, formData }) {
+  return uploadFormDataRequest(`/pm/projects/${projectId}/documents`, {
+    formData,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmProjectDocument({ documentId, token, empresaId, payload }) {
+  return apiRequest(`/pm/documents/${documentId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmProjectDocument({ documentId, token, empresaId }) {
+  return apiRequest(`/pm/documents/${documentId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmProjectApprovals({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/approvals`, { token, empresaId });
+}
+
+
+export function createPmProjectApproval({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/approvals`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function approvePmApproval({ approvalId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/approvals/${approvalId}/approve`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function rejectPmApproval({ approvalId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/approvals/${approvalId}/reject`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelPmApproval({ approvalId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/approvals/${approvalId}/cancel`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmProjectExternalInvites({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/external-invites`, { token, empresaId });
+}
+
+
+export function listPmProjectPortalAccessLogs({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/portal-access-logs`, { token, empresaId });
+}
+
+
+export function createPmProjectExternalInvite({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/external-invites`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function revokePmProjectExternalInvite({ inviteId, token, empresaId }) {
+  return apiRequest(`/pm/external-invites/${inviteId}/revoke`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function regeneratePmProjectExternalInvite({ inviteId, token, empresaId }) {
+  return apiRequest(`/pm/external-invites/${inviteId}/regenerate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmPortalProject({ token }) {
+  return apiRequest(`/pm/portal/${token}`);
+}
+
+
+export function createPmPortalComment({ token, payload }) {
+  return apiRequest(`/pm/portal/${token}/comments`, {
+    method: "POST",
+    body: payload,
   });
 }
 

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     secret_key: str = "change-this-secret-key"
     access_token_expire_minutes: int = 1440
     cors_origins_raw: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
+    public_frontend_url: str = Field(default="http://localhost:5173", alias="PUBLIC_FRONTEND_URL")
 
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     azure_sql_server: str | None = Field(default=None, alias="AZURE_SQL_SERVER")

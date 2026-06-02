@@ -187,8 +187,15 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | Estados de pago / estimaciones formales | Pendiente | Media | PM F5 | No existen estimaciones, valuaciones ni estados de pago formales. | Seguimiento economico incompleto frente a obra real. |
 | PM | Facturacion / cobranza | Pendiente | Alta | PM comercial futura | PM no conecta todavia con facturacion ni cobranza. | Rentabilidad sin cierre comercial completo. |
 | PM | Aprobacion de horas | Pendiente | Media | PM F4 | No existe workflow formal de aprobacion o bloqueo previo al costeo. | Riesgo de capturas no validadas. |
-| PM | Documentos | Pendiente | Media | PM F2 | Solo existe placeholder de UI; no hay almacenamiento ni flujos documentales. | Informacion dispersa. |
-| PM | Portal externo | Pendiente | Baja | PM F3 | No implementado. | Experiencia limitada para clientes externos. |
+| PM | Documentos | Implementado | Media | PM F5 | El proyecto ya soporta carga de documentos a storage externo, clasificacion por tipo, visibilidad externa, edicion de metadatos y desactivacion logica. | Informacion dispersa. |
+| PM | Aprobaciones basicas | Implementado | Media | PM F5 | Ya existen solicitudes, aprobacion, rechazo, cancelacion e historial basico enlazable a proyecto, documento, tarea o presupuesto. | Flujo interno sin control de decisiones. |
+| PM | Portal externo | Implementado | Baja | PM F5 | Ya existe portal publico por token con acceso revocable, expiracion opcional y vista limitada del proyecto sin informacion sensible. | Experiencia limitada para clientes externos. |
+| PM | Comentarios externos | Implementado | Media | PM F5 | Los invitados con permiso de comentario ya pueden enviar comentarios marcados como externos dentro del proyecto. | Retroalimentacion externa fuera del flujo del proyecto. |
+| PM | Bitacora portal | Implementado | Media | PM F5 | El portal ya registra accesos exitosos, denegados, regeneracion/revocacion y comentarios enviados con bitacora basica. | Menor trazabilidad sobre el uso de accesos externos. |
+| PM | Firma electronica | Pendiente | Media | PM futura | No implementado. | Aprobacion documental aun manual. |
+| PM | Aprobaciones multinivel | Pendiente | Media | PM futura | No existe workflow jerarquico por monto, etapa o tipo de aprobacion. | Gobierno interno limitado. |
+| PM | Notificaciones email | Pendiente | Media | PM futura | No implementado. | Seguimiento manual sobre aprobaciones y accesos. |
+| PM | Document versioning | Pendiente | Media | PM futura | No existe versionado formal ni historial de revisiones de documentos. | Riesgo de trabajar con archivos desalineados. |
 | PM | Vinculos comerciales | Pendiente | Alta | PM F3 | No existe enlace operativo real con ventas, facturas o cobranza. | Flujo comercial-operativo desconectado. |
 | PM | Automatizaciones / snapshots | Pendiente | Media | PM F3 | No implementado. | Se pierde contexto historico y trabajo repetitivo sigue manual. |
 | PM | Feature flags PM | Implementado | Media | PM F1 | Existe `EmpresaPMConfig` por empresa y el modulo PM sigue gated por plan y `can_access_module`. | Empresas sin acceso correcto o con banderas inconsistentes. |

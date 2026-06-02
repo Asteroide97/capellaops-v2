@@ -2,14 +2,18 @@ import logging
 from datetime import date
 from typing import Callable, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.api.deps import TenantContext, get_tenant_context
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.schemas.pm import (
     PMBudgetVsActualOut,
+    PMAprobacionCreate,
+    PMAprobacionOut,
+    PMAprobacionResolve,
     PMChecklistItemCreate,
     PMChecklistItemOut,
     PMChecklistItemUpdate,
@@ -17,6 +21,15 @@ from app.schemas.pm import (
     PMComentarioCreate,
     PMConfigOut,
     PMDashboardOut,
+    PMDocumentoOut,
+    PMDocumentoUpdate,
+    PMInvitadoExternoCreate,
+    PMInvitadoExternoCreatedOut,
+    PMInvitadoExternoOut,
+    PMPortalAccessLogOut,
+    PMPortalCommentCreate,
+    PMPortalCommentOut,
+    PMPortalProjectOut,
     PMProjectMembersListResponse,
     PMProjectBudgetBundleOut,
     PMProjectCostsOut,
@@ -78,13 +91,18 @@ from app.services.pm import (
     add_project_material_plan,
     approve_project_budget,
     cancel_project_budget,
+    cancel_project_approval,
     create_task_dependency,
+    create_external_invite,
     create_budget_item,
+    create_portal_comment,
     create_project_budget,
+    create_project_approval,
     create_project_material_requisition,
     create_checklist_item,
     create_project,
     create_project_comment,
+    upload_project_document,
     create_project_time_entry,
     create_role_hourly_rate,
     create_subtask,
@@ -99,18 +117,24 @@ from app.services.pm import (
     deactivate_task,
     deactivate_task_dependency,
     deactivate_user_hourly_rate,
+    deactivate_project_document,
     deactivate_budget_indirect,
     deactivate_budget_item,
     deactivate_budget_item_labor,
     deactivate_budget_item_material,
     get_pm_context,
     get_pm_dashboard,
+    get_portal_project,
     get_project_budget,
     get_project_budget_vs_actual,
     get_project,
     get_project_costs,
     get_task,
     get_task_dependencies,
+    list_project_approvals,
+    list_project_documents,
+    list_project_external_invites,
+    list_project_portal_access_logs,
     list_project_time_entries,
     list_project_material_plan,
     list_project_members,
@@ -119,8 +143,13 @@ from app.services.pm import (
     list_role_hourly_rates,
     list_tasks,
     list_user_hourly_rates,
+    regenerate_external_invite,
     refresh_project_total_costs,
     serialize_pm_config,
+    approve_project_approval,
+    reject_project_approval,
+    revoke_external_invite,
+    update_project_document,
     update_budget_indirect,
     update_budget_item,
     update_budget_item_labor,
@@ -136,6 +165,7 @@ from app.services.pm import (
     update_user_hourly_rate,
 )
 from app.schemas.procurement import RequisitionResponse
+from app.services.storage import StorageConfigurationError
 
 
 router = APIRouter(prefix="/pm", tags=["pm"])
@@ -172,6 +202,11 @@ def run_pm_write(db: Session, action: str, operation: Callable[[], T]) -> T:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="No se pudo completar la operacion de PM.",
         ) from exc
+
+
+def build_portal_url(request: Request, token: str) -> str:
+    settings = get_settings()
+    return f"{settings.public_frontend_url.rstrip('/')}/portal/pm/{token}"
 
 
 @router.get("/config", response_model=PMConfigOut)
@@ -1518,5 +1553,321 @@ def create_task_comment_endpoint(
             task_id=task_id,
             body=payload.body,
             ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/documents", response_model=list[PMDocumentoOut])
+def list_project_documents_endpoint(
+    project_id: str,
+    include_inactive: bool = False,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMDocumentoOut]:
+    return list_project_documents(db, pm_context, project_id, include_inactive=include_inactive)
+
+
+@router.post("/projects/{project_id}/documents", response_model=PMDocumentoOut, status_code=status.HTTP_201_CREATED)
+async def upload_project_document_endpoint(
+    project_id: str,
+    request: Request,
+    file: UploadFile = File(...),
+    tipo_documento: str = Form("otro"),
+    nombre: str = Form(...),
+    descripcion: str | None = Form(None),
+    visible_externo: bool = Form(False),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMDocumentoOut:
+    try:
+        document = await upload_project_document(
+            db,
+            pm_context,
+            project_id=project_id,
+            file=file,
+            tipo_documento=tipo_documento,
+            nombre=nombre,
+            descripcion=descripcion,
+            visible_externo=visible_externo,
+            ip_address=request.client.host if request.client else None,
+        )
+        db.commit()
+        return document
+    except HTTPException:
+        db.rollback()
+        raise
+    except StorageConfigurationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        db.rollback()
+        logger.exception("Conflicto de integridad en PM durante upload_project_document.")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo completar la operacion de PM.") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Error de base de datos en PM durante upload_project_document.")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="No se pudo completar la operacion de PM.") from exc
+    finally:
+        await file.close()
+
+
+@router.put("/documents/{document_id}", response_model=PMDocumentoOut)
+def update_project_document_endpoint(
+    document_id: str,
+    payload: PMDocumentoUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMDocumentoOut:
+    return run_pm_write(
+        db,
+        "update_project_document",
+        lambda: update_project_document(
+            db,
+            pm_context,
+            document_id=document_id,
+            tipo_documento=payload.tipo_documento,
+            nombre=payload.nombre,
+            descripcion=payload.descripcion,
+            visible_externo=payload.visible_externo,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/documents/{document_id}/deactivate", response_model=PMDocumentoOut)
+def deactivate_project_document_endpoint(
+    document_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMDocumentoOut:
+    return run_pm_write(
+        db,
+        "deactivate_project_document",
+        lambda: deactivate_project_document(
+            db,
+            pm_context,
+            document_id=document_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/approvals", response_model=list[PMAprobacionOut])
+def list_project_approvals_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMAprobacionOut]:
+    return list_project_approvals(db, pm_context, project_id)
+
+
+@router.post("/projects/{project_id}/approvals", response_model=PMAprobacionOut, status_code=status.HTTP_201_CREATED)
+def create_project_approval_endpoint(
+    project_id: str,
+    payload: PMAprobacionCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMAprobacionOut:
+    return run_pm_write(
+        db,
+        "create_project_approval",
+        lambda: create_project_approval(
+            db,
+            pm_context,
+            project_id=project_id,
+            tipo_aprobacion=payload.tipo_aprobacion,
+            titulo=payload.titulo,
+            descripcion=payload.descripcion,
+            entidad_tipo=payload.entidad_tipo,
+            entidad_id=payload.entidad_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/approvals/{approval_id}/approve", response_model=PMAprobacionOut)
+def approve_project_approval_endpoint(
+    approval_id: str,
+    payload: PMAprobacionResolve,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMAprobacionOut:
+    return run_pm_write(
+        db,
+        "approve_project_approval",
+        lambda: approve_project_approval(
+            db,
+            pm_context,
+            approval_id=approval_id,
+            comment=payload.comentario_resolucion,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/approvals/{approval_id}/reject", response_model=PMAprobacionOut)
+def reject_project_approval_endpoint(
+    approval_id: str,
+    payload: PMAprobacionResolve,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMAprobacionOut:
+    return run_pm_write(
+        db,
+        "reject_project_approval",
+        lambda: reject_project_approval(
+            db,
+            pm_context,
+            approval_id=approval_id,
+            comment=payload.comentario_resolucion,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/approvals/{approval_id}/cancel", response_model=PMAprobacionOut)
+def cancel_project_approval_endpoint(
+    approval_id: str,
+    payload: PMAprobacionResolve,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMAprobacionOut:
+    return run_pm_write(
+        db,
+        "cancel_project_approval",
+        lambda: cancel_project_approval(
+            db,
+            pm_context,
+            approval_id=approval_id,
+            comment=payload.comentario_resolucion,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/external-invites", response_model=list[PMInvitadoExternoOut])
+def list_project_external_invites_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMInvitadoExternoOut]:
+    return list_project_external_invites(db, pm_context, project_id)
+
+
+@router.get("/projects/{project_id}/portal-access-logs", response_model=list[PMPortalAccessLogOut])
+def list_project_portal_access_logs_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMPortalAccessLogOut]:
+    return list_project_portal_access_logs(db, pm_context, project_id)
+
+
+@router.post("/projects/{project_id}/external-invites", response_model=PMInvitadoExternoCreatedOut, status_code=status.HTTP_201_CREATED)
+def create_project_external_invite_endpoint(
+    project_id: str,
+    payload: PMInvitadoExternoCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMInvitadoExternoCreatedOut:
+    invite = run_pm_write(
+        db,
+        "create_project_external_invite",
+        lambda: create_external_invite(
+            db,
+            pm_context,
+            project_id=project_id,
+            nombre=payload.nombre,
+            email=payload.email,
+            modo_acceso=payload.modo_acceso,
+            expira_at=payload.expira_at,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+    return invite.model_copy(update={"portal_url": build_portal_url(request, invite.token)})
+
+
+@router.post("/external-invites/{invite_id}/revoke", response_model=PMInvitadoExternoOut)
+def revoke_project_external_invite_endpoint(
+    invite_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMInvitadoExternoOut:
+    return run_pm_write(
+        db,
+        "revoke_project_external_invite",
+        lambda: revoke_external_invite(
+            db,
+            pm_context,
+            invite_id=invite_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/external-invites/{invite_id}/regenerate", response_model=PMInvitadoExternoCreatedOut)
+def regenerate_project_external_invite_endpoint(
+    invite_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMInvitadoExternoCreatedOut:
+    invite = run_pm_write(
+        db,
+        "regenerate_project_external_invite",
+        lambda: regenerate_external_invite(
+            db,
+            pm_context,
+            invite_id=invite_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+    return invite.model_copy(update={"portal_url": build_portal_url(request, invite.token)})
+
+
+@router.get("/portal/{token}", response_model=PMPortalProjectOut)
+def get_pm_portal_project_endpoint(
+    token: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> PMPortalProjectOut:
+    return run_pm_write(
+        db,
+        "pm_portal_project_access",
+        lambda: get_portal_project(
+            db,
+            token,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
+        ),
+    )
+
+
+@router.post("/portal/{token}/comments", response_model=PMPortalCommentOut, status_code=status.HTTP_201_CREATED)
+def create_pm_portal_comment_endpoint(
+    token: str,
+    payload: PMPortalCommentCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> PMPortalCommentOut:
+    return run_pm_write(
+        db,
+        "pm_portal_comment_create",
+        lambda: create_portal_comment(
+            db,
+            token,
+            author_name=payload.autor_nombre,
+            body=payload.body,
+            ip_address=request.client.host if request.client else None,
+            user_agent=request.headers.get("user-agent"),
         ),
     )

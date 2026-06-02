@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   ArrowLeft,
   BadgeDollarSign,
@@ -56,6 +56,9 @@ import PMProjectMaterialsTab from "./PMProjectMaterialsTab";
 import PMProjectBudgetTab from "./PMProjectBudgetTab";
 import PMProjectTimeCostsTab from "./PMProjectTimeCostsTab";
 import PMProjectWorkPlanView from "./PMProjectWorkPlanView";
+import PMProjectDocumentsTab from "./PMProjectDocumentsTab";
+import PMProjectApprovalsTab from "./PMProjectApprovalsTab";
+import PMProjectPortalTab from "./PMProjectPortalTab";
 import PMTaskDetailModal from "./PMTaskDetailModal";
 import {
   formatPercent,
@@ -79,7 +82,9 @@ const projectViews = [
   { key: "materiales", label: "Materiales", icon: PackageOpen },
   { key: "costos", label: "Tiempo y costos", icon: Clock3 },
   { key: "comentarios", label: "Comentarios", icon: MessageSquare },
+  { key: "aprobaciones", label: "Aprobaciones", icon: CheckCheck },
   { key: "documentos", label: "Documentos", icon: FileText },
+  { key: "portal", label: "Portal externo", icon: Lock },
 ];
 
 const defaultMemberForm = {
@@ -1227,7 +1232,7 @@ export default function PMProjectDetailPage() {
         />
       ) : null}
 
-      {activeView === "comentarios" ? (
+            {activeView === "comentarios" ? (
         <DataCard subtitle="Conversación general del proyecto." title="Comentarios">
           <form className="inventory-modal-form" onSubmit={handleCreateProjectComment}>
             <Field label="Nuevo comentario">
@@ -1250,7 +1255,15 @@ export default function PMProjectDetailPage() {
               {project.comments.map((comment) => (
                 <article className="pm-comment-card" key={comment.id}>
                   <div className="pm-comment-head">
-                    <strong>{safeDisplayText(comment.created_by_nombre_snapshot, "Usuario")}</strong>
+                    <div className="inventory-actions inventory-actions-wrap">
+                      <strong>
+                        {safeDisplayText(
+                          comment.externo ? comment.autor_nombre_snapshot : comment.created_by_nombre_snapshot,
+                          comment.externo ? "Invitado externo" : "Usuario",
+                        )}
+                      </strong>
+                      {comment.externo ? <StatusBadge tone="info">Comentario externo</StatusBadge> : null}
+                    </div>
                     <span className="inventory-cell-sub">{safeDisplayText(formatDate(comment.created_at), "—")}</span>
                   </div>
                   <p>{safeDisplayText(comment.body, "")}</p>
@@ -1261,11 +1274,16 @@ export default function PMProjectDetailPage() {
         </DataCard>
       ) : null}
 
+      {activeView === "aprobaciones" ? (
+        <PMProjectApprovalsTab empresaId={empresaId} projectId={id} token={token} />
+      ) : null}
+
       {activeView === "documentos" ? (
-        <PlaceholderView
-          note="La vista de documentos se conectará en una fase posterior. Todavía no hay drag & drop, dependencias ni ruta crítica."
-          title="Documentos del proyecto"
-        />
+        <PMProjectDocumentsTab empresaId={empresaId} projectId={id} token={token} />
+      ) : null}
+
+      {activeView === "portal" ? (
+        <PMProjectPortalTab empresaId={empresaId} project={project} projectId={id} token={token} />
       ) : null}
 
       <ModalShell
@@ -1336,3 +1354,6 @@ export default function PMProjectDetailPage() {
     </div>
   );
 }
+
+
+

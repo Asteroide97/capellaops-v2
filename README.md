@@ -1,4 +1,4 @@
-# Capella Ops V2
+﻿# Capella Ops V2
 
 Monorepo para un SaaS multiempresa con Azure SQL, FastAPI y React + Vite.
 
@@ -840,6 +840,67 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - ruta crítica
   - drag & drop
 
+## PM Fase 5 - Documentos, aprobaciones y portal externo básico
+
+- El Project Workspace ya integra las vistas:
+  - `Documentos`
+  - `Aprobaciones`
+  - `Portal externo`
+- Los documentos de proyecto ya soportan:
+  - carga por archivo hacia storage externo
+  - clasificación por tipo
+  - descripción y metadatos
+  - activación lógica
+  - marca `Visible para cliente`
+- Las aprobaciones básicas ya cubren:
+  - solicitud
+  - aprobación
+  - rechazo
+  - cancelación
+  - relación opcional con presupuesto, documento o tarea
+- El portal externo ya soporta:
+  - invitado por token seguro
+  - revocación
+  - regeneración de link
+  - expiración opcional
+  - bitácora de accesos
+- El portal público muestra solo:
+  - nombre y código del proyecto
+  - estatus
+  - avance
+  - fechas
+  - resumen simple de tareas
+  - documentos marcados como visibles
+  - comentarios externos cuando el acceso lo permite
+- El portal no expone:
+  - costos
+  - presupuestos
+  - horas
+  - tarifas
+  - inventario
+  - compras
+  - márgenes
+  - usuarios internos
+- Los comentarios externos quedan marcados dentro de PM como `Comentario externo`.
+
+### Restricciones y notas de seguridad
+
+- El token completo del portal solo se muestra al crear o regenerar el acceso.
+- En base de datos solo se guarda el hash del token.
+- Revocar un acceso invalida el link de inmediato.
+- Un link expirado o revocado niega acceso sin revelar más contexto del proyecto.
+- Si Azure Blob o el storage equivalente no está configurado, la subida de documentos devuelve un error claro y el resto del portal sigue operando.
+
+### Pendientes de PM Fase 5
+
+- Rate limiting persistente para portal público
+- Expiración automática programada de accesos
+- Control de versiones de documentos
+- Descarga protegida con SAS o enlace firmado
+- Firma electrónica
+- Aprobaciones multinivel
+- Notificaciones por email
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.
@@ -1093,3 +1154,6 @@ Estas vistas ya aparecen en el shell de Inventario, pero siguen reservadas para 
 
 - No se usa Base44 ni SDKs relacionados.
 - No se implementa factura.com, CFDI, timbrado, CSD ni Stripe en este estado del proyecto.
+
+
+

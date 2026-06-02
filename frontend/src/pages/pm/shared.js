@@ -40,6 +40,31 @@ export const pmRateRoleOptions = [
   { value: "observador", label: "Observador" },
 ];
 
+export const pmDocumentTypeOptions = [
+  { value: "contrato", label: "Contrato" },
+  { value: "alcance", label: "Alcance" },
+  { value: "minuta", label: "Minuta" },
+  { value: "cambio_alcance", label: "Cambio de alcance" },
+  { value: "entrega", label: "Entrega" },
+  { value: "evidencia", label: "Evidencia" },
+  { value: "cierre", label: "Cierre" },
+  { value: "otro", label: "Otro" },
+];
+
+export const pmApprovalTypeOptions = [
+  { value: "aprobar_presupuesto", label: "Aprobar presupuesto" },
+  { value: "aprobar_cambio_alcance", label: "Aprobar cambio de alcance" },
+  { value: "aprobar_entrega", label: "Aprobar entrega" },
+  { value: "aprobar_cierre_etapa", label: "Aprobar cierre de etapa" },
+  { value: "aprobar_cierre_proyecto", label: "Aprobar cierre de proyecto" },
+  { value: "otro", label: "Otro" },
+];
+
+export const pmExternalAccessModeOptions = [
+  { value: "solo_lectura", label: "Solo lectura" },
+  { value: "comentario", label: "Puede comentar" },
+];
+
 const pmVisualCopyFixups = [
   [/Construccion/g, "Construcción"],
   [/construccion/g, "construcción"],
@@ -47,6 +72,8 @@ const pmVisualCopyFixups = [
   [/operacion/g, "operación"],
   [/Ejecucion/g, "Ejecución"],
   [/ejecucion/g, "ejecución"],
+  [/Prerequisito/g, "Prerrequisito"],
+  [/Prerequisitos/g, "Prerrequisitos"],
 ];
 
 
@@ -68,6 +95,21 @@ export function getTaskStatusLabel(value) {
 
 export function getPriorityLabel(value) {
   return priorityOptions.find((item) => item.value === value)?.label ?? value ?? "Media";
+}
+
+
+export function getDocumentTypeLabel(value) {
+  return pmDocumentTypeOptions.find((item) => item.value === value)?.label ?? value ?? "Documento";
+}
+
+
+export function getApprovalTypeLabel(value) {
+  return pmApprovalTypeOptions.find((item) => item.value === value)?.label ?? value ?? "Otro";
+}
+
+
+export function getExternalAccessModeLabel(value) {
+  return pmExternalAccessModeOptions.find((item) => item.value === value)?.label ?? value ?? "Solo lectura";
 }
 
 
@@ -102,6 +144,21 @@ export function getTaskStatusTone(value) {
   }
   if (normalized === "cancelada") {
     return "danger";
+  }
+  return "neutral";
+}
+
+
+export function getApprovalStatusTone(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "aprobada") {
+    return "success";
+  }
+  if (normalized === "rechazada") {
+    return "danger";
+  }
+  if (normalized === "cancelada") {
+    return "warning";
   }
   return "neutral";
 }

@@ -1,7 +1,7 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class PMConfigOut(BaseModel):
@@ -40,6 +40,9 @@ class PMCommentOut(BaseModel):
     body: str
     created_by: str | None = None
     created_by_nombre_snapshot: str | None = None
+    externo: bool = False
+    autor_nombre_snapshot: str | None = None
+    invitado_externo_id: str | None = None
     activo: bool
     created_at: datetime
     updated_at: datetime
@@ -327,6 +330,225 @@ class PMChecklistItemUpdate(BaseModel):
 
 class PMComentarioCreate(BaseModel):
     body: str = Field(min_length=1)
+
+
+class PMDocumentoCreate(BaseModel):
+    tipo_documento: str = Field(default="otro", min_length=3, max_length=40)
+    nombre: str = Field(min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=2000)
+    visible_externo: bool = False
+
+
+class PMDocumentoUpdate(BaseModel):
+    tipo_documento: str | None = Field(default=None, min_length=3, max_length=40)
+    nombre: str | None = Field(default=None, min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=2000)
+    visible_externo: bool | None = None
+    activo: bool | None = None
+
+
+class PMDocumentoOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    tipo_documento: str
+    nombre: str
+    descripcion: str | None = None
+    url_archivo: str
+    nombre_archivo: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    visible_externo: bool
+    activo: bool
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMAprobacionCreate(BaseModel):
+    tipo_aprobacion: str = Field(default="otro", min_length=3, max_length=40)
+    titulo: str = Field(min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=4000)
+    entidad_tipo: str | None = Field(default=None, max_length=40)
+    entidad_id: str | None = Field(default=None, max_length=36)
+
+
+class PMAprobacionResolve(BaseModel):
+    comentario_resolucion: str | None = Field(default=None, max_length=4000)
+
+
+class PMAprobacionOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    tipo_aprobacion: str
+    titulo: str
+    descripcion: str | None = None
+    estatus: str
+    entidad_tipo: str | None = None
+    entidad_id: str | None = None
+    solicitado_por: str | None = None
+    solicitado_por_nombre: str | None = None
+    solicitado_en: datetime | None = None
+    resuelto_por: str | None = None
+    resuelto_por_nombre: str | None = None
+    resuelto_en: datetime | None = None
+    comentario_resolucion: str | None = None
+    activo: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMInvitadoExternoCreate(BaseModel):
+    nombre: str = Field(min_length=1, max_length=180)
+    email: EmailStr | None = None
+    modo_acceso: str = Field(default="solo_lectura", min_length=4, max_length=20)
+    expira_at: datetime | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_empty_email(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("expira_at", mode="before")
+    @classmethod
+    def normalize_empty_expiry(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("expira_at", mode="after")
+    @classmethod
+    def normalize_expiry_timezone(cls, value: datetime | None):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+
+class PMInvitadoExternoUpdate(BaseModel):
+    nombre: str | None = Field(default=None, min_length=1, max_length=180)
+    email: EmailStr | None = None
+    modo_acceso: str | None = Field(default=None, min_length=4, max_length=20)
+    expira_at: datetime | None = None
+    activo: bool | None = None
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_empty_email(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("expira_at", mode="before")
+    @classmethod
+    def normalize_empty_expiry(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("expira_at", mode="after")
+    @classmethod
+    def normalize_expiry_timezone(cls, value: datetime | None):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+
+class PMInvitadoExternoOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    nombre: str
+    email: str | None = None
+    modo_acceso: str
+    token_preview: str | None = None
+    activo: bool
+    revocado_at: datetime | None = None
+    expira_at: datetime | None = None
+    ultimo_acceso_at: datetime | None = None
+    total_accesos: int = 0
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMInvitadoExternoCreatedOut(PMInvitadoExternoOut):
+    token: str
+    portal_path: str
+    portal_url: str | None = None
+
+
+class PMPortalCommentCreate(BaseModel):
+    autor_nombre: str | None = Field(default=None, max_length=160)
+    body: str = Field(min_length=1, max_length=1000)
+
+
+class PMPortalCommentOut(BaseModel):
+    body: str
+    autor_nombre: str
+    created_at: datetime
+
+
+class PMPortalDocumentOut(BaseModel):
+    nombre: str
+    tipo_documento: str
+    descripcion: str | None = None
+    url_archivo: str
+    nombre_archivo: str | None = None
+    mime_type: str | None = None
+    size_bytes: int | None = None
+    created_at: datetime
+
+
+class PMPortalTaskItemOut(BaseModel):
+    titulo: str
+    estatus: str
+    porcentaje_avance: Decimal = Decimal("0")
+    fecha_inicio: date | None = None
+    fecha_vencimiento: date | None = None
+
+
+class PMPortalTaskSummaryOut(BaseModel):
+    total: int = 0
+    pendientes: int = 0
+    en_progreso: int = 0
+    en_revision: int = 0
+    completadas: int = 0
+
+
+class PMPortalAccessLogOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    invitado_externo_id: str | None = None
+    accion: str
+    resultado: str
+    detalle: str | None = None
+    created_at: datetime
+
+
+class PMPortalProjectOut(BaseModel):
+    nombre: str
+    codigo: str | None = None
+    estatus: str
+    prioridad: str | None = None
+    porcentaje_avance: Decimal = Decimal("0")
+    fecha_inicio: date | None = None
+    fecha_fin_planificada: date | None = None
+    access_mode: str = "solo_lectura"
+    can_comment: bool = False
+    invite_name: str | None = None
+    tasks_summary: PMPortalTaskSummaryOut = Field(default_factory=PMPortalTaskSummaryOut)
+    tasks: list[PMPortalTaskItemOut] = Field(default_factory=list)
+    documents: list[PMPortalDocumentOut] = Field(default_factory=list)
+    comments: list[PMPortalCommentOut] = Field(default_factory=list)
 
 
 class PMDashboardDueItem(BaseModel):

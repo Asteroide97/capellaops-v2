@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
+import secrets
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
@@ -12,8 +14,12 @@ from app.api.deps import TenantContext
 from app.models import AuditLog, EmpresaModulo, EmpresaUsuario, Material, MovimientoInventario, Requisicion, RequisicionDetalle, Usuario
 from app.models.pm import (
     EmpresaPMConfig,
+    PMAprobacion,
     PMChecklistItem,
     PMComentario,
+    PMDocumento,
+    PMInvitadoExterno,
+    PMPortalAccessLog,
     PMPresupuesto,
     PMPresupuestoIndirecto,
     PMPresupuestoPartida,
@@ -33,8 +39,9 @@ from app.models.pm import (
 )
 from app.schemas.pm import (
     PMBudgetVsActualOut,
-    PMChecklistItemOut,
+    PMAprobacionOut,
     PMCommentOut,
+    PMChecklistItemOut,
     PMConfigOut,
     PMDashboardDueItem,
     PMDashboardProjectCostItem,
@@ -50,6 +57,15 @@ from app.schemas.pm import (
     PMPresupuestoPartidaManoObraOut,
     PMPresupuestoPartidaMaterialOut,
     PMPresupuestoPartidaOut,
+    PMDocumentoOut,
+    PMInvitadoExternoCreatedOut,
+    PMInvitadoExternoOut,
+    PMPortalAccessLogOut,
+    PMPortalCommentOut,
+    PMPortalDocumentOut,
+    PMPortalProjectOut,
+    PMPortalTaskItemOut,
+    PMPortalTaskSummaryOut,
     PMProyectoMaterialConsumoOut,
     PMProyectoMaterialPlanOut,
     PMProyectoMaterialSummaryOut,
@@ -75,6 +91,7 @@ from app.schemas.pm import (
     PMTareaOut,
 )
 from app.services.access import can_access_module
+from app.services.storage import upload_pm_document
 
 
 ALLOWED_PROJECT_STATUS = {"borrador", "activo", "en_pausa", "completado", "cancelado"}
@@ -91,6 +108,17 @@ PM_BUDGET_STATUS = {"borrador", "aprobado", "sustituido", "cancelado"}
 PM_BUDGET_ITEM_TYPES = {"capitulo", "partida"}
 PM_BUDGET_INDIRECT_TYPES = {"porcentaje", "monto"}
 PM_TASK_DEPENDENCY_TYPES = {"finish_to_start"}
+PM_DOCUMENT_TYPES = {"contrato", "alcance", "minuta", "cambio_alcance", "entrega", "evidencia", "cierre", "otro"}
+PM_APPROVAL_TYPES = {
+    "aprobar_presupuesto",
+    "aprobar_cambio_alcance",
+    "aprobar_entrega",
+    "aprobar_cierre_etapa",
+    "aprobar_cierre_proyecto",
+    "otro",
+}
+PM_APPROVAL_STATUS = {"pendiente", "aprobada", "rechazada", "cancelada"}
+PM_EXTERNAL_ACCESS_MODES = {"solo_lectura", "comentario"}
 ZERO = Decimal("0")
 
 
@@ -108,6 +136,14 @@ def utcnow() -> datetime:
 
 def today_utc() -> date:
     return utcnow().date()
+
+
+def coerce_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def decimal_or_zero(value: Decimal | int | float | str | None) -> Decimal:
@@ -218,6 +254,27 @@ def normalize_task_dependency_type(value: str | None) -> str:
     return normalized
 
 
+def normalize_document_type(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Tipo de documento").lower()
+    if normalized not in PM_DOCUMENT_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de documento invalido.")
+    return normalized
+
+
+def normalize_approval_type(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Tipo de aprobacion").lower()
+    if normalized not in PM_APPROVAL_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de aprobacion invalido.")
+    return normalized
+
+
+def normalize_external_access_mode(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Modo de acceso").lower()
+    if normalized not in PM_EXTERNAL_ACCESS_MODES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Modo de acceso invalido.")
+    return normalized
+
+
 def validate_effective_dates(effective_from: date | None, effective_to: date | None) -> None:
     if effective_from and effective_to and effective_to < effective_from:
         raise HTTPException(
@@ -238,6 +295,25 @@ def quantize_rate(value: Decimal) -> Decimal:
     return decimal_or_zero(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
 
+def hash_portal_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def build_portal_token_preview(token: str) -> str:
+    return token[-6:] if token else ""
+
+
+def generate_portal_token() -> tuple[str, str, str]:
+    token = secrets.token_urlsafe(48)
+    return token, hash_portal_token(token), build_portal_token_preview(token)
+
+
+def hash_ip_address(ip_address: str | None) -> str | None:
+    if not ip_address:
+        return None
+    return hashlib.sha256(ip_address.encode("utf-8")).hexdigest()
+
+
 def build_status_counts(rows: list[tuple[str, int]], allowed_values: set[str]) -> list[PMStatusCount]:
     totals = {status_name: count for status_name, count in rows}
     return [PMStatusCount(estatus=value, total=totals.get(value, 0)) for value in sorted(allowed_values)]
@@ -256,7 +332,7 @@ def get_or_create_pm_config(db: Session, empresa_id: str) -> tuple[EmpresaPMConf
         pm_tiempo_enabled=True,
         pm_templates_enabled=False,
         pm_comercial_enabled=False,
-        pm_portal_enabled=False,
+        pm_portal_enabled=True,
     )
     db.add(config)
     db.flush()
@@ -326,6 +402,23 @@ def ensure_pm_budget_manage_access(pm_context: PMContext) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo owner o admin pueden gestionar presupuestos PM.",
+        )
+
+
+def ensure_pm_portal_enabled(pm_context: PMContext) -> None:
+    if not pm_context.config.pm_portal_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="El portal externo de PM esta deshabilitado para la empresa activa.",
+        )
+
+
+def ensure_pm_portal_manage_access(pm_context: PMContext) -> None:
+    ensure_pm_portal_enabled(pm_context)
+    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo owner o admin pueden gestionar el portal externo PM.",
         )
 
 
@@ -408,6 +501,13 @@ def get_company_member_by_email(db: Session, empresa_id: str, email: str | None)
             Usuario.is_active == True,
         )
     ).scalar_one_or_none()
+
+
+def get_user_display_name(db: Session, user_id: str | None) -> str | None:
+    if not user_id:
+        return None
+    user = db.scalar(select(Usuario).where(Usuario.id == user_id))
+    return user.full_name if user else None
 
 
 def get_project_for_company(db: Session, empresa_id: str, project_id: str) -> PMProyecto:
@@ -627,6 +727,9 @@ def serialize_comment(comment: PMComentario) -> PMCommentOut:
         body=comment.body,
         created_by=comment.created_by,
         created_by_nombre_snapshot=comment.created_by_nombre_snapshot,
+        externo=comment.externo,
+        autor_nombre_snapshot=comment.autor_nombre_snapshot,
+        invitado_externo_id=comment.invitado_externo_id,
         activo=comment.activo,
         created_at=comment.created_at,
         updated_at=comment.updated_at,
@@ -5148,3 +5251,850 @@ def serialize_pm_config(config: EmpresaPMConfig) -> PMConfigOut:
         created_at=config.created_at,
         updated_at=config.updated_at,
     )
+
+
+def get_document_for_company(db: Session, empresa_id: str, document_id: str) -> PMDocumento:
+    document = db.scalar(
+        select(PMDocumento).where(
+            PMDocumento.id == document_id,
+            PMDocumento.empresa_id == empresa_id,
+        )
+    )
+    if not document:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Documento PM no encontrado.")
+    return document
+
+
+def get_approval_for_company(db: Session, empresa_id: str, approval_id: str) -> PMAprobacion:
+    approval = db.scalar(
+        select(PMAprobacion).where(
+            PMAprobacion.id == approval_id,
+            PMAprobacion.empresa_id == empresa_id,
+        )
+    )
+    if not approval:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Aprobacion PM no encontrada.")
+    return approval
+
+
+def get_external_invite_for_company(db: Session, empresa_id: str, invite_id: str) -> PMInvitadoExterno:
+    invite = db.scalar(
+        select(PMInvitadoExterno).where(
+            PMInvitadoExterno.id == invite_id,
+            PMInvitadoExterno.empresa_id == empresa_id,
+        )
+    )
+    if not invite:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Acceso externo no encontrado.")
+    return invite
+
+
+def serialize_document(document: PMDocumento) -> PMDocumentoOut:
+    return PMDocumentoOut(
+        id=document.id,
+        empresa_id=document.empresa_id,
+        proyecto_id=document.proyecto_id,
+        tipo_documento=document.tipo_documento,
+        nombre=document.nombre,
+        descripcion=document.descripcion,
+        url_archivo=document.url_archivo,
+        nombre_archivo=document.nombre_archivo,
+        mime_type=document.mime_type,
+        size_bytes=document.size_bytes,
+        visible_externo=document.visible_externo,
+        activo=document.activo,
+        created_by=document.created_by,
+        updated_by=document.updated_by,
+        created_at=document.created_at,
+        updated_at=document.updated_at,
+    )
+
+
+def serialize_approval(db: Session, approval: PMAprobacion) -> PMAprobacionOut:
+    return PMAprobacionOut(
+        id=approval.id,
+        empresa_id=approval.empresa_id,
+        proyecto_id=approval.proyecto_id,
+        tipo_aprobacion=approval.tipo_aprobacion,
+        titulo=approval.titulo,
+        descripcion=approval.descripcion,
+        estatus=approval.estatus,
+        entidad_tipo=approval.entidad_tipo,
+        entidad_id=approval.entidad_id,
+        solicitado_por=approval.solicitado_por,
+        solicitado_por_nombre=get_user_display_name(db, approval.solicitado_por),
+        solicitado_en=approval.solicitado_en,
+        resuelto_por=approval.resuelto_por,
+        resuelto_por_nombre=get_user_display_name(db, approval.resuelto_por),
+        resuelto_en=approval.resuelto_en,
+        comentario_resolucion=approval.comentario_resolucion,
+        activo=approval.activo,
+        created_at=approval.created_at,
+        updated_at=approval.updated_at,
+    )
+
+
+def serialize_external_invite(invite: PMInvitadoExterno) -> PMInvitadoExternoOut:
+    return PMInvitadoExternoOut(
+        id=invite.id,
+        empresa_id=invite.empresa_id,
+        proyecto_id=invite.proyecto_id,
+        nombre=invite.nombre,
+        email=invite.email,
+        modo_acceso=invite.modo_acceso,
+        token_preview=invite.token_preview,
+        activo=invite.activo,
+        revocado_at=invite.revocado_at,
+        expira_at=invite.expira_at,
+        ultimo_acceso_at=invite.ultimo_acceso_at,
+        total_accesos=invite.total_accesos,
+        created_by=invite.created_by,
+        created_at=invite.created_at,
+        updated_at=invite.updated_at,
+    )
+
+
+def serialize_external_invite_created(
+    invite: PMInvitadoExterno,
+    *,
+    token: str,
+    portal_url: str | None = None,
+) -> PMInvitadoExternoCreatedOut:
+    return PMInvitadoExternoCreatedOut(
+        **serialize_external_invite(invite).model_dump(),
+        token=token,
+        portal_path=f"/portal/pm/{token}",
+        portal_url=portal_url,
+    )
+
+
+def serialize_portal_access_log(log_entry: PMPortalAccessLog) -> PMPortalAccessLogOut:
+    return PMPortalAccessLogOut(
+        id=log_entry.id,
+        empresa_id=log_entry.empresa_id,
+        proyecto_id=log_entry.proyecto_id,
+        invitado_externo_id=log_entry.invitado_externo_id,
+        accion=log_entry.accion,
+        resultado=log_entry.resultado,
+        detalle=log_entry.detalle,
+        created_at=log_entry.created_at,
+    )
+
+
+def serialize_portal_document(document: PMDocumento) -> PMPortalDocumentOut:
+    return PMPortalDocumentOut(
+        nombre=document.nombre,
+        tipo_documento=document.tipo_documento,
+        descripcion=document.descripcion,
+        url_archivo=document.url_archivo,
+        nombre_archivo=document.nombre_archivo,
+        mime_type=document.mime_type,
+        size_bytes=document.size_bytes,
+        created_at=document.created_at,
+    )
+
+
+def serialize_portal_comment(comment: PMComentario) -> PMPortalCommentOut:
+    author_name = (
+        normalize_optional_text(comment.autor_nombre_snapshot)
+        or normalize_optional_text(comment.created_by_nombre_snapshot)
+        or "Invitado"
+    )
+    return PMPortalCommentOut(
+        body=comment.body,
+        autor_nombre=author_name,
+        created_at=comment.created_at,
+    )
+
+
+def build_portal_task_summary(tasks: list[PMTarea]) -> PMPortalTaskSummaryOut:
+    counts: dict[str, int] = {"pendiente": 0, "en_progreso": 0, "en_revision": 0, "completada": 0}
+    for task in tasks:
+        normalized = str(task.estatus or "").lower()
+        if normalized in counts:
+            counts[normalized] += 1
+    return PMPortalTaskSummaryOut(
+        total=len(tasks),
+        pendientes=counts["pendiente"],
+        en_progreso=counts["en_progreso"],
+        en_revision=counts["en_revision"],
+        completadas=counts["completada"],
+    )
+
+
+def log_portal_access(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    invite_id: str | None,
+    action: str,
+    result: str,
+    detail: str | None,
+    ip_address: str | None,
+    user_agent: str | None,
+) -> None:
+    db.add(
+        PMPortalAccessLog(
+            empresa_id=empresa_id,
+            proyecto_id=project_id,
+            invitado_externo_id=invite_id,
+            accion=action,
+            resultado=result,
+            detalle=normalize_optional_text(detail),
+            ip_hash=hash_ip_address(ip_address),
+            user_agent=normalize_optional_text(user_agent),
+        )
+    )
+
+
+def validate_approval_entity_reference(
+    db: Session,
+    empresa_id: str,
+    *,
+    entity_type: str | None,
+    entity_id: str | None,
+) -> tuple[str | None, str | None]:
+    normalized_type = normalize_optional_text(entity_type)
+    normalized_id = normalize_optional_text(entity_id)
+    if normalized_type in {"sin_relacion", "sin_relación"}:
+        normalized_type = None
+    if not normalized_type:
+        return None, None
+    if normalized_type and not normalized_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Debes indicar el elemento relacionado para esta aprobacion.",
+        )
+
+    if normalized_type == "presupuesto":
+        get_budget_for_company(db, empresa_id, normalized_id)
+    elif normalized_type == "documento":
+        get_document_for_company(db, empresa_id, normalized_id)
+    elif normalized_type == "tarea":
+        get_task_for_company(db, empresa_id, normalized_id)
+    elif normalized_type in {None, "otro"}:
+        normalized_type = normalized_type or "otro"
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo relacionado invalido.")
+    return normalized_type, normalized_id
+
+
+def list_project_documents(
+    db: Session,
+    pm_context: PMContext,
+    project_id: str,
+    *,
+    include_inactive: bool = False,
+) -> list[PMDocumentoOut]:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    query = select(PMDocumento).where(
+        PMDocumento.empresa_id == pm_context.empresa_id,
+        PMDocumento.proyecto_id == project_id,
+    )
+    if not include_inactive:
+        query = query.where(PMDocumento.activo == True)
+    documents = db.scalars(query.order_by(PMDocumento.created_at.desc())).all()
+    return [serialize_document(document) for document in documents]
+
+
+async def upload_project_document(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    file: UploadFile,
+    tipo_documento: str,
+    nombre: str,
+    descripcion: str | None,
+    visible_externo: bool,
+    ip_address: str | None,
+) -> PMDocumentoOut:
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    upload = await upload_pm_document(file, pm_context.empresa_id, project.id)
+    document = PMDocumento(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        tipo_documento=normalize_document_type(tipo_documento),
+        nombre=normalize_required_text(nombre, "Nombre"),
+        descripcion=normalize_optional_text(descripcion),
+        url_archivo=upload.archivo_url,
+        nombre_archivo=upload.filename,
+        mime_type=upload.content_type,
+        size_bytes=upload.size_bytes,
+        visible_externo=bool(visible_externo),
+        activo=True,
+        created_by=pm_context.user.id,
+        updated_by=pm_context.user.id,
+    )
+    db.add(document)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.document.create",
+            entity_name="pm_documento",
+            entity_id=document.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "tipo_documento": document.tipo_documento},
+        )
+    )
+    return serialize_document(document)
+
+
+def update_project_document(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    document_id: str,
+    tipo_documento: str | None,
+    nombre: str | None,
+    descripcion: str | None,
+    visible_externo: bool | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMDocumentoOut:
+    document = get_document_for_company(db, pm_context.empresa_id, document_id)
+    if tipo_documento is not None:
+        document.tipo_documento = normalize_document_type(tipo_documento)
+    if nombre is not None:
+        document.nombre = normalize_required_text(nombre, "Nombre")
+    if descripcion is not None:
+        document.descripcion = normalize_optional_text(descripcion)
+    if visible_externo is not None:
+        document.visible_externo = visible_externo
+    if activo is not None:
+        document.activo = activo
+    document.updated_by = pm_context.user.id
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.document.update",
+            entity_name="pm_documento",
+            entity_id=document.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": document.proyecto_id, "visible_externo": document.visible_externo},
+        )
+    )
+    db.flush()
+    return serialize_document(document)
+
+
+def deactivate_project_document(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    document_id: str,
+    ip_address: str | None,
+) -> PMDocumentoOut:
+    return update_project_document(
+        db,
+        pm_context,
+        document_id=document_id,
+        tipo_documento=None,
+        nombre=None,
+        descripcion=None,
+        visible_externo=False,
+        activo=False,
+        ip_address=ip_address,
+    )
+
+
+def list_project_approvals(db: Session, pm_context: PMContext, project_id: str) -> list[PMAprobacionOut]:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    approvals = db.scalars(
+        select(PMAprobacion)
+        .where(
+            PMAprobacion.empresa_id == pm_context.empresa_id,
+            PMAprobacion.proyecto_id == project_id,
+            PMAprobacion.activo == True,
+        )
+        .order_by(PMAprobacion.created_at.desc())
+    ).all()
+    return [serialize_approval(db, approval) for approval in approvals]
+
+
+def create_project_approval(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    tipo_aprobacion: str,
+    titulo: str,
+    descripcion: str | None,
+    entidad_tipo: str | None,
+    entidad_id: str | None,
+    ip_address: str | None,
+) -> PMAprobacionOut:
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    normalized_entity_type, normalized_entity_id = validate_approval_entity_reference(
+        db,
+        pm_context.empresa_id,
+        entity_type=entidad_tipo,
+        entity_id=entidad_id,
+    )
+    approval = PMAprobacion(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        tipo_aprobacion=normalize_approval_type(tipo_aprobacion),
+        titulo=normalize_required_text(titulo, "Titulo"),
+        descripcion=normalize_optional_text(descripcion),
+        estatus="pendiente",
+        entidad_tipo=normalized_entity_type,
+        entidad_id=normalized_entity_id,
+        solicitado_por=pm_context.user.id,
+        solicitado_en=utcnow(),
+        activo=True,
+    )
+    db.add(approval)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.approval.create",
+            entity_name="pm_aprobacion",
+            entity_id=approval.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "tipo_aprobacion": approval.tipo_aprobacion},
+        )
+    )
+    return serialize_approval(db, approval)
+
+
+def resolve_project_approval(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    approval_id: str,
+    next_status: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMAprobacionOut:
+    ensure_pm_budget_manage_access(pm_context)
+    approval = get_approval_for_company(db, pm_context.empresa_id, approval_id)
+    if approval.estatus != "pendiente":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo las aprobaciones pendientes pueden resolverse.",
+        )
+    approval.estatus = next_status
+    approval.resuelto_por = pm_context.user.id
+    approval.resuelto_en = utcnow()
+    approval.comentario_resolucion = normalize_optional_text(comment)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action=f"pm.approval.{next_status}",
+            entity_name="pm_aprobacion",
+            entity_id=approval.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": approval.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_approval(db, approval)
+
+
+def approve_project_approval(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    approval_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMAprobacionOut:
+    return resolve_project_approval(
+        db,
+        pm_context,
+        approval_id=approval_id,
+        next_status="aprobada",
+        comment=comment,
+        ip_address=ip_address,
+    )
+
+
+def reject_project_approval(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    approval_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMAprobacionOut:
+    return resolve_project_approval(
+        db,
+        pm_context,
+        approval_id=approval_id,
+        next_status="rechazada",
+        comment=comment,
+        ip_address=ip_address,
+    )
+
+
+def cancel_project_approval(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    approval_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMAprobacionOut:
+    return resolve_project_approval(
+        db,
+        pm_context,
+        approval_id=approval_id,
+        next_status="cancelada",
+        comment=comment,
+        ip_address=ip_address,
+    )
+
+
+def list_project_external_invites(
+    db: Session,
+    pm_context: PMContext,
+    project_id: str,
+) -> list[PMInvitadoExternoOut]:
+    ensure_pm_portal_manage_access(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    invites = db.scalars(
+        select(PMInvitadoExterno)
+        .where(
+            PMInvitadoExterno.empresa_id == pm_context.empresa_id,
+            PMInvitadoExterno.proyecto_id == project_id,
+        )
+        .order_by(PMInvitadoExterno.created_at.desc())
+    ).all()
+    return [serialize_external_invite(invite) for invite in invites]
+
+
+def list_project_portal_access_logs(
+    db: Session,
+    pm_context: PMContext,
+    project_id: str,
+) -> list[PMPortalAccessLogOut]:
+    ensure_pm_portal_manage_access(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    logs = db.scalars(
+        select(PMPortalAccessLog)
+        .where(
+            PMPortalAccessLog.empresa_id == pm_context.empresa_id,
+            PMPortalAccessLog.proyecto_id == project_id,
+        )
+        .order_by(PMPortalAccessLog.created_at.desc())
+        .limit(100)
+    ).all()
+    return [serialize_portal_access_log(log_entry) for log_entry in logs]
+
+
+def create_external_invite(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    nombre: str,
+    email: str | None,
+    modo_acceso: str,
+    expira_at: datetime | None,
+    ip_address: str | None,
+    portal_url: str | None = None,
+) -> PMInvitadoExternoCreatedOut:
+    ensure_pm_portal_manage_access(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    expira_at = coerce_utc_datetime(expira_at)
+    if expira_at and expira_at <= utcnow():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La fecha de expiracion debe estar en el futuro.")
+
+    raw_token, token_hash, token_preview = generate_portal_token()
+    invite = PMInvitadoExterno(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        nombre=normalize_required_text(nombre, "Nombre"),
+        email=normalize_email(email),
+        modo_acceso=normalize_external_access_mode(modo_acceso),
+        token_hash=token_hash,
+        token_preview=token_preview,
+        activo=True,
+        expira_at=expira_at,
+        created_by=pm_context.user.id,
+    )
+    db.add(invite)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.portal.invite.create",
+            entity_name="pm_invitado_externo",
+            entity_id=invite.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "modo_acceso": invite.modo_acceso},
+        )
+    )
+    return serialize_external_invite_created(invite, token=raw_token, portal_url=portal_url)
+
+
+def revoke_external_invite(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    invite_id: str,
+    ip_address: str | None,
+) -> PMInvitadoExternoOut:
+    ensure_pm_portal_manage_access(pm_context)
+    invite = get_external_invite_for_company(db, pm_context.empresa_id, invite_id)
+    invite.activo = False
+    invite.revocado_at = utcnow()
+    log_portal_access(
+        db,
+        empresa_id=invite.empresa_id,
+        project_id=invite.proyecto_id,
+        invite_id=invite.id,
+        action="token_revocado",
+        result="ok",
+        detail="Acceso externo revocado por usuario interno.",
+        ip_address=ip_address,
+        user_agent=None,
+    )
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.portal.invite.revoke",
+            entity_name="pm_invitado_externo",
+            entity_id=invite.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": invite.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_external_invite(invite)
+
+
+def regenerate_external_invite(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    invite_id: str,
+    ip_address: str | None,
+    portal_url: str | None = None,
+) -> PMInvitadoExternoCreatedOut:
+    ensure_pm_portal_manage_access(pm_context)
+    invite = get_external_invite_for_company(db, pm_context.empresa_id, invite_id)
+    raw_token, token_hash, token_preview = generate_portal_token()
+    invite.token_hash = token_hash
+    invite.token_preview = token_preview
+    invite.activo = True
+    invite.revocado_at = None
+    log_portal_access(
+        db,
+        empresa_id=invite.empresa_id,
+        project_id=invite.proyecto_id,
+        invite_id=invite.id,
+        action="token_regenerado",
+        result="ok",
+        detail="Token externo regenerado por usuario interno.",
+        ip_address=ip_address,
+        user_agent=None,
+    )
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.portal.invite.regenerate",
+            entity_name="pm_invitado_externo",
+            entity_id=invite.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": invite.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_external_invite_created(invite, token=raw_token, portal_url=portal_url)
+
+
+def resolve_portal_token(
+    db: Session,
+    token: str,
+    *,
+    track_access: bool = True,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> tuple[PMInvitadoExterno, PMProyecto]:
+    raw_token = normalize_required_text(token, "Token")
+    invite = db.scalar(select(PMInvitadoExterno).where(PMInvitadoExterno.token_hash == hash_portal_token(raw_token)))
+    if not invite:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Este enlace no está disponible.")
+
+    project = get_project_for_company(db, invite.empresa_id, invite.proyecto_id)
+    config, _ = get_or_create_pm_config(db, invite.empresa_id)
+    if not config.pm_enabled or not config.pm_portal_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace no está disponible.")
+
+    if not invite.activo or invite.revocado_at is not None:
+        log_portal_access(
+            db,
+            empresa_id=invite.empresa_id,
+            project_id=invite.proyecto_id,
+            invite_id=invite.id,
+            action="acceso_denegado_revocado",
+            result="denegado",
+            detail="El acceso externo fue revocado.",
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace fue revocado.")
+
+    invite.expira_at = coerce_utc_datetime(invite.expira_at)
+    if invite.expira_at and invite.expira_at <= utcnow():
+        log_portal_access(
+            db,
+            empresa_id=invite.empresa_id,
+            project_id=invite.proyecto_id,
+            invite_id=invite.id,
+            action="acceso_denegado_expirado",
+            result="denegado",
+            detail="El acceso externo expiró.",
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace expiró.")
+
+    if track_access:
+        invite.ultimo_acceso_at = utcnow()
+        invite.total_accesos = int(invite.total_accesos or 0) + 1
+        log_portal_access(
+            db,
+            empresa_id=invite.empresa_id,
+            project_id=invite.proyecto_id,
+            invite_id=invite.id,
+            action="acceso_portal",
+            result="ok",
+            detail="Acceso externo válido.",
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+        db.flush()
+
+    return invite, project
+
+
+def get_portal_project(
+    db: Session,
+    token: str,
+    *,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> PMPortalProjectOut:
+    invite, project = resolve_portal_token(
+        db,
+        token,
+        track_access=True,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+    tasks = db.scalars(
+        select(PMTarea)
+        .where(
+            PMTarea.empresa_id == invite.empresa_id,
+            PMTarea.proyecto_id == invite.proyecto_id,
+            PMTarea.activo == True,
+        )
+        .order_by(PMTarea.fecha_vencimiento.asc(), PMTarea.created_at.asc())
+    ).all()
+    documents = db.scalars(
+        select(PMDocumento)
+        .where(
+            PMDocumento.empresa_id == invite.empresa_id,
+            PMDocumento.proyecto_id == invite.proyecto_id,
+            PMDocumento.activo == True,
+            PMDocumento.visible_externo == True,
+        )
+        .order_by(PMDocumento.created_at.desc())
+    ).all()
+    external_comments = db.scalars(
+        select(PMComentario)
+        .where(
+            PMComentario.empresa_id == invite.empresa_id,
+            PMComentario.proyecto_id == invite.proyecto_id,
+            PMComentario.tarea_id.is_(None),
+            PMComentario.activo == True,
+            PMComentario.externo == True,
+        )
+        .order_by(PMComentario.created_at.desc())
+        .limit(20)
+    ).all()
+    return PMPortalProjectOut(
+        nombre=project.nombre,
+        codigo=project.codigo,
+        estatus=project.estatus,
+        prioridad=project.prioridad,
+        porcentaje_avance=decimal_or_zero(project.porcentaje_avance),
+        fecha_inicio=project.fecha_inicio,
+        fecha_fin_planificada=project.fecha_fin_planificada,
+        access_mode=invite.modo_acceso,
+        can_comment=invite.modo_acceso == "comentario",
+        invite_name=invite.nombre,
+        tasks_summary=build_portal_task_summary(tasks),
+        tasks=[
+            PMPortalTaskItemOut(
+                titulo=task.titulo,
+                estatus=task.estatus,
+                porcentaje_avance=decimal_or_zero(task.porcentaje_avance),
+                fecha_inicio=task.fecha_inicio,
+                fecha_vencimiento=task.fecha_vencimiento,
+            )
+            for task in tasks
+        ],
+        documents=[serialize_portal_document(document) for document in documents],
+        comments=[serialize_portal_comment(comment) for comment in external_comments],
+    )
+
+
+def create_portal_comment(
+    db: Session,
+    token: str,
+    *,
+    author_name: str | None,
+    body: str,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> PMPortalCommentOut:
+    invite, project = resolve_portal_token(
+        db,
+        token,
+        track_access=False,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+    if invite.modo_acceso != "comentario":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este acceso es solo de lectura.")
+
+    comment = PMComentario(
+        empresa_id=invite.empresa_id,
+        proyecto_id=project.id,
+        tarea_id=None,
+        body=normalize_required_text(body, "Comentario"),
+        created_by=None,
+        created_by_nombre_snapshot=None,
+        externo=True,
+        autor_nombre_snapshot=normalize_optional_text(author_name) or invite.nombre,
+        invitado_externo_id=invite.id,
+        activo=True,
+    )
+    db.add(comment)
+    db.flush()
+    log_portal_access(
+        db,
+        empresa_id=invite.empresa_id,
+        project_id=project.id,
+        invite_id=invite.id,
+        action="comentario_enviado",
+        result="ok",
+        detail="Comentario externo enviado.",
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+    return serialize_portal_comment(comment)
