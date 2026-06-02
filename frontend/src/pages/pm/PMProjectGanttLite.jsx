@@ -207,7 +207,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                         {task.es_critica ? (
                           <StatusBadge tone="danger">
                             <Route size={12} strokeWidth={1.9} />
-                            Crítica
+                            Ruta crítica
                           </StatusBadge>
                         ) : null}
                         {blocked ? (

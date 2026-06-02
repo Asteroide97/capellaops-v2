@@ -58,7 +58,7 @@ function getPlanningDetail(task) {
   const badges = [];
 
   if (task?.es_critica) {
-    badges.push(<StatusBadge key="critical" tone="danger">Crítica</StatusBadge>);
+    badges.push(<StatusBadge key="critical" tone="danger">En ruta crítica</StatusBadge>);
   }
   if (dependencyState?.is_blocked) {
     badges.push(
@@ -209,8 +209,8 @@ export default function PMProjectWorkPlanView({
       <section className="inventory-metric-grid inventory-metric-grid-4">
         <MetricCard
           icon={<Route size={18} strokeWidth={1.9} />}
-          label="Tareas críticas"
-          meta="Impactan la fecha final"
+          label="En ruta crítica"
+          meta="Afectan la fecha final"
           tone="danger"
           value={planningSummary?.tareas_criticas ?? 0}
         />

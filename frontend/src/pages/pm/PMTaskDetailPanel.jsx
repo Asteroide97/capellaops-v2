@@ -304,7 +304,7 @@ export default function PMTaskDetailPanel({
                   <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                   <StatusBadge tone={getPriorityTone(task.prioridad)}>{getPriorityLabel(task.prioridad)}</StatusBadge>
                   {isBlocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
-                  {isCritical ? <StatusBadge tone="danger">Tarea crítica</StatusBadge> : null}
+                  {isCritical ? <StatusBadge tone="danger">En ruta crítica</StatusBadge> : null}
                 </div>
               </div>
               <div className="pm-task-detail-metrics">
@@ -339,7 +339,7 @@ export default function PMTaskDetailPanel({
 
             {isCritical ? (
               <div className="inventory-form-note inventory-form-note-danger">
-                <strong>Tarea crítica</strong>
+                <strong>En ruta crítica</strong>
                 <p className="table-note">
                   Esta tarea forma parte de la ruta que afecta la fecha final del proyecto.
                   {slackDays !== null && slackDays !== undefined ? ` Holgura: ${slackDays} días.` : ""}
