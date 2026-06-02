@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckSquare, Clock3, Link2, Lock, MessageSquare, PackageOpen, Plus } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckSquare,
+  Clock3,
+  Link2,
+  Lock,
+  MessageSquare,
+  PackageOpen,
+  Plus,
+  Route,
+} from "lucide-react";
 
 import {
   createPmTaskDependency,
@@ -28,14 +38,12 @@ import {
   normalizePmCopy,
 } from "./shared";
 
-
 const defaultDependencyForm = {
   depende_de_tarea_id: "",
   tipo_dependencia: "finish_to_start",
   bloqueante: true,
   notas: "",
 };
-
 
 export default function PMTaskDetailPanel({
   empresaId,
@@ -59,12 +67,13 @@ export default function PMTaskDetailPanel({
   const [dependencyModalOpen, setDependencyModalOpen] = useState(false);
   const [dependencyForm, setDependencyForm] = useState(defaultDependencyForm);
   const [savingDependency, setSavingDependency] = useState(false);
+
   const dependencies = taskDependencyContext ?? {
     blocked: false,
+    is_blocked: false,
     dependencies: [],
     blockers: [],
     successors: [],
-    is_blocked: false,
     title: "",
     detail: "",
   };
@@ -87,8 +96,6 @@ export default function PMTaskDetailPanel({
           comments: current?.id === taskId ? current.comments ?? [] : [],
           ...current,
           ...taskSummary,
-          is_blocked: taskSummary.is_blocked,
-          blockers: taskSummary.blockers ?? [],
         }));
       }
 
@@ -97,11 +104,11 @@ export default function PMTaskDetailPanel({
       try {
         const taskResponse = await getPmTask({ taskId, token, empresaId });
         if (!cancelled) {
-          setTask({
+          setTask((current) => ({
+            ...current,
             ...taskResponse,
-            is_blocked: taskSummary?.is_blocked ?? taskResponse.is_blocked,
-            blockers: taskSummary?.blockers ?? taskResponse.blockers ?? [],
-          });
+            ...taskSummary,
+          }));
         }
       } catch (requestError) {
         if (!cancelled) {
@@ -118,53 +125,21 @@ export default function PMTaskDetailPanel({
     return () => {
       cancelled = true;
     };
-  }, [taskId, token, empresaId, projectId]);
-
-  useEffect(() => {
-    if (!taskSummary?.id) {
-      return;
-    }
-    setTask((current) => {
-      if (!current || current.id !== taskSummary.id) {
-        return current;
-      }
-      return {
-        ...current,
-        titulo: taskSummary.titulo ?? current.titulo,
-        descripcion: taskSummary.descripcion ?? current.descripcion,
-        estatus: taskSummary.estatus ?? current.estatus,
-        prioridad: taskSummary.prioridad ?? current.prioridad,
-        porcentaje_avance: taskSummary.porcentaje_avance ?? current.porcentaje_avance,
-        asignado_nombre_snapshot: taskSummary.asignado_nombre_snapshot ?? current.asignado_nombre_snapshot,
-        fecha_inicio: taskSummary.fecha_inicio ?? current.fecha_inicio,
-        fecha_vencimiento: taskSummary.fecha_vencimiento ?? current.fecha_vencimiento,
-        estimacion_horas: taskSummary.estimacion_horas ?? current.estimacion_horas,
-        is_blocked: taskSummary.is_blocked,
-        blockers: taskSummary.blockers ?? [],
-      };
-    });
-  }, [taskSummary]);
+  }, [taskId, token, empresaId, projectId, taskSummary]);
 
   const relatedTimeEntries = useMemo(
     () => (timeEntries ?? []).filter((entry) => entry.tarea_id === taskId),
     [timeEntries, taskId],
   );
-
   const relatedMaterialPlans = useMemo(
     () => (materialPlans ?? []).filter((plan) => plan.tarea_id === taskId && plan.activo),
     [materialPlans, taskId],
   );
-
   const relatedMaterialConsumptions = useMemo(
     () => (materialConsumptions ?? []).filter((consumption) => consumption.tarea_id === taskId && consumption.activo),
     [materialConsumptions, taskId],
   );
-
-  const dependencyItems = useMemo(
-    () => dependencies?.dependencies ?? [],
-    [dependencies],
-  );
-
+  const dependencyItems = useMemo(() => dependencies?.dependencies ?? [], [dependencies]);
   const pendingBlockers = useMemo(
     () =>
       dependencyItems
@@ -179,27 +154,25 @@ export default function PMTaskDetailPanel({
         })),
     [dependencyItems],
   );
-
   const hasDependencies = dependencyItems.length > 0;
-  const isBlocked = Boolean(dependencies?.blocked ?? dependencies?.is_blocked ?? pendingBlockers.length > 0) || pendingBlockers.length > 0;
+  const isBlocked = Boolean(dependencies?.is_blocked ?? dependencies?.blocked ?? pendingBlockers.length > 0) || pendingBlockers.length > 0;
   const completedDependencyTitles = useMemo(
     () => dependencyItems.map((dependency) => normalizePmCopy(safeDisplayText(dependency.resolved_title ?? dependency.depende_de_tarea_titulo))).filter(Boolean),
     [dependencyItems],
   );
-
   const availablePrerequisiteOptions = useMemo(
     () => (tasks ?? []).filter((candidate) => candidate.id !== taskId && candidate.activo),
     [tasks, taskId],
   );
-
   const timeSummary = useMemo(
-    () => relatedTimeEntries.reduce(
-      (accumulator, entry) => ({
-        hours: accumulator.hours + Number(entry.horas || 0),
-        cost: accumulator.cost + Number(entry.costo_total_snapshot || 0),
-      }),
-      { hours: 0, cost: 0 },
-    ),
+    () =>
+      relatedTimeEntries.reduce(
+        (accumulator, entry) => ({
+          hours: accumulator.hours + Number(entry.horas || 0),
+          cost: accumulator.cost + Number(entry.costo_total_snapshot || 0),
+        }),
+        { hours: 0, cost: 0 },
+      ),
     [relatedTimeEntries],
   );
 
@@ -230,9 +203,9 @@ export default function PMTaskDetailPanel({
     }
     const taskResponse = await getPmTask({ taskId, token, empresaId });
     setTask((current) => ({
+      ...current,
       ...taskResponse,
-      is_blocked: taskSummary?.is_blocked ?? current?.is_blocked ?? taskResponse.is_blocked,
-      blockers: taskSummary?.blockers ?? current?.blockers ?? taskResponse.blockers ?? [],
+      ...taskSummary,
     }));
     await onDependenciesChanged?.();
   }
@@ -291,6 +264,10 @@ export default function PMTaskDetailPanel({
     );
   }
 
+  const scheduleSuggestion = taskSummary?.schedule_suggestion ?? task?.schedule_suggestion ?? null;
+  const isCritical = Boolean(taskSummary?.es_critica ?? task?.es_critica);
+  const slackDays = taskSummary?.holgura_dias ?? task?.holgura_dias;
+
   return (
     <>
       <DataCard
@@ -311,7 +288,7 @@ export default function PMTaskDetailPanel({
         title="Detalle de tarea"
       >
         {loading ? <div className="table-note">Cargando detalle de tarea...</div> : null}
-        {(error || success) ? (
+        {error || success ? (
           <div className={`inventory-form-note ${error ? "inventory-form-note-danger" : "inventory-form-note-success"}`}>
             <strong>{error ? "No se pudo completar la operación" : "Operación completada"}</strong>
             <p className="table-note">{error || success}</p>
@@ -327,6 +304,7 @@ export default function PMTaskDetailPanel({
                   <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                   <StatusBadge tone={getPriorityTone(task.prioridad)}>{getPriorityLabel(task.prioridad)}</StatusBadge>
                   {isBlocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
+                  {isCritical ? <StatusBadge tone="danger">Tarea crítica</StatusBadge> : null}
                 </div>
               </div>
               <div className="pm-task-detail-metrics">
@@ -349,15 +327,33 @@ export default function PMTaskDetailPanel({
               <div className="inventory-form-note inventory-form-note-warning">
                 <strong>Tarea bloqueada</strong>
                 <p className="table-note">
-                  {normalizePmCopy(safeDisplayText(task.titulo))} depende de{" "}
-                  {pendingBlockers.map((item) => item.titulo).join(", ")}. Completa esos prerrequisitos para desbloquearla.
+                  Completa primero: {pendingBlockers.map((item) => item.titulo).join(", ")}.
                 </p>
               </div>
             ) : hasDependencies ? (
               <div className="inventory-form-note inventory-form-note-success">
                 <strong>Prerrequisitos completados</strong>
+                <p className="table-note">{completedDependencyTitles.join(", ")}</p>
+              </div>
+            ) : null}
+
+            {isCritical ? (
+              <div className="inventory-form-note inventory-form-note-danger">
+                <strong>Tarea crítica</strong>
                 <p className="table-note">
-                  {completedDependencyTitles.join(", ")}
+                  Esta tarea forma parte de la ruta que afecta la fecha final del proyecto.
+                  {slackDays !== null && slackDays !== undefined ? ` Holgura: ${slackDays} días.` : ""}
+                </p>
+              </div>
+            ) : null}
+
+            {scheduleSuggestion?.fuera_de_secuencia ? (
+              <div className="inventory-form-note inventory-form-note-warning">
+                <strong>Fecha fuera de secuencia</strong>
+                <p className="table-note">
+                  {safeDisplayText(scheduleSuggestion.razon, "La tarea inicia antes de que termine su prerrequisito.")}
+                  {" "}
+                  Fecha sugerida: {safeDisplayText(formatDate(scheduleSuggestion.fecha_inicio_sugerida), "—")}.
                 </p>
               </div>
             ) : null}
@@ -369,11 +365,11 @@ export default function PMTaskDetailPanel({
               </div>
               <div>
                 <span>Inicio</span>
-                <strong>{safeDisplayText(formatDate(task.fecha_inicio), "-")}</strong>
+                <strong>{safeDisplayText(formatDate(task.fecha_inicio), "—")}</strong>
               </div>
               <div>
                 <span>Fin</span>
-                <strong>{safeDisplayText(formatDate(task.fecha_vencimiento), "-")}</strong>
+                <strong>{safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</strong>
               </div>
               <div>
                 <span>Horas estimadas</span>
@@ -401,7 +397,9 @@ export default function PMTaskDetailPanel({
                       <div className="pm-detail-list-item" key={dependency.id}>
                         <div>
                           <strong>{normalizePmCopy(safeDisplayText(dependency.resolved_title ?? dependency.depende_de_tarea_titulo))}</strong>
-                          <span>Debe completarse antes · {safeDisplayText(getTaskStatusLabel(dependency.resolved_status ?? dependency.depende_de_tarea_estatus), dependency.resolved_status ?? dependency.depende_de_tarea_estatus)}</span>
+                          <span>
+                            Debe completarse antes · {safeDisplayText(getTaskStatusLabel(dependency.resolved_status ?? dependency.depende_de_tarea_estatus), dependency.resolved_status ?? dependency.depende_de_tarea_estatus)}
+                          </span>
                         </div>
                         <div className="table-actions">
                           <ActionButton onClick={() => onSelectTask?.(dependency.depende_de_tarea_id)} size="sm" type="button">
@@ -463,7 +461,7 @@ export default function PMTaskDetailPanel({
                     ))}
                   </div>
                 ) : (
-                  <EmptyState compact note="La tarea todavía no tiene subtareas." title="Sin subtareas" />
+                  <EmptyState compact note="Las subtareas aparecerán aquí." title="Sin subtareas" />
                 )}
               </div>
 
@@ -487,7 +485,7 @@ export default function PMTaskDetailPanel({
                     ))}
                   </div>
                 ) : (
-                  <EmptyState compact note="No hay checklist registrado para esta tarea." title="Sin checklist" />
+                  <EmptyState compact note="Los checks operativos aparecerán aquí." title="Sin checklist" />
                 )}
               </div>
 
@@ -498,18 +496,18 @@ export default function PMTaskDetailPanel({
                 </div>
                 {relatedTimeEntries.length ? (
                   <div className="pm-detail-list">
-                    {relatedTimeEntries.slice(0, 5).map((entry) => (
+                    {relatedTimeEntries.map((entry) => (
                       <div className="pm-detail-list-item" key={entry.id}>
                         <div>
                           <strong>{safeDisplayText(entry.usuario_nombre_snapshot, "Registro manual")}</strong>
-                          <span>{safeDisplayText(formatDate(entry.fecha), "-")} · {formatNumber(entry.horas)} h</span>
+                          <span>{safeDisplayText(formatDate(entry.fecha), "—")} · {formatNumber(entry.horas)} h</span>
                         </div>
                         <strong>{formatMoney(entry.costo_total_snapshot)}</strong>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <EmptyState compact note="Todavía no hay horas registradas para esta tarea." title="Sin horas" />
+                  <EmptyState compact note="No hay horas ligadas a esta tarea todavía." title="Sin horas" />
                 )}
               </div>
 
@@ -520,51 +518,51 @@ export default function PMTaskDetailPanel({
                 </div>
                 {relatedMaterialPlans.length || relatedMaterialConsumptions.length ? (
                   <div className="pm-detail-list">
-                    {relatedMaterialPlans.slice(0, 3).map((plan) => (
+                    {relatedMaterialPlans.map((plan) => (
                       <div className="pm-detail-list-item" key={`plan-${plan.id}`}>
                         <div>
                           <strong>{safeDisplayText(plan.material_nombre_snapshot)}</strong>
-                          <span>Planificado: {formatNumber(plan.cantidad_planificada)} · Pendiente: {formatNumber(plan.cantidad_pendiente)}</span>
+                          <span>Planificado · {formatNumber(plan.cantidad_planificada)}</span>
                         </div>
-                        <strong>{formatMoney(plan.costo_total_estimado)}</strong>
+                        <strong>{formatMoney(plan.costo_total_estimado ?? 0)}</strong>
                       </div>
                     ))}
-                    {relatedMaterialConsumptions.slice(0, 3).map((consumption) => (
+                    {relatedMaterialConsumptions.map((consumption) => (
                       <div className="pm-detail-list-item" key={`consumption-${consumption.id}`}>
                         <div>
                           <strong>{safeDisplayText(consumption.material_nombre_snapshot)}</strong>
-                          <span>Consumido: {formatNumber(consumption.cantidad_consumida)} · {safeDisplayText(formatDate(consumption.created_at), "-")}</span>
+                          <span>Consumido · {formatNumber(consumption.cantidad_consumida)}</span>
                         </div>
-                        <strong>{formatMoney(consumption.costo_total_snapshot)}</strong>
+                        <strong>{formatMoney(consumption.costo_total_snapshot ?? 0)}</strong>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <EmptyState compact note="No hay materiales ligados a esta tarea. La relación por tarea sigue siendo gradual." title="Sin materiales" />
+                  <EmptyState compact note="Todavía no hay materiales ligados a esta tarea." title="Sin materiales" />
                 )}
               </div>
-            </div>
 
-            <div className="pm-detail-block">
-              <div className="pm-detail-block-header">
-                <MessageSquare size={16} strokeWidth={1.9} />
-                <strong>Comentarios</strong>
-              </div>
-              {task.comments?.length ? (
-                <div className="pm-comment-list">
-                  {task.comments.map((comment) => (
-                    <article className="pm-comment-card" key={comment.id}>
-                      <div className="pm-comment-head">
-                        <strong>{safeDisplayText(comment.created_by_nombre_snapshot, "Usuario")}</strong>
-                        <span className="inventory-cell-sub">{safeDisplayText(formatDate(comment.created_at), "-")}</span>
-                      </div>
-                      <p>{safeDisplayText(comment.body, "")}</p>
-                    </article>
-                  ))}
+              <div className="pm-detail-block">
+                <div className="pm-detail-block-header">
+                  <MessageSquare size={16} strokeWidth={1.9} />
+                  <strong>Comentarios</strong>
                 </div>
-              ) : (
-                <EmptyState compact note="La tarea todavía no tiene comentarios." title="Sin comentarios" />
-              )}
+                {task.comments?.length ? (
+                  <div className="pm-detail-list">
+                    {task.comments.map((comment) => (
+                      <div className="pm-detail-list-item" key={comment.id}>
+                        <div>
+                          <strong>{safeDisplayText(comment.created_by_nombre_snapshot, "Usuario")}</strong>
+                          <span>{safeDisplayText(formatDate(comment.created_at), "—")}</span>
+                        </div>
+                        <span>{safeDisplayText(comment.body, "Sin comentario")}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState compact note="Los comentarios de tarea aparecerán aquí." title="Sin comentarios" />
+                )}
+              </div>
             </div>
           </div>
         ) : null}
@@ -576,12 +574,7 @@ export default function PMTaskDetailPanel({
             <ActionButton disabled={savingDependency} onClick={closeDependencyModal} type="button">
               Cancelar
             </ActionButton>
-            <ActionButton
-              disabled={savingDependency || !dependencyForm.depende_de_tarea_id}
-              form="pm-task-dependency-form"
-              tone="primary"
-              type="submit"
-            >
+            <ActionButton disabled={savingDependency} form="pm-add-dependency-form" tone="primary" type="submit">
               {savingDependency ? "Guardando..." : "Guardar prerrequisito"}
             </ActionButton>
           </div>
@@ -589,27 +582,33 @@ export default function PMTaskDetailPanel({
         onClose={closeDependencyModal}
         open={dependencyModalOpen}
         size="medium"
-        subtitle="La tarea seleccionada quedará bloqueada hasta que el prerrequisito esté completado."
+        subtitle="Selecciona la tarea que debe completarse antes de iniciar esta."
         title="Agregar prerrequisito"
       >
-        <form className="inventory-modal-form" id="pm-task-dependency-form" onSubmit={handleCreateDependency}>
+        <form className="inventory-modal-form" id="pm-add-dependency-form" onSubmit={handleCreateDependency}>
           <FormGrid>
-            <Field label="Tarea que debe terminar antes">
-              <select
-                onChange={(event) => setDependencyForm((current) => ({ ...current, depende_de_tarea_id: event.target.value }))}
-                required
-                value={dependencyForm.depende_de_tarea_id}
-              >
-                <option value="">Selecciona una tarea</option>
-                {availablePrerequisiteOptions.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {safeDisplayText(candidate.titulo)} · {safeDisplayText(getTaskStatusLabel(candidate.estatus), candidate.estatus)}
-                  </option>
-                ))}
-              </select>
+            <Field label="Tarea que debe terminar antes" span={2}>
+              {availablePrerequisiteOptions.length === 0 ? (
+                <div className="inventory-form-note">
+                  <strong>Sin tareas disponibles</strong>
+                  <p className="table-note">Aún no hay otras tareas para usar como prerrequisito.</p>
+                </div>
+              ) : (
+                <select
+                  onChange={(event) => setDependencyForm((current) => ({ ...current, depende_de_tarea_id: event.target.value }))}
+                  required
+                  value={dependencyForm.depende_de_tarea_id}
+                >
+                  {availablePrerequisiteOptions.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {normalizePmCopy(safeDisplayText(option.titulo))} — {getTaskStatusLabel(option.estatus)}
+                    </option>
+                  ))}
+                </select>
+              )}
             </Field>
             <Field label="Tipo">
-              <input disabled value="Debe completarse antes de iniciar esta tarea" />
+              <input disabled type="text" value="Debe completarse antes de iniciar esta tarea" />
             </Field>
             <Field label="Bloqueante">
               <label className="inventory-checkbox">
@@ -618,13 +617,13 @@ export default function PMTaskDetailPanel({
                   onChange={(event) => setDependencyForm((current) => ({ ...current, bloqueante: event.target.checked }))}
                   type="checkbox"
                 />
-                <span>Impedir avance si el prerrequisito no está completado</span>
+                <span>Bloquear avance hasta completar prerrequisito</span>
               </label>
             </Field>
-            <Field label="Notas">
+            <Field label="Notas" span={2}>
               <textarea
                 onChange={(event) => setDependencyForm((current) => ({ ...current, notas: event.target.value }))}
-                rows={4}
+                rows={3}
                 value={dependencyForm.notas}
               />
             </Field>

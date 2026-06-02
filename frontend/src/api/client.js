@@ -1163,6 +1163,50 @@ export function listPmProjectDependencies({ projectId, token, empresaId }) {
 }
 
 
+export function getPmProjectPlanning({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/planning`, { token, empresaId });
+}
+
+
+export function refreshPmProjectPlanning({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/refresh-planning`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmProjectCriticalPath({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/critical-path`, { token, empresaId });
+}
+
+
+export function listPmProjectAlerts({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/alerts`, { token, empresaId });
+}
+
+
+export function resolvePmAlert({ alertId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/alerts/${alertId}/resolve`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function dismissPmAlert({ alertId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/alerts/${alertId}/dismiss`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function createPmTaskDependency({ taskId, token, empresaId, payload }) {
   return apiRequest(`/pm/tasks/${taskId}/dependencies`, {
     method: "POST",

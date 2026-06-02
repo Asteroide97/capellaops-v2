@@ -1,5 +1,15 @@
 import { useEffect, useState } from "react";
-import { Calendar, CheckSquare, DollarSign, FolderKanban, Gauge, TriangleAlert } from "lucide-react";
+import {
+  BellRing,
+  Calendar,
+  CheckSquare,
+  DollarSign,
+  FolderKanban,
+  Gauge,
+  Lock,
+  Route,
+  TriangleAlert,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { getPmDashboard } from "../../api/client";
@@ -26,7 +36,6 @@ import {
   getTaskStatusTone,
 } from "./shared";
 
-
 function StatusDistribution({ items, kind }) {
   if (!items?.length) {
     return <EmptyState compact note="Sin distribución disponible." title="Sin datos" />;
@@ -47,7 +56,6 @@ function StatusDistribution({ items, kind }) {
     </div>
   );
 }
-
 
 export default function PMDashboardPage() {
   const navigate = useNavigate();
@@ -73,7 +81,6 @@ export default function PMDashboardPage() {
     if (!token || !empresaId) {
       return;
     }
-
     loadDashboard();
   }, [token, empresaId]);
 
@@ -87,7 +94,7 @@ export default function PMDashboardPage() {
         eyebrow="PM Core"
         title="Gestión de Proyectos"
         subtitle="Dashboard operativo para proyectos, tareas y seguimiento básico."
-        actions={
+        actions={(
           <div className="inventory-actions">
             <ActionButton onClick={() => navigate("/pm/rates")} type="button">
               Tarifas PM
@@ -99,7 +106,7 @@ export default function PMDashboardPage() {
               Nuevo proyecto
             </ActionButton>
           </div>
-        }
+        )}
       />
 
       {error ? (
@@ -137,6 +144,37 @@ export default function PMDashboardPage() {
           meta="Backlog operativo"
           tone="info"
           value={dashboard?.kpis?.tareas_pendientes ?? 0}
+        />
+      </section>
+
+      <section className="inventory-metric-grid inventory-metric-grid-4">
+        <MetricCard
+          icon={<Route size={18} strokeWidth={1.9} />}
+          label="Tareas críticas"
+          meta="Ruta crítica activa"
+          tone={(dashboard?.kpis?.tareas_criticas ?? 0) > 0 ? "danger" : "neutral"}
+          value={dashboard?.kpis?.tareas_criticas ?? 0}
+        />
+        <MetricCard
+          icon={<Lock size={18} strokeWidth={1.9} />}
+          label="Tareas bloqueadas"
+          meta="Prerrequisitos pendientes"
+          tone={(dashboard?.kpis?.tareas_bloqueadas ?? 0) > 0 ? "warning" : "neutral"}
+          value={dashboard?.kpis?.tareas_bloqueadas ?? 0}
+        />
+        <MetricCard
+          icon={<BellRing size={18} strokeWidth={1.9} />}
+          label="Alertas activas"
+          meta="Riesgos abiertos"
+          tone={(dashboard?.kpis?.alertas_activas ?? 0) > 0 ? "danger" : "success"}
+          value={dashboard?.kpis?.alertas_activas ?? 0}
+        />
+        <MetricCard
+          icon={<Gauge size={18} strokeWidth={1.9} />}
+          label="Tareas en progreso"
+          meta="Trabajo activo"
+          tone="info"
+          value={dashboard?.kpis?.tareas_en_progreso ?? 0}
         />
       </section>
 
@@ -235,13 +273,34 @@ export default function PMDashboardPage() {
         </DataCard>
       </div>
 
+      <DataCard subtitle="Tareas que forman parte de la ruta crítica y requieren seguimiento cercano." title="Tareas críticas próximas">
+        {(dashboard?.tareas_criticas_proximas?.length ?? 0) === 0 ? (
+          <EmptyState compact note="No hay tareas críticas próximas registradas." title="Sin tareas críticas" />
+        ) : (
+          <DataTable columns={["Tarea", "Proyecto", "Fecha", "Prioridad"]}>
+            <tbody>
+              {(dashboard?.tareas_criticas_proximas ?? []).map((item) => (
+                <tr key={`critical-${item.task_id}-${item.fecha}`}>
+                  <td>{safeDisplayText(item.titulo)}</td>
+                  <td>{safeDisplayText(item.proyecto_nombre)}</td>
+                  <td>{safeDisplayText(formatDate(item.fecha), "-")}</td>
+                  <td>
+                    <StatusBadge tone={getPriorityTone(item.prioridad)}>{getPriorityLabel(item.prioridad)}</StatusBadge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </DataTable>
+        )}
+      </DataCard>
+
       <div className="inventory-content-grid inventory-content-grid-2">
         <DataCard
-          actions={
+          actions={(
             <ActionButton onClick={() => navigate("/pm/projects")} size="sm" type="button">
               Ir a proyectos
             </ActionButton>
-          }
+          )}
           subtitle="Proyectos que requieren atención en el corto plazo."
           title="Próximos proyectos a vencer"
         >
@@ -274,11 +333,11 @@ export default function PMDashboardPage() {
         </DataCard>
 
         <DataCard
-          actions={
+          actions={(
             <ActionButton onClick={() => navigate("/pm/projects")} size="sm" type="button">
               Revisar tareas
             </ActionButton>
-          }
+          )}
           subtitle="Tareas vencidas o próximas a vencer."
           title="Vencimientos operativos"
         >

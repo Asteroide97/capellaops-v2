@@ -10,6 +10,8 @@ from app.api.deps import TenantContext, get_tenant_context
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.schemas.pm import (
+    PMAlertOut,
+    PMAlertResolveRequest,
     PMBudgetVsActualOut,
     PMAprobacionCreate,
     PMAprobacionOut,
@@ -30,7 +32,9 @@ from app.schemas.pm import (
     PMPortalCommentCreate,
     PMPortalCommentOut,
     PMPortalProjectOut,
+    PMCriticalPathOut,
     PMProjectMembersListResponse,
+    PMProjectPlanningOut,
     PMProjectBudgetBundleOut,
     PMProjectCostsOut,
     PMCreateProjectRequisitionRequest,
@@ -122,9 +126,12 @@ from app.services.pm import (
     deactivate_budget_item,
     deactivate_budget_item_labor,
     deactivate_budget_item_material,
+    dismiss_pm_alert,
     get_pm_context,
     get_pm_dashboard,
     get_portal_project,
+    get_project_critical_path,
+    get_project_planning,
     get_project_budget,
     get_project_budget_vs_actual,
     get_project,
@@ -132,6 +139,7 @@ from app.services.pm import (
     get_task,
     get_task_dependencies,
     list_project_approvals,
+    list_project_alerts,
     list_project_documents,
     list_project_external_invites,
     list_project_portal_access_logs,
@@ -144,7 +152,9 @@ from app.services.pm import (
     list_tasks,
     list_user_hourly_rates,
     regenerate_external_invite,
+    refresh_project_planning,
     refresh_project_total_costs,
+    resolve_pm_alert,
     serialize_pm_config,
     approve_project_approval,
     reject_project_approval,
@@ -1235,6 +1245,84 @@ def list_project_dependencies_endpoint(
     db: Session = Depends(get_db),
 ) -> list[PMTareaDependenciaOut]:
     return list_task_dependencies(db, pm_context, project_id=project_id)
+
+
+@router.get("/projects/{project_id}/planning", response_model=PMProjectPlanningOut)
+def get_project_planning_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProjectPlanningOut:
+    return get_project_planning(db, pm_context, project_id)
+
+
+@router.get("/projects/{project_id}/critical-path", response_model=PMCriticalPathOut)
+def get_project_critical_path_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCriticalPathOut:
+    return get_project_critical_path(db, pm_context, project_id=project_id)
+
+
+@router.post("/projects/{project_id}/refresh-planning", response_model=PMProjectPlanningOut)
+def refresh_project_planning_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProjectPlanningOut:
+    return run_pm_write(
+        db,
+        "refresh_project_planning",
+        lambda: refresh_project_planning(db, pm_context, project_id=project_id),
+    )
+
+
+@router.get("/projects/{project_id}/alerts", response_model=list[PMAlertOut])
+def list_project_alerts_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMAlertOut]:
+    return list_project_alerts(db, pm_context, project_id=project_id)
+
+
+@router.post("/alerts/{alert_id}/resolve", response_model=PMAlertOut)
+def resolve_pm_alert_endpoint(
+    alert_id: str,
+    payload: PMAlertResolveRequest,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMAlertOut:
+    return run_pm_write(
+        db,
+        "resolve_pm_alert",
+        lambda: resolve_pm_alert(
+            db,
+            pm_context,
+            alert_id=alert_id,
+            comentario=payload.comentario,
+        ),
+    )
+
+
+@router.post("/alerts/{alert_id}/dismiss", response_model=PMAlertOut)
+def dismiss_pm_alert_endpoint(
+    alert_id: str,
+    payload: PMAlertResolveRequest,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMAlertOut:
+    return run_pm_write(
+        db,
+        "dismiss_pm_alert",
+        lambda: dismiss_pm_alert(
+            db,
+            pm_context,
+            alert_id=alert_id,
+            comentario=payload.comentario,
+        ),
+    )
 
 
 @router.get("/projects/{project_id}/tasks", response_model=PMTareaListResponse)

@@ -901,6 +901,57 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Aprobaciones multinivel
 - Notificaciones por email
 
+## PM Fase 6 - Gantt, ruta crítica, recálculo de fechas y alertas
+
+- El Project Workspace ya soporta planeación avanzada sin drag & drop:
+  - Gantt mejorado
+  - ruta crítica MVP
+  - fechas sugeridas por dependencias
+  - alertas PM
+- La planeación del proyecto ahora calcula:
+  - dependencias bloqueantes reales
+  - tareas bloqueadas
+  - tareas fuera de secuencia
+  - tareas críticas
+  - ruta crítica principal
+- El Gantt mejorado ya muestra:
+  - estatus
+  - avance
+  - bloqueo
+  - criticidad
+  - fuera de secuencia
+  - dependencias visibles en texto
+  - fecha sugerida cuando aplica
+- El backend expone:
+  - `GET /pm/projects/{project_id}/planning`
+  - `GET /pm/projects/{project_id}/critical-path`
+  - `POST /pm/projects/{project_id}/refresh-planning`
+  - `GET /pm/projects/{project_id}/alerts`
+  - `POST /pm/alerts/{alert_id}/resolve`
+  - `POST /pm/alerts/{alert_id}/dismiss`
+- Las alertas PM deduplicadas ya cubren:
+  - tarea vencida
+  - proyecto atrasado
+  - tarea bloqueada
+  - tarea crítica atrasada
+  - tarea fuera de secuencia
+  - presupuesto sobrepasado cuando existe contexto de costo
+- El dashboard PM ahora agrega KPIs de planeación:
+  - tareas críticas
+  - tareas bloqueadas
+  - alertas activas
+  - tareas críticas próximas
+
+### Pendientes de PM Fase 6
+
+- Drag & drop en Gantt
+- Aplicar fechas sugeridas automáticamente
+- Ruta crítica avanzada con calendarios laborales
+- Días no laborables
+- Dependencias avanzadas
+- Integración con calendario externo
+- Notificaciones por email
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.

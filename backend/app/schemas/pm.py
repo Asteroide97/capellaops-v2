@@ -249,6 +249,35 @@ class PMTaskDependenciesOut(BaseModel):
     successors: list[PMTaskBlockerOut] = Field(default_factory=list)
 
 
+class PMDependencyStateOut(BaseModel):
+    task_id: str = ""
+    is_blocked: bool = False
+    can_start: bool = True
+    dependencies_count: int = 0
+    blockers_count: int = 0
+    successors_count: int = 0
+    title: str = ""
+    detail: str = ""
+    badge_label: str | None = None
+    badge_tone: str = "neutral"
+    blocking_task_names: list[str] = Field(default_factory=list)
+    desbloquea_a: list[str] = Field(default_factory=list)
+    dependencies: list[PMTareaDependenciaOut] = Field(default_factory=list)
+    blockers: list[PMTaskBlockerOut] = Field(default_factory=list)
+    successors: list[PMTaskBlockerOut] = Field(default_factory=list)
+
+
+class PMScheduleSuggestionOut(BaseModel):
+    task_id: str
+    fecha_inicio_actual: date | None = None
+    fecha_fin_actual: date | None = None
+    fecha_inicio_sugerida: date | None = None
+    fecha_fin_sugerida: date | None = None
+    dias_desplazamiento: int = 0
+    fuera_de_secuencia: bool = False
+    razon: str | None = None
+
+
 class PMTareaListItem(BaseModel):
     id: str
     empresa_id: str
@@ -291,6 +320,13 @@ class PMTareaOut(PMTareaListItem):
     comments: list[PMCommentOut] = Field(default_factory=list)
     dependencies: list[PMTareaDependenciaOut] = Field(default_factory=list)
     successors: list[PMTaskBlockerOut] = Field(default_factory=list)
+
+
+class PMPlanningTaskOut(PMTareaListItem):
+    dependency_state: PMDependencyStateOut | None = None
+    schedule_suggestion: PMScheduleSuggestionOut | None = None
+    es_critica: bool = False
+    holgura_dias: int | None = None
 
 
 class PMTareaListResponse(BaseModel):
@@ -569,6 +605,9 @@ class PMDashboardKpis(BaseModel):
     tareas_pendientes: int = 0
     tareas_en_progreso: int = 0
     tareas_completadas: int = 0
+    tareas_bloqueadas: int = 0
+    tareas_criticas: int = 0
+    alertas_activas: int = 0
     costo_materiales_estimado_total: Decimal = Decimal("0")
     costo_materiales_real_total: Decimal = Decimal("0")
     variacion_materiales_total: Decimal = Decimal("0")
@@ -612,6 +651,7 @@ class PMDashboardOut(BaseModel):
     proyectos_por_estatus: list[PMStatusCount] = Field(default_factory=list)
     tareas_por_estatus: list[PMStatusCount] = Field(default_factory=list)
     proximos_vencimientos: list[PMDashboardDueItem] = Field(default_factory=list)
+    tareas_criticas_proximas: list[PMDashboardDueItem] = Field(default_factory=list)
     proyectos_proximos: list[PMDashboardDueItem] = Field(default_factory=list)
     tareas_vencidas_items: list[PMDashboardDueItem] = Field(default_factory=list)
     top_proyectos_por_costo_materiales: list[PMDashboardProjectCostItem] = Field(default_factory=list)
@@ -621,6 +661,65 @@ class PMDashboardOut(BaseModel):
     proyectos_sin_presupuesto: list[PMDashboardProjectCostItem] = Field(default_factory=list)
     top_usuarios_por_horas: list[PMDashboardUserMetricItem] = Field(default_factory=list)
     top_usuarios_por_costo: list[PMDashboardUserMetricItem] = Field(default_factory=list)
+
+
+class PMCriticalPathTaskOut(BaseModel):
+    task_id: str
+    titulo: str
+    fecha_inicio: date | None = None
+    fecha_fin: date | None = None
+    duracion_dias: int = 0
+    holgura_dias: int | None = None
+
+
+class PMCriticalPathOut(BaseModel):
+    critical_task_ids: list[str] = Field(default_factory=list)
+    critical_path: list[PMCriticalPathTaskOut] = Field(default_factory=list)
+    total_duration_days: int = 0
+    has_cycle: bool = False
+    warnings: list[str] = Field(default_factory=list)
+
+
+class PMAlertOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    tarea_id: str | None = None
+    tarea_titulo: str | None = None
+    tipo: str
+    severidad: str
+    titulo: str
+    descripcion: str | None = None
+    estatus: str
+    dedupe_key: str | None = None
+    activa: bool
+    created_at: datetime
+    updated_at: datetime
+    resuelta_at: datetime | None = None
+    resuelta_por: str | None = None
+
+
+class PMAlertResolveRequest(BaseModel):
+    comentario: str | None = Field(default=None, max_length=2000)
+
+
+class PMPlanningSummaryOut(BaseModel):
+    total_tareas: int = 0
+    tareas_criticas: int = 0
+    tareas_bloqueadas: int = 0
+    tareas_fuera_de_secuencia: int = 0
+    tareas_vencidas: int = 0
+    alertas_abiertas: int = 0
+
+
+class PMProjectPlanningOut(BaseModel):
+    project_id: str
+    tasks: list[PMPlanningTaskOut] = Field(default_factory=list)
+    dependencies: list[PMTareaDependenciaOut] = Field(default_factory=list)
+    dependency_state_by_task_id: dict[str, PMDependencyStateOut] = Field(default_factory=dict)
+    schedule_suggestions_by_task_id: dict[str, PMScheduleSuggestionOut] = Field(default_factory=dict)
+    critical_path: PMCriticalPathOut = Field(default_factory=PMCriticalPathOut)
+    alerts_summary: PMPlanningSummaryOut = Field(default_factory=PMPlanningSummaryOut)
 
 
 class PMProjectMembersListResponse(BaseModel):

@@ -15,6 +15,7 @@ from app.models.pos import Venta, VentaDetalle
 from app.models.pm import (
     EmpresaPMConfig,
     PMChecklistItem,
+    PMAlerta,
     PMDocumento,
     PMComentario,
     PMAprobacion,
@@ -61,6 +62,7 @@ __all__ = [
     "Material",
     "MovimientoInventario",
     "PMAprobacion",
+    "PMAlerta",
     "PMChecklistItem",
     "PMComentario",
     "PMDocumento",

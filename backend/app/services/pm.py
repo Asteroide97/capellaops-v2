@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
+import math
 import secrets
 
 from fastapi import HTTPException, UploadFile, status
@@ -15,6 +16,7 @@ from app.models import AuditLog, EmpresaModulo, EmpresaUsuario, Material, Movimi
 from app.models.pm import (
     EmpresaPMConfig,
     PMAprobacion,
+    PMAlerta,
     PMChecklistItem,
     PMComentario,
     PMDocumento,
@@ -40,6 +42,8 @@ from app.models.pm import (
 from app.schemas.pm import (
     PMBudgetVsActualOut,
     PMAprobacionOut,
+    PMAlertOut,
+    PMAlertResolveRequest,
     PMCommentOut,
     PMChecklistItemOut,
     PMConfigOut,
@@ -48,10 +52,16 @@ from app.schemas.pm import (
     PMDashboardKpis,
     PMDashboardOut,
     PMDashboardUserMetricItem,
+    PMCriticalPathOut,
+    PMCriticalPathTaskOut,
     PMCreateProjectRequisitionRequest,
+    PMDependencyStateOut,
     PMProjectMembersListResponse,
     PMProjectBudgetBundleOut,
     PMProjectCostsOut,
+    PMProjectPlanningOut,
+    PMPlanningSummaryOut,
+    PMPlanningTaskOut,
     PMPresupuestoIndirectoOut,
     PMPresupuestoOut,
     PMPresupuestoPartidaManoObraOut,
@@ -75,6 +85,7 @@ from app.schemas.pm import (
     PMProyectoListResponse,
     PMStatusCount,
     PMSubtareaOut,
+    PMScheduleSuggestionOut,
     PMTarifaHoraRolListResponse,
     PMTarifaHoraRolOut,
     PMTarifaHoraUsuarioListResponse,
@@ -119,6 +130,18 @@ PM_APPROVAL_TYPES = {
 }
 PM_APPROVAL_STATUS = {"pendiente", "aprobada", "rechazada", "cancelada"}
 PM_EXTERNAL_ACCESS_MODES = {"solo_lectura", "comentario"}
+PM_ALERT_TYPES = {
+    "tarea_vencida",
+    "proyecto_atrasado",
+    "tarea_bloqueada",
+    "tarea_critica_atrasada",
+    "tarea_fuera_de_secuencia",
+    "presupuesto_sobrepasado",
+    "sin_tarifa",
+    "otro",
+}
+PM_ALERT_SEVERITIES = {"info", "warning", "critical"}
+PM_ALERT_STATUS = {"abierta", "resuelta", "descartada"}
 ZERO = Decimal("0")
 
 
@@ -1617,6 +1640,7 @@ def create_task_dependency(
             },
         )
     )
+    refresh_project_planning(db, pm_context, project_id=task.proyecto_id)
     return build_task_dependencies_payload(db, task)
 
 
@@ -1647,7 +1671,867 @@ def deactivate_task_dependency(
         )
     )
     task = get_task_for_company(db, pm_context.empresa_id, dependency.tarea_id)
+    refresh_project_planning(db, pm_context, project_id=dependency.proyecto_id)
     return build_task_dependencies_payload(db, task)
+
+
+def format_task_title_list(titles: list[str]) -> str:
+    normalized = [normalize_optional_text(title) for title in titles]
+    resolved = [title for title in normalized if title]
+    if not resolved:
+        return ""
+    if len(resolved) == 1:
+        return resolved[0]
+    if len(resolved) == 2:
+        return f"{resolved[0]} y {resolved[1]}"
+    return f"{resolved[0]}, {resolved[1]} y {len(resolved) - 2} mas"
+
+
+def get_task_duration_days(task: PMTarea) -> int:
+    if task.fecha_inicio and task.fecha_vencimiento:
+        return max(1, abs((task.fecha_vencimiento - task.fecha_inicio).days) + 1)
+    estimated_hours = decimal_or_zero(task.estimacion_horas)
+    if estimated_hours > 0:
+        return max(1, math.ceil(float(estimated_hours) / 8))
+    return 1
+
+
+def get_task_schedule_start(task: PMTarea) -> date | None:
+    return task.fecha_inicio or task.fecha_vencimiento
+
+
+def get_task_schedule_end(task: PMTarea) -> date | None:
+    return task.fecha_completada or task.fecha_vencimiento or task.fecha_inicio
+
+
+def list_project_tasks_for_planning(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> list[PMTarea]:
+    return db.scalars(
+        select(PMTarea)
+        .where(
+            PMTarea.empresa_id == empresa_id,
+            PMTarea.proyecto_id == project_id,
+            PMTarea.activo == True,
+        )
+        .order_by(PMTarea.orden.asc(), PMTarea.fecha_vencimiento.asc(), PMTarea.created_at.asc())
+    ).all()
+
+
+def list_project_serialized_dependencies(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> list[PMTareaDependenciaOut]:
+    prerequisite_task = aliased(PMTarea)
+    successor_task = aliased(PMTarea)
+    rows = db.execute(
+        select(PMTareaDependencia, successor_task, prerequisite_task)
+        .join(successor_task, successor_task.id == PMTareaDependencia.tarea_id)
+        .join(prerequisite_task, prerequisite_task.id == PMTareaDependencia.depende_de_tarea_id)
+        .where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.proyecto_id == project_id,
+            PMTareaDependencia.activo == True,
+        )
+        .order_by(successor_task.orden.asc(), prerequisite_task.orden.asc(), PMTareaDependencia.created_at.asc())
+    ).all()
+    return [
+        serialize_task_dependency(
+            db,
+            dependency,
+            successor_task=successor,
+            prerequisite_task=prerequisite,
+        )
+        for dependency, successor, prerequisite in rows
+    ]
+
+
+def calculate_task_dependency_state(
+    db: Session,
+    *,
+    project_id: str,
+    empresa_id: str,
+    tasks: list[PMTarea] | None = None,
+    dependencies: list[PMTareaDependenciaOut] | None = None,
+) -> dict[str, PMDependencyStateOut]:
+    tasks = tasks if tasks is not None else list_project_tasks_for_planning(db, empresa_id=empresa_id, project_id=project_id)
+    dependencies = (
+        dependencies if dependencies is not None else list_project_serialized_dependencies(db, empresa_id=empresa_id, project_id=project_id)
+    )
+    task_map = {task.id: task for task in tasks}
+    dependencies_by_task: dict[str, list[PMTareaDependenciaOut]] = {}
+    successors_by_task: dict[str, list[PMTaskBlockerOut]] = {}
+    for dependency in dependencies:
+        if not dependency.tarea_id:
+            continue
+        dependencies_by_task.setdefault(dependency.tarea_id, []).append(dependency)
+        prerequisite_task = task_map.get(dependency.depende_de_tarea_id)
+        successor_task = task_map.get(dependency.tarea_id)
+        if dependency.depende_de_tarea_id:
+            successor_title = normalize_optional_text(
+                successor_task.titulo if successor_task else dependency.tarea_titulo
+            )
+            if successor_title:
+                successors_by_task.setdefault(dependency.depende_de_tarea_id, []).append(
+                    PMTaskBlockerOut(
+                        tarea_id=dependency.tarea_id,
+                        titulo=successor_title,
+                        estatus=successor_task.estatus if successor_task else "",
+                    )
+                )
+
+    dependency_state: dict[str, PMDependencyStateOut] = {}
+    for task in tasks:
+        task_dependencies = dependencies_by_task.get(task.id, [])
+        pending_blockers: list[PMTaskBlockerOut] = []
+        dependency_titles: list[str] = []
+        for dependency in task_dependencies:
+            prerequisite_task = task_map.get(dependency.depende_de_tarea_id)
+            prerequisite_title = normalize_optional_text(
+                prerequisite_task.titulo if prerequisite_task else dependency.depende_de_tarea_titulo
+            )
+            prerequisite_status = (
+                prerequisite_task.estatus if prerequisite_task else str(dependency.depende_de_tarea_estatus or "")
+            )
+            if prerequisite_title:
+                dependency_titles.append(prerequisite_title)
+            if dependency.bloqueante and str(prerequisite_status or "").lower() != "completada":
+                pending_blockers.append(
+                    PMTaskBlockerOut(
+                        tarea_id=dependency.depende_de_tarea_id,
+                        titulo=prerequisite_title or "Otra tarea",
+                        estatus=str(prerequisite_status or "").lower(),
+                    )
+                )
+
+        blocker_titles = [blocker.titulo for blocker in pending_blockers if blocker.titulo]
+        completed_dependency_titles = [title for title in dependency_titles if title]
+        blocked = bool(pending_blockers)
+        title = ""
+        detail = ""
+        badge_label = None
+        badge_tone = "neutral"
+        if blocked:
+            title = "Bloqueada"
+            detail = (
+                f"Depende de: {format_task_title_list(blocker_titles)}"
+                if blocker_titles
+                else "Tiene prerrequisitos pendientes."
+            )
+            badge_label = "Bloqueada"
+            badge_tone = "warning"
+        elif completed_dependency_titles:
+            title = "Prerrequisitos completados"
+            detail = format_task_title_list(completed_dependency_titles)
+            badge_tone = "success"
+
+        dependency_state[task.id] = PMDependencyStateOut(
+            task_id=task.id,
+            is_blocked=blocked,
+            can_start=not blocked,
+            dependencies_count=len(task_dependencies),
+            blockers_count=len(pending_blockers),
+            successors_count=len(successors_by_task.get(task.id, [])),
+            title=title,
+            detail=detail,
+            badge_label=badge_label,
+            badge_tone=badge_tone,
+            blocking_task_names=blocker_titles,
+            desbloquea_a=[item.titulo for item in successors_by_task.get(task.id, []) if item.titulo],
+            dependencies=task_dependencies,
+            blockers=pending_blockers,
+            successors=successors_by_task.get(task.id, []),
+        )
+    return dependency_state
+
+
+def calculate_schedule_suggestions(
+    db: Session,
+    *,
+    project_id: str,
+    empresa_id: str,
+    tasks: list[PMTarea] | None = None,
+    dependencies: list[PMTareaDependenciaOut] | None = None,
+    dependency_state_by_task_id: dict[str, PMDependencyStateOut] | None = None,
+) -> dict[str, PMScheduleSuggestionOut]:
+    tasks = tasks if tasks is not None else list_project_tasks_for_planning(db, empresa_id=empresa_id, project_id=project_id)
+    dependencies = (
+        dependencies if dependencies is not None else list_project_serialized_dependencies(db, empresa_id=empresa_id, project_id=project_id)
+    )
+    dependency_state_by_task_id = dependency_state_by_task_id or calculate_task_dependency_state(
+        db,
+        project_id=project_id,
+        empresa_id=empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+    )
+    task_map = {task.id: task for task in tasks}
+    suggestions: dict[str, PMScheduleSuggestionOut] = {}
+    for task in tasks:
+        dependency_state = dependency_state_by_task_id.get(task.id)
+        current_start = task.fecha_inicio
+        current_end = task.fecha_vencimiento
+        suggested_start: date | None = None
+        suggested_finish: date | None = None
+        reason: str | None = None
+        days_shift = 0
+        dependency_candidates: list[tuple[date, str]] = []
+        for dependency in dependency_state.dependencies if dependency_state else []:
+            prerequisite_task = task_map.get(dependency.depende_de_tarea_id)
+            prerequisite_end = get_task_schedule_end(prerequisite_task) if prerequisite_task else None
+            if prerequisite_end is None:
+                continue
+            dependency_title = normalize_optional_text(
+                prerequisite_task.titulo if prerequisite_task else dependency.depende_de_tarea_titulo
+            ) or "Otra tarea"
+            candidate_start = prerequisite_end + timedelta(days=max(0, dependency.lag_dias) + 1)
+            dependency_candidates.append((candidate_start, dependency_title))
+            if suggested_start is None or candidate_start > suggested_start:
+                suggested_start = candidate_start
+
+        if suggested_start is not None:
+            duration_days = get_task_duration_days(task)
+            suggested_finish = suggested_start + timedelta(days=max(duration_days - 1, 0))
+
+        if current_start and suggested_start and current_start < suggested_start:
+            days_shift = (suggested_start - current_start).days
+            dominant_dependencies = [title for candidate, title in dependency_candidates if candidate == suggested_start]
+            reason = (
+                f"{task.titulo} está programada antes de que termine {format_task_title_list(dominant_dependencies)}."
+            )
+
+        suggestions[task.id] = PMScheduleSuggestionOut(
+            task_id=task.id,
+            fecha_inicio_actual=current_start,
+            fecha_fin_actual=current_end,
+            fecha_inicio_sugerida=suggested_start,
+            fecha_fin_sugerida=suggested_finish,
+            dias_desplazamiento=days_shift,
+            fuera_de_secuencia=days_shift > 0,
+            razon=reason,
+        )
+    return suggestions
+
+
+def calculate_critical_path(
+    db: Session,
+    *,
+    project_id: str,
+    empresa_id: str,
+    tasks: list[PMTarea] | None = None,
+    dependencies: list[PMTareaDependenciaOut] | None = None,
+) -> PMCriticalPathOut:
+    tasks = tasks if tasks is not None else list_project_tasks_for_planning(db, empresa_id=empresa_id, project_id=project_id)
+    dependencies = (
+        dependencies if dependencies is not None else list_project_serialized_dependencies(db, empresa_id=empresa_id, project_id=project_id)
+    )
+    if not tasks:
+        return PMCriticalPathOut()
+
+    task_map = {task.id: task for task in tasks}
+    task_ids = list(task_map.keys())
+    predecessors: dict[str, list[tuple[str, int]]] = {task_id: [] for task_id in task_ids}
+    successors: dict[str, list[tuple[str, int]]] = {task_id: [] for task_id in task_ids}
+    indegree: dict[str, int] = {task_id: 0 for task_id in task_ids}
+    for dependency in dependencies:
+        if dependency.tarea_id not in task_map or dependency.depende_de_tarea_id not in task_map:
+            continue
+        lag = max(0, int(dependency.lag_dias or 0))
+        predecessors[dependency.tarea_id].append((dependency.depende_de_tarea_id, lag))
+        successors[dependency.depende_de_tarea_id].append((dependency.tarea_id, lag))
+        indegree[dependency.tarea_id] += 1
+
+    queue = [task_id for task_id in task_ids if indegree[task_id] == 0]
+    topo: list[str] = []
+    while queue:
+        current = queue.pop(0)
+        topo.append(current)
+        for successor_id, _lag in successors.get(current, []):
+            indegree[successor_id] -= 1
+            if indegree[successor_id] == 0:
+                queue.append(successor_id)
+
+    if len(topo) != len(task_ids):
+        return PMCriticalPathOut(
+            has_cycle=True,
+            warnings=["Se detectó un ciclo en dependencias. No se pudo calcular la ruta crítica."],
+        )
+
+    durations = {task.id: get_task_duration_days(task) for task in tasks}
+    earliest_start: dict[str, int] = {}
+    earliest_finish: dict[str, int] = {}
+    predecessor_choice: dict[str, str | None] = {}
+    for task_id in topo:
+        best_start = 0
+        best_predecessor: str | None = None
+        for predecessor_id, lag in predecessors.get(task_id, []):
+            candidate_start = earliest_finish[predecessor_id] + lag
+            if candidate_start >= best_start:
+                best_start = candidate_start
+                best_predecessor = predecessor_id
+        earliest_start[task_id] = best_start
+        earliest_finish[task_id] = best_start + durations[task_id]
+        predecessor_choice[task_id] = best_predecessor
+
+    total_duration = max(earliest_finish.values(), default=0)
+    latest_finish: dict[str, int] = {}
+    latest_start: dict[str, int] = {}
+    slack_days: dict[str, int] = {}
+    for task_id in reversed(topo):
+        successor_items = successors.get(task_id, [])
+        if successor_items:
+            latest_finish[task_id] = min(latest_start[successor_id] - lag for successor_id, lag in successor_items)
+        else:
+            latest_finish[task_id] = total_duration
+        latest_start[task_id] = latest_finish[task_id] - durations[task_id]
+        slack_days[task_id] = max(latest_start[task_id] - earliest_start[task_id], 0)
+
+    critical_task_ids = [task_id for task_id in topo if slack_days.get(task_id, 0) == 0]
+    end_task_id = max(task_ids, key=lambda task_id: earliest_finish.get(task_id, 0))
+    path_ids: list[str] = []
+    current_id: str | None = end_task_id
+    while current_id:
+        path_ids.append(current_id)
+        current_id = predecessor_choice.get(current_id)
+    path_ids.reverse()
+
+    return PMCriticalPathOut(
+        critical_task_ids=critical_task_ids,
+        critical_path=[
+            PMCriticalPathTaskOut(
+                task_id=task_id,
+                titulo=task_map[task_id].titulo,
+                fecha_inicio=task_map[task_id].fecha_inicio,
+                fecha_fin=task_map[task_id].fecha_vencimiento,
+                duracion_dias=durations[task_id],
+                holgura_dias=slack_days.get(task_id),
+            )
+            for task_id in path_ids
+        ],
+        total_duration_days=total_duration,
+        has_cycle=False,
+        warnings=[],
+    )
+
+
+def serialize_alert(alert: PMAlerta, task_title: str | None = None) -> PMAlertOut:
+    return PMAlertOut(
+        id=alert.id,
+        empresa_id=alert.empresa_id,
+        proyecto_id=alert.proyecto_id,
+        tarea_id=alert.tarea_id,
+        tarea_titulo=task_title,
+        tipo=alert.tipo,
+        severidad=alert.severidad,
+        titulo=alert.titulo,
+        descripcion=alert.descripcion,
+        estatus=alert.estatus,
+        dedupe_key=alert.dedupe_key,
+        activa=alert.activa,
+        created_at=alert.created_at,
+        updated_at=alert.updated_at,
+        resuelta_at=alert.resuelta_at,
+        resuelta_por=alert.resuelta_por,
+    )
+
+
+def upsert_pm_alert(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    task_id: str | None,
+    tipo: str,
+    severidad: str,
+    titulo: str,
+    descripcion: str | None,
+    dedupe_key: str,
+) -> PMAlerta:
+    existing = db.scalar(
+        select(PMAlerta).where(
+            PMAlerta.empresa_id == empresa_id,
+            PMAlerta.proyecto_id == project_id,
+            PMAlerta.dedupe_key == dedupe_key,
+            PMAlerta.activa == True,
+            PMAlerta.estatus == "abierta",
+        )
+    )
+    if existing:
+        existing.tarea_id = task_id
+        existing.tipo = tipo
+        existing.severidad = severidad
+        existing.titulo = titulo
+        existing.descripcion = descripcion
+        return existing
+    alert = PMAlerta(
+        empresa_id=empresa_id,
+        proyecto_id=project_id,
+        tarea_id=task_id,
+        tipo=tipo,
+        severidad=severidad,
+        titulo=titulo,
+        descripcion=descripcion,
+        estatus="abierta",
+        dedupe_key=dedupe_key,
+        activa=True,
+    )
+    db.add(alert)
+    return alert
+
+
+def build_planning_summary(
+    tasks: list[PMPlanningTaskOut],
+    critical_path: PMCriticalPathOut,
+    alerts: list[PMAlerta] | list[PMAlertOut],
+) -> PMPlanningSummaryOut:
+    return PMPlanningSummaryOut(
+        total_tareas=len(tasks),
+        tareas_criticas=sum(1 for task in tasks if task.es_critica),
+        tareas_bloqueadas=sum(1 for task in tasks if task.dependency_state and task.dependency_state.is_blocked),
+        tareas_fuera_de_secuencia=sum(
+            1
+            for task in tasks
+            if task.schedule_suggestion and task.schedule_suggestion.fuera_de_secuencia
+        ),
+        tareas_vencidas=sum(
+            1
+            for task in tasks
+            if task.fecha_vencimiento and str(task.estatus).lower() not in {"completada", "cancelada"} and task.fecha_vencimiento < today_utc()
+        ),
+        alertas_abiertas=sum(
+            1
+            for alert in alerts
+            if (alert.activa if isinstance(alert, PMAlerta) else alert.activa)
+            and (alert.estatus if isinstance(alert, PMAlerta) else alert.estatus) == "abierta"
+        ),
+    )
+
+
+def build_project_planning_payload(
+    db: Session,
+    *,
+    project: PMProyecto,
+    tasks: list[PMTarea],
+    dependencies: list[PMTareaDependenciaOut],
+    dependency_state_by_task_id: dict[str, PMDependencyStateOut],
+    schedule_suggestions_by_task_id: dict[str, PMScheduleSuggestionOut],
+    critical_path: PMCriticalPathOut,
+    alerts: list[PMAlerta] | None = None,
+) -> PMProjectPlanningOut:
+    critical_ids = set(critical_path.critical_task_ids)
+    planning_tasks: list[PMPlanningTaskOut] = []
+    for task in tasks:
+        task_item = serialize_task_list_item(db, task)
+        planning_tasks.append(
+            PMPlanningTaskOut(
+                **task_item.model_dump(),
+                dependency_state=dependency_state_by_task_id.get(task.id),
+                schedule_suggestion=schedule_suggestions_by_task_id.get(task.id),
+                es_critica=task.id in critical_ids,
+                holgura_dias=next(
+                    (
+                        item.holgura_dias
+                        for item in critical_path.critical_path
+                        if item.task_id == task.id
+                    ),
+                    0 if task.id in critical_ids else None,
+                ),
+            )
+        )
+    planning_summary = build_planning_summary(planning_tasks, critical_path, alerts or [])
+    return PMProjectPlanningOut(
+        project_id=project.id,
+        tasks=planning_tasks,
+        dependencies=dependencies,
+        dependency_state_by_task_id=dependency_state_by_task_id,
+        schedule_suggestions_by_task_id=schedule_suggestions_by_task_id,
+        critical_path=critical_path,
+        alerts_summary=planning_summary,
+    )
+
+
+def generate_pm_alerts(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    user_id: str | None = None,
+    project: PMProyecto | None = None,
+    tasks: list[PMTarea] | None = None,
+    dependency_state_by_task_id: dict[str, PMDependencyStateOut] | None = None,
+    schedule_suggestions_by_task_id: dict[str, PMScheduleSuggestionOut] | None = None,
+    critical_path: PMCriticalPathOut | None = None,
+) -> list[PMAlerta]:
+    project = project or get_project_for_company(db, empresa_id, project_id)
+    tasks = tasks if tasks is not None else list_project_tasks_for_planning(db, empresa_id=empresa_id, project_id=project_id)
+    dependency_state_by_task_id = dependency_state_by_task_id or calculate_task_dependency_state(
+        db,
+        project_id=project_id,
+        empresa_id=empresa_id,
+        tasks=tasks,
+    )
+    schedule_suggestions_by_task_id = schedule_suggestions_by_task_id or calculate_schedule_suggestions(
+        db,
+        project_id=project_id,
+        empresa_id=empresa_id,
+        tasks=tasks,
+        dependency_state_by_task_id=dependency_state_by_task_id,
+    )
+    critical_path = critical_path or calculate_critical_path(
+        db,
+        project_id=project_id,
+        empresa_id=empresa_id,
+        tasks=tasks,
+    )
+    critical_task_ids = set(critical_path.critical_task_ids)
+    active_dedupe_keys: set[str] = set()
+    now = utcnow()
+
+    def register_alert(
+        *,
+        dedupe_key: str,
+        task_id: str | None,
+        tipo: str,
+        severidad: str,
+        titulo: str,
+        descripcion: str | None,
+    ) -> None:
+        active_dedupe_keys.add(dedupe_key)
+        upsert_pm_alert(
+            db,
+            empresa_id=empresa_id,
+            project_id=project_id,
+            task_id=task_id,
+            tipo=tipo,
+            severidad=severidad,
+            titulo=titulo,
+            descripcion=descripcion,
+            dedupe_key=dedupe_key,
+        )
+
+    for task in tasks:
+        normalized_status = str(task.estatus or "").lower()
+        dependency_state = dependency_state_by_task_id.get(task.id)
+        schedule_suggestion = schedule_suggestions_by_task_id.get(task.id)
+        if task.fecha_vencimiento and normalized_status not in {"completada", "cancelada"} and task.fecha_vencimiento < today_utc():
+            register_alert(
+                dedupe_key=f"project:{project_id}:task:{task.id}:tarea_vencida",
+                task_id=task.id,
+                tipo="tarea_vencida",
+                severidad="warning",
+                titulo="Tarea vencida",
+                descripcion=f"{task.titulo} vencio el {task.fecha_vencimiento.isoformat()} y sigue pendiente.",
+            )
+        if dependency_state and dependency_state.is_blocked:
+            register_alert(
+                dedupe_key=f"project:{project_id}:task:{task.id}:tarea_bloqueada",
+                task_id=task.id,
+                tipo="tarea_bloqueada",
+                severidad="warning",
+                titulo="Tarea bloqueada",
+                descripcion=dependency_state.detail or f"{task.titulo} tiene prerrequisitos pendientes.",
+            )
+        if schedule_suggestion and schedule_suggestion.fuera_de_secuencia:
+            register_alert(
+                dedupe_key=f"project:{project_id}:task:{task.id}:fuera_secuencia",
+                task_id=task.id,
+                tipo="tarea_fuera_de_secuencia",
+                severidad="warning",
+                titulo="Tarea fuera de secuencia",
+                descripcion=schedule_suggestion.razon or f"{task.titulo} inicia antes de que termine su prerrequisito.",
+            )
+        if (
+            task.id in critical_task_ids
+            and task.fecha_vencimiento
+            and normalized_status not in {"completada", "cancelada"}
+            and task.fecha_vencimiento < today_utc()
+        ):
+            register_alert(
+                dedupe_key=f"project:{project_id}:task:{task.id}:tarea_critica_atrasada",
+                task_id=task.id,
+                tipo="tarea_critica_atrasada",
+                severidad="critical",
+                titulo="Tarea crítica atrasada",
+                descripcion=f"{task.titulo} forma parte de la ruta critica y ya esta atrasada.",
+            )
+
+    if (
+        project.estatus not in {"completado", "cancelado"}
+        and project.fecha_fin_planificada
+        and project.fecha_fin_planificada < today_utc()
+        and decimal_or_zero(project.porcentaje_avance) < Decimal("100")
+    ):
+        register_alert(
+            dedupe_key=f"project:{project_id}:proyecto_atrasado",
+            task_id=None,
+            tipo="proyecto_atrasado",
+            severidad="critical",
+            titulo="Proyecto atrasado",
+            descripcion=f"{project.nombre} ya rebaso su fecha fin planificada.",
+        )
+
+    cost_summary = db.scalar(
+        select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.empresa_id == empresa_id,
+            PMProyectoCostoResumen.proyecto_id == project_id,
+        )
+    )
+    if cost_summary:
+        effective_budget = decimal_or_zero(cost_summary.presupuesto_detallado_costo)
+        if effective_budget <= 0:
+            effective_budget = decimal_or_zero(cost_summary.presupuesto_estimado or project.presupuesto_estimado)
+        if effective_budget > 0 and decimal_or_zero(cost_summary.costo_total_real) > effective_budget:
+            register_alert(
+                dedupe_key=f"project:{project_id}:presupuesto_sobrepasado",
+                task_id=None,
+                tipo="presupuesto_sobrepasado",
+                severidad="critical",
+                titulo="Proyecto sobre presupuesto",
+                descripcion="El costo real ya supera el presupuesto disponible para el proyecto.",
+            )
+
+    existing_active_alerts = db.scalars(
+        select(PMAlerta).where(
+            PMAlerta.empresa_id == empresa_id,
+            PMAlerta.proyecto_id == project_id,
+            PMAlerta.activa == True,
+            PMAlerta.estatus == "abierta",
+        )
+    ).all()
+    for alert in existing_active_alerts:
+        if alert.dedupe_key and alert.dedupe_key not in active_dedupe_keys:
+            alert.activa = False
+            alert.estatus = "resuelta"
+            alert.resuelta_at = now
+            alert.resuelta_por = user_id
+
+    db.flush()
+    return db.scalars(
+        select(PMAlerta)
+        .where(
+            PMAlerta.empresa_id == empresa_id,
+            PMAlerta.proyecto_id == project_id,
+            PMAlerta.activa == True,
+            PMAlerta.estatus == "abierta",
+        )
+        .order_by(desc(PMAlerta.created_at))
+    ).all()
+
+
+def get_project_planning(
+    db: Session,
+    pm_context: PMContext,
+    project_id: str,
+) -> PMProjectPlanningOut:
+    ensure_pm_tasks_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    dependencies = list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    dependency_state_by_task_id = calculate_task_dependency_state(
+        db,
+        project_id=project_id,
+        empresa_id=pm_context.empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+    )
+    schedule_suggestions_by_task_id = calculate_schedule_suggestions(
+        db,
+        project_id=project_id,
+        empresa_id=pm_context.empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+        dependency_state_by_task_id=dependency_state_by_task_id,
+    )
+    critical_path = calculate_critical_path(
+        db,
+        project_id=project_id,
+        empresa_id=pm_context.empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+    )
+    alerts = db.scalars(
+        select(PMAlerta).where(
+            PMAlerta.empresa_id == pm_context.empresa_id,
+            PMAlerta.proyecto_id == project_id,
+            PMAlerta.activa == True,
+            PMAlerta.estatus == "abierta",
+        )
+    ).all()
+    return build_project_planning_payload(
+        db,
+        project=project,
+        tasks=tasks,
+        dependencies=dependencies,
+        dependency_state_by_task_id=dependency_state_by_task_id,
+        schedule_suggestions_by_task_id=schedule_suggestions_by_task_id,
+        critical_path=critical_path,
+        alerts=alerts,
+    )
+
+
+def refresh_project_planning(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> PMProjectPlanningOut:
+    ensure_pm_tasks_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    dependencies = list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    dependency_state_by_task_id = calculate_task_dependency_state(
+        db,
+        project_id=project_id,
+        empresa_id=pm_context.empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+    )
+    for task in tasks:
+        next_blocked = bool(dependency_state_by_task_id.get(task.id).is_blocked) if dependency_state_by_task_id.get(task.id) else False
+        if task.bloqueada != next_blocked:
+            task.bloqueada = next_blocked
+    schedule_suggestions_by_task_id = calculate_schedule_suggestions(
+        db,
+        project_id=project_id,
+        empresa_id=pm_context.empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+        dependency_state_by_task_id=dependency_state_by_task_id,
+    )
+    critical_path = calculate_critical_path(
+        db,
+        project_id=project_id,
+        empresa_id=pm_context.empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+    )
+    alerts = generate_pm_alerts(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project_id,
+        user_id=pm_context.user.id,
+        project=project,
+        tasks=tasks,
+        dependency_state_by_task_id=dependency_state_by_task_id,
+        schedule_suggestions_by_task_id=schedule_suggestions_by_task_id,
+        critical_path=critical_path,
+    )
+    db.flush()
+    return build_project_planning_payload(
+        db,
+        project=project,
+        tasks=tasks,
+        dependencies=dependencies,
+        dependency_state_by_task_id=dependency_state_by_task_id,
+        schedule_suggestions_by_task_id=schedule_suggestions_by_task_id,
+        critical_path=critical_path,
+        alerts=alerts,
+    )
+
+
+def get_project_critical_path(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> PMCriticalPathOut:
+    ensure_pm_tasks_enabled(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    dependencies = list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    return calculate_critical_path(
+        db,
+        project_id=project_id,
+        empresa_id=pm_context.empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+    )
+
+
+def list_project_alerts(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> list[PMAlertOut]:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    alerts = db.execute(
+        select(PMAlerta, PMTarea.titulo)
+        .select_from(PMAlerta)
+        .outerjoin(PMTarea, PMTarea.id == PMAlerta.tarea_id)
+        .where(
+            PMAlerta.empresa_id == pm_context.empresa_id,
+            PMAlerta.proyecto_id == project_id,
+            PMAlerta.activa == True,
+            PMAlerta.estatus == "abierta",
+        )
+        .order_by(
+            case(
+                (PMAlerta.severidad == "critical", 0),
+                (PMAlerta.severidad == "warning", 1),
+                else_=2,
+            ),
+            desc(PMAlerta.updated_at),
+        )
+    ).all()
+    return [serialize_alert(alert, task_title) for alert, task_title in alerts]
+
+
+def get_alert_for_company(db: Session, empresa_id: str, alert_id: str) -> PMAlerta:
+    alert = db.scalar(
+        select(PMAlerta).where(
+            PMAlerta.empresa_id == empresa_id,
+            PMAlerta.id == alert_id,
+        )
+    )
+    if not alert:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alerta no encontrada.")
+    return alert
+
+
+def resolve_pm_alert(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    alert_id: str,
+    comentario: str | None,
+) -> PMAlertOut:
+    alert = get_alert_for_company(db, pm_context.empresa_id, alert_id)
+    alert.estatus = "resuelta"
+    alert.activa = False
+    alert.resuelta_at = utcnow()
+    alert.resuelta_por = pm_context.user.id
+    note = normalize_optional_text(comentario)
+    if note:
+        alert.descripcion = f"{alert.descripcion}\n\nResolucion: {note}" if alert.descripcion else f"Resolucion: {note}"
+    db.flush()
+    task_title = db.scalar(select(PMTarea.titulo).where(PMTarea.id == alert.tarea_id)) if alert.tarea_id else None
+    return serialize_alert(alert, task_title)
+
+
+def dismiss_pm_alert(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    alert_id: str,
+    comentario: str | None,
+) -> PMAlertOut:
+    alert = get_alert_for_company(db, pm_context.empresa_id, alert_id)
+    alert.estatus = "descartada"
+    alert.activa = False
+    alert.resuelta_at = utcnow()
+    alert.resuelta_por = pm_context.user.id
+    note = normalize_optional_text(comentario)
+    if note:
+        alert.descripcion = f"{alert.descripcion}\n\nDescartada: {note}" if alert.descripcion else f"Descartada: {note}"
+    db.flush()
+    task_title = db.scalar(select(PMTarea.titulo).where(PMTarea.id == alert.tarea_id)) if alert.tarea_id else None
+    return serialize_alert(alert, task_title)
 
 
 def create_task(
@@ -1721,6 +2605,7 @@ def create_task(
             metadata_json={"project_id": project.id, "estatus": task.estatus, "prioridad": task.prioridad},
         )
     )
+    refresh_project_planning(db, pm_context, project_id=project.id)
     return serialize_task_detail(db, task)
 
 
@@ -1811,6 +2696,7 @@ def update_task(
         )
     )
     db.flush()
+    refresh_project_planning(db, pm_context, project_id=task.proyecto_id)
     return serialize_task_detail(db, task)
 
 
@@ -1845,6 +2731,7 @@ def deactivate_task(
         )
     )
     db.flush()
+    refresh_project_planning(db, pm_context, project_id=task.proyecto_id)
     return serialize_task_detail(db, task)
 
 
@@ -5131,6 +6018,75 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
         )
         .limit(5)
     ).all()
+    active_alerts_count = db.scalar(
+        select(func.count(PMAlerta.id)).where(
+            PMAlerta.empresa_id == pm_context.empresa_id,
+            PMAlerta.activa == True,
+            PMAlerta.estatus == "abierta",
+        )
+    ) or 0
+
+    active_project_records = db.scalars(
+        select(PMProyecto).where(
+            PMProyecto.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+        )
+    ).all()
+    blocked_tasks_count = 0
+    critical_task_ids: set[str] = set()
+    critical_upcoming_items: list[PMDashboardDueItem] = []
+    for project in active_project_records:
+        planning_tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+        if not planning_tasks:
+            continue
+        planning_dependencies = list_project_serialized_dependencies(
+            db,
+            empresa_id=pm_context.empresa_id,
+            project_id=project.id,
+        )
+        dependency_state = calculate_task_dependency_state(
+            db,
+            project_id=project.id,
+            empresa_id=pm_context.empresa_id,
+            tasks=planning_tasks,
+            dependencies=planning_dependencies,
+        )
+        blocked_tasks_count += sum(1 for item in dependency_state.values() if item.is_blocked)
+        critical_path = calculate_critical_path(
+            db,
+            project_id=project.id,
+            empresa_id=pm_context.empresa_id,
+            tasks=planning_tasks,
+            dependencies=planning_dependencies,
+        )
+        critical_task_ids.update(critical_path.critical_task_ids)
+        project_task_map = {task.id: task for task in planning_tasks}
+        for task_id in critical_path.critical_task_ids:
+            task = project_task_map.get(task_id)
+            if not task or task.estatus in {"completada", "cancelada"} or not task.fecha_vencimiento:
+                continue
+            if task.fecha_vencimiento < today:
+                continue
+            critical_upcoming_items.append(
+                PMDashboardDueItem(
+                    project_id=project.id,
+                    task_id=task.id,
+                    proyecto_nombre=project.nombre,
+                    titulo=task.titulo,
+                    estatus=task.estatus,
+                    prioridad=task.prioridad,
+                    fecha=task.fecha_vencimiento,
+                    responsable_nombre=task.asignado_nombre_snapshot,
+                )
+            )
+
+    critical_upcoming_items.sort(
+        key=lambda item: (
+            item.fecha or date.max,
+            str(item.prioridad or ""),
+            str(item.titulo or ""),
+        )
+    )
 
     return PMDashboardOut(
         kpis=PMDashboardKpis(
@@ -5140,6 +6096,9 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             tareas_pendientes=task_counts.get("pendiente", 0),
             tareas_en_progreso=task_counts.get("en_progreso", 0),
             tareas_completadas=task_counts.get("completada", 0),
+            tareas_bloqueadas=blocked_tasks_count,
+            tareas_criticas=len(critical_task_ids),
+            alertas_activas=active_alerts_count,
             costo_materiales_estimado_total=decimal_or_zero(material_estimated_total),
             costo_materiales_real_total=decimal_or_zero(material_real_total),
             variacion_materiales_total=decimal_or_zero(material_variation_total),
@@ -5166,6 +6125,7 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             )
             for task, project in upcoming_task_rows
         ],
+        tareas_criticas_proximas=critical_upcoming_items[:8],
         proyectos_proximos=[
             PMDashboardDueItem(
                 project_id=project.id,

@@ -68,6 +68,7 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     approvals = relationship("PMAprobacion", back_populates="proyecto", cascade="all, delete-orphan")
     external_invites = relationship("PMInvitadoExterno", back_populates="proyecto", cascade="all, delete-orphan")
     portal_access_logs = relationship("PMPortalAccessLog", back_populates="proyecto", cascade="all, delete-orphan")
+    alerts = relationship("PMAlerta", back_populates="proyecto", cascade="all, delete-orphan")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="proyecto", cascade="all, delete-orphan")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
     time_entries = relationship("PMTimeEntry", back_populates="proyecto", cascade="all, delete-orphan")
@@ -175,6 +176,7 @@ class PMTarea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     subtasks = relationship("PMSubtarea", back_populates="tarea", cascade="all, delete-orphan")
     checklist_items = relationship("PMChecklistItem", back_populates="tarea", cascade="all, delete-orphan")
     comments = relationship("PMComentario", back_populates="tarea", cascade="all, delete-orphan")
+    alerts = relationship("PMAlerta", back_populates="tarea")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="tarea")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="tarea")
     time_entries = relationship("PMTimeEntry", back_populates="tarea")
@@ -762,3 +764,33 @@ class PMPortalAccessLog(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     proyecto = relationship("PMProyecto", back_populates="portal_access_logs")
     invitado_externo = relationship("PMInvitadoExterno", back_populates="access_logs")
+
+
+class PMAlerta(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_alertas"
+    __table_args__ = (
+        Index("ix_pm_alertas_empresa_id", "empresa_id"),
+        Index("ix_pm_alertas_proyecto_id", "proyecto_id"),
+        Index("ix_pm_alertas_tarea_id", "tarea_id"),
+        Index("ix_pm_alertas_tipo", "tipo"),
+        Index("ix_pm_alertas_severidad", "severidad"),
+        Index("ix_pm_alertas_estatus", "estatus"),
+        Index("ix_pm_alertas_activa", "activa"),
+        Index("ix_pm_alertas_dedupe_key", "dedupe_key"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id"), nullable=True, index=True)
+    tipo: Mapped[str] = mapped_column(String(40), nullable=False)
+    severidad: Mapped[str] = mapped_column(String(20), nullable=False, default="warning", server_default="warning")
+    titulo: Mapped[str] = mapped_column(String(180), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estatus: Mapped[str] = mapped_column(String(20), nullable=False, default="abierta", server_default="abierta")
+    dedupe_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    activa: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    resuelta_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resuelta_por: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="alerts")
+    tarea = relationship("PMTarea", back_populates="alerts")

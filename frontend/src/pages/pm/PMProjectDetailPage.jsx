@@ -26,13 +26,16 @@ import {
   createPmProjectComment,
   deactivatePmProjectMember,
   deactivatePmTask,
+  dismissPmAlert,
   getPmProject,
   getPmProjectCosts,
   getPmProjectMaterials,
+  getPmProjectPlanning,
   listPmProjectMembers,
-  listPmProjectDependencies,
+  listPmProjectAlerts,
   listPmProjectTimeEntries,
-  listPmTasks,
+  refreshPmProjectPlanning,
+  resolvePmAlert,
   updatePmTask,
 } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
@@ -231,11 +234,15 @@ export default function PMProjectDetailPage() {
   const [project, setProject] = useState(null);
   const [projectCosts, setProjectCosts] = useState(null);
   const [projectMaterials, setProjectMaterials] = useState(null);
+  const [projectPlanning, setProjectPlanning] = useState(null);
+  const [projectAlerts, setProjectAlerts] = useState([]);
   const [projectDependencies, setProjectDependencies] = useState([]);
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [projectTimeEntries, setProjectTimeEntries] = useState([]);
   const [taskActionLoading, setTaskActionLoading] = useState({});
+  const [alertActionLoading, setAlertActionLoading] = useState({});
+  const [planningRefreshing, setPlanningRefreshing] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState(null);
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
@@ -272,10 +279,31 @@ export default function PMProjectDetailPage() {
     });
   }
 
-  function applyWorkPlanSnapshot(projectResponse, dependenciesResponse, tasksResponse) {
-    const nextTasks = tasksResponse.items ?? [];
+  function setAlertLoading(alertId, action, isLoading) {
+    const key = `${alertId}:${action}`;
+    setAlertActionLoading((current) => {
+      if (isLoading) {
+        return { ...current, [key]: true };
+      }
+      if (!current[key]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function isAlertActionPending(alertId, action) {
+    return Boolean(alertActionLoading[`${alertId}:${action}`]);
+  }
+
+  function applyWorkPlanSnapshot(projectResponse, planningResponse, alertsResponse = []) {
+    const nextTasks = planningResponse?.tasks ?? [];
     setProject(projectResponse);
-    setProjectDependencies(dependenciesResponse ?? []);
+    setProjectPlanning(planningResponse ?? null);
+    setProjectDependencies(planningResponse?.dependencies ?? []);
+    setProjectAlerts(alertsResponse ?? []);
     setTasks(nextTasks);
     syncSelectedTask(nextTasks);
     return nextTasks;
@@ -314,12 +342,12 @@ export default function PMProjectDetailPage() {
     setError("");
 
     try {
-      const [projectResponse, dependenciesResponse, tasksResponse] = await Promise.all([
+      const [projectResponse, planningResponse, alertsResponse] = await Promise.all([
         getPmProject({ projectId: id, token, empresaId }),
-        listPmProjectDependencies({ projectId: id, token, empresaId }),
-        listPmTasks({ projectId: id, token, empresaId, filters: { limit: 100, offset: 0, activo: true } }),
+        getPmProjectPlanning({ projectId: id, token, empresaId }),
+        listPmProjectAlerts({ projectId: id, token, empresaId }),
       ]);
-      applyWorkPlanSnapshot(projectResponse, dependenciesResponse, tasksResponse);
+      applyWorkPlanSnapshot(projectResponse, planningResponse, alertsResponse);
     } catch (requestError) {
       setError(requestError.message || "No se pudo actualizar el plan de trabajo.");
     } finally {
@@ -351,13 +379,13 @@ export default function PMProjectDetailPage() {
     setError("");
 
     try {
-      const [projectResponse, costsResponse, materialsResponse, dependenciesResponse, membersResponse, tasksResponse, timeEntriesResponse] = await Promise.all([
+      const [projectResponse, costsResponse, materialsResponse, planningResponse, alertsResponse, membersResponse, timeEntriesResponse] = await Promise.all([
         getPmProject({ projectId: id, token, empresaId }),
         getPmProjectCosts({ projectId: id, token, empresaId }),
         getPmProjectMaterials({ projectId: id, token, empresaId }),
-        listPmProjectDependencies({ projectId: id, token, empresaId }),
+        getPmProjectPlanning({ projectId: id, token, empresaId }),
+        listPmProjectAlerts({ projectId: id, token, empresaId }),
         listPmProjectMembers({ projectId: id, token, empresaId }),
-        listPmTasks({ projectId: id, token, empresaId, filters: { limit: 100, offset: 0, activo: true } }),
         listPmProjectTimeEntries({ projectId: id, token, empresaId, filters: { limit: 200, offset: 0, activo: true } }),
       ]);
 
@@ -365,7 +393,7 @@ export default function PMProjectDetailPage() {
       setProjectMaterials(materialsResponse);
       setMembers(membersResponse.items ?? []);
       setProjectTimeEntries(timeEntriesResponse.items ?? []);
-      applyWorkPlanSnapshot(projectResponse, dependenciesResponse, tasksResponse);
+      applyWorkPlanSnapshot(projectResponse, planningResponse, alertsResponse);
     } catch (requestError) {
       setError(requestError.message || "No se pudo cargar el proyecto.");
     } finally {
@@ -412,11 +440,16 @@ export default function PMProjectDetailPage() {
       }, {}),
     [projectDependencies],
   );
+  const planningDependencyStateMap = projectPlanning?.dependency_state_by_task_id ?? {};
+  const planningScheduleMap = projectPlanning?.schedule_suggestions_by_task_id ?? {};
+  const planningSummary = projectPlanning?.alerts_summary ?? null;
+  const planningCriticalPath = projectPlanning?.critical_path ?? null;
   const taskDependencyContextMap = useMemo(
     () =>
       tasks.reduce((accumulator, task) => {
-        const dependencyState = getTaskDependencyState(task, taskDependenciesMap[task.id] ?? [], taskMap);
-        const successors = (taskSuccessorsMap[task.id] ?? [])
+        const liveDependencyState = getTaskDependencyState(task, taskDependenciesMap[task.id] ?? [], taskMap);
+        const planningDependencyState = planningDependencyStateMap[task.id];
+        const successors = (planningDependencyState?.successors?.length ? planningDependencyState.successors : taskSuccessorsMap[task.id] ?? [])
           .map((dependency) => {
             const successorTask = taskMap[dependency.tarea_id];
             const title = normalizePmCopy(
@@ -432,16 +465,27 @@ export default function PMProjectDetailPage() {
             };
           })
           .filter(Boolean);
+        const mergedDependencyState = {
+          ...planningDependencyState,
+          ...liveDependencyState,
+          blocked: liveDependencyState.blocked,
+          is_blocked: liveDependencyState.blocked,
+          title: liveDependencyState.title || planningDependencyState?.title || "",
+          detail: liveDependencyState.detail || planningDependencyState?.detail || "",
+          dependencies: liveDependencyState.dependencies,
+          blockers: liveDependencyState.blockers,
+          successors,
+        };
         accumulator[task.id] = {
-          ...dependencyState,
-          dependencies_count: dependencyState.dependencies.length,
-          blockers_count: dependencyState.blockers.length,
+          ...mergedDependencyState,
+          dependencies_count: mergedDependencyState.dependencies.length,
+          blockers_count: mergedDependencyState.blockers.length,
           successors,
           successors_count: successors.length,
         };
         return accumulator;
       }, {}),
-    [tasks, taskDependenciesMap, taskSuccessorsMap, taskMap],
+    [tasks, taskDependenciesMap, taskSuccessorsMap, taskMap, planningDependencyStateMap],
   );
   const resolvedTasks = useMemo(
     () =>
@@ -449,6 +493,7 @@ export default function PMProjectDetailPage() {
         const dependencyContext = taskDependencyContextMap[task.id] ?? getTaskDependencyState(task, [], taskMap);
         return {
           ...task,
+          schedule_suggestion: task.schedule_suggestion ?? planningScheduleMap[task.id] ?? null,
           is_blocked: dependencyContext.blocked,
           blockers_count: dependencyContext.blockers.length,
           dependencies_count: dependencyContext.dependencies.length,
@@ -459,7 +504,7 @@ export default function PMProjectDetailPage() {
           dependency_state: dependencyContext,
         };
       }),
-    [tasks, taskDependencyContextMap, taskMap],
+    [tasks, taskDependencyContextMap, taskMap, planningScheduleMap],
   );
   const activeMembers = useMemo(() => members.filter((item) => item.activo), [members]);
   const activeTasks = useMemo(
@@ -733,6 +778,61 @@ export default function PMProjectDetailPage() {
       return;
     }
     loadProjectBundle({ background: true });
+  }
+
+  async function handleRecalculatePlanning() {
+    if (!id || planningRefreshing) {
+      return;
+    }
+    setPlanningRefreshing(true);
+    setError("");
+    setSuccess("");
+    try {
+      const planningResponse = await refreshPmProjectPlanning({ projectId: id, token, empresaId });
+      const alertsResponse = await listPmProjectAlerts({ projectId: id, token, empresaId });
+      applyWorkPlanSnapshot(project, planningResponse, alertsResponse);
+      setSuccess("Planeación recalculada.");
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo recalcular la planeación.");
+    } finally {
+      setPlanningRefreshing(false);
+    }
+  }
+
+  async function handleResolveAlert(alert) {
+    if (!alert?.id || isAlertActionPending(alert.id, "resolve")) {
+      return;
+    }
+    setAlertLoading(alert.id, "resolve", true);
+    setError("");
+    setSuccess("");
+    try {
+      await resolvePmAlert({ alertId: alert.id, token, empresaId, payload: {} });
+      setSuccess(`Alerta "${safeDisplayText(alert.titulo, "PM")}" resuelta.`);
+      await refreshPmWorkPlanLight({ background: true });
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo resolver la alerta.");
+    } finally {
+      setAlertLoading(alert.id, "resolve", false);
+    }
+  }
+
+  async function handleDismissAlert(alert) {
+    if (!alert?.id || isAlertActionPending(alert.id, "dismiss")) {
+      return;
+    }
+    setAlertLoading(alert.id, "dismiss", true);
+    setError("");
+    setSuccess("");
+    try {
+      await dismissPmAlert({ alertId: alert.id, token, empresaId, payload: {} });
+      setSuccess(`Alerta "${safeDisplayText(alert.titulo, "PM")}" descartada.`);
+      await refreshPmWorkPlanLight({ background: true });
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo descartar la alerta.");
+    } finally {
+      setAlertLoading(alert.id, "dismiss", false);
+    }
   }
 
   if (loading) {
@@ -1021,16 +1121,24 @@ export default function PMProjectDetailPage() {
 
       {activeView === "plan" ? (
         <PMProjectWorkPlanView
+          alertActionLoading={alertActionLoading}
+          alerts={projectAlerts}
           empresaId={empresaId}
           materialConsumptions={projectMaterials?.consumptions ?? []}
           materialPlans={projectMaterials?.plans ?? []}
           onCreateTask={openNewTaskModal}
           onDeactivateTask={handleDeactivateTask}
           onDependenciesChanged={() => refreshPmWorkPlanLight({ background: true })}
+          onDismissAlert={handleDismissAlert}
           onEditTask={openExistingTaskModal}
           onRefresh={handleRefreshCurrentView}
+          onRecalculatePlanning={handleRecalculatePlanning}
+          onResolveAlert={handleResolveAlert}
           onSelectTask={setSelectedTaskId}
           onSetTaskStatus={handleTaskStatusChange}
+          planningCriticalPath={planningCriticalPath}
+          planningRefreshing={planningRefreshing}
+          planningSummary={planningSummary}
           projectId={id}
           refreshing={refreshing}
           selectedTaskId={selectedTaskId}

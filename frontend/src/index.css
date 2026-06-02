@@ -1731,6 +1731,80 @@ textarea {
   overflow-x: auto;
 }
 
+.pm-alerts-panel,
+.pm-alert-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pm-alert-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pm-alert-card-info {
+  border-color: rgba(37, 99, 235, 0.18);
+  background: rgba(239, 246, 255, 0.9);
+}
+
+.pm-alert-card-warning {
+  border-color: rgba(217, 119, 6, 0.2);
+  background: rgba(255, 247, 237, 0.96);
+}
+
+.pm-alert-card-danger {
+  border-color: rgba(220, 38, 38, 0.18);
+  background: rgba(254, 242, 242, 0.96);
+}
+
+.pm-alert-card-head,
+.pm-alert-card-copy,
+.pm-alert-card-meta,
+.pm-alert-card-actions {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.pm-alert-card-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.pm-alert-card-meta {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  text-align: right;
+}
+
+.pm-alert-card-actions {
+  grid-auto-flow: column;
+  justify-content: start;
+}
+
+.pm-critical-path-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+}
+
+.pm-critical-path-step {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(220, 38, 38, 0.16);
+  background: rgba(254, 242, 242, 0.9);
+}
+
+.pm-critical-path-step span {
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
 .pm-gantt-card {
   align-self: start;
 }
@@ -1780,6 +1854,10 @@ textarea {
   background: rgba(255, 251, 235, 0.92);
 }
 
+.pm-workplan-row.is-critical {
+  border-color: rgba(220, 38, 38, 0.18);
+}
+
 .pm-workplan-row-head {
   color: var(--text-secondary);
   font-size: 0.72rem;
@@ -1805,6 +1883,25 @@ textarea {
 .pm-workplan-dependency-stack {
   display: grid;
   gap: 0.45rem;
+}
+
+.pm-workplan-planning-stack,
+.pm-workplan-planning-badges {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.pm-workplan-planning-badges {
+  grid-auto-flow: column;
+  justify-content: start;
+}
+
+.pm-workplan-planning-copy,
+.pm-workplan-suggestion-copy,
+.pm-gantt-suggestion-copy {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 
 .pm-workplan-fab {
@@ -1880,6 +1977,15 @@ textarea {
   background: rgba(255, 251, 235, 0.96);
 }
 
+.pm-gantt-row.is-critical {
+  border-color: rgba(220, 38, 38, 0.2);
+  background: rgba(254, 242, 242, 0.92);
+}
+
+.pm-gantt-row.is-out-of-sequence {
+  border-color: rgba(217, 119, 6, 0.24);
+}
+
 .pm-gantt-row-head {
   display: grid;
   gap: 0.75rem;
@@ -1948,6 +2054,14 @@ textarea {
 .pm-gantt-bar.is-blocked {
   background: #b45309;
   border: 1px dashed rgba(255, 255, 255, 0.65);
+}
+
+.pm-gantt-bar.is-critical {
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.18);
+}
+
+.pm-gantt-bar.is-out-of-sequence {
+  background: #dc2626;
 }
 
 .pm-gantt-bar-progress {

@@ -1,6 +1,5 @@
 import { formatNumber } from "../inventory/shared";
 
-
 export const projectStatusOptions = [
   { value: "borrador", label: "Borrador" },
   { value: "activo", label: "Activo" },
@@ -72,46 +71,38 @@ const pmVisualCopyFixups = [
   [/operacion/g, "operación"],
   [/Ejecucion/g, "Ejecución"],
   [/ejecucion/g, "ejecución"],
-  [/Prerequisito/g, "Prerrequisito"],
-  [/Prerequisitos/g, "Prerrequisitos"],
+  [/Variacion/g, "Variación"],
+  [/variacion/g, "variación"],
 ];
-
 
 export function normalizePmCopy(value) {
   const text = String(value ?? "");
   return pmVisualCopyFixups.reduce((current, [pattern, replacement]) => current.replace(pattern, replacement), text);
 }
 
-
 export function getProjectStatusLabel(value) {
   return projectStatusOptions.find((item) => item.value === value)?.label ?? value ?? "Borrador";
 }
-
 
 export function getTaskStatusLabel(value) {
   return taskStatusOptions.find((item) => item.value === value)?.label ?? value ?? "Pendiente";
 }
 
-
 export function getPriorityLabel(value) {
   return priorityOptions.find((item) => item.value === value)?.label ?? value ?? "Media";
 }
-
 
 export function getDocumentTypeLabel(value) {
   return pmDocumentTypeOptions.find((item) => item.value === value)?.label ?? value ?? "Documento";
 }
 
-
 export function getApprovalTypeLabel(value) {
   return pmApprovalTypeOptions.find((item) => item.value === value)?.label ?? value ?? "Otro";
 }
 
-
 export function getExternalAccessModeLabel(value) {
   return pmExternalAccessModeOptions.find((item) => item.value === value)?.label ?? value ?? "Solo lectura";
 }
-
 
 export function getProjectStatusTone(value) {
   const normalized = String(value ?? "").toLowerCase();
@@ -130,7 +121,6 @@ export function getProjectStatusTone(value) {
   return "neutral";
 }
 
-
 export function getTaskStatusTone(value) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized === "en_progreso") {
@@ -148,7 +138,6 @@ export function getTaskStatusTone(value) {
   return "neutral";
 }
 
-
 export function getApprovalStatusTone(value) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized === "aprobada") {
@@ -162,7 +151,6 @@ export function getApprovalStatusTone(value) {
   }
   return "neutral";
 }
-
 
 export function getPriorityTone(value) {
   const normalized = String(value ?? "").toLowerCase();
@@ -178,12 +166,47 @@ export function getPriorityTone(value) {
   return "neutral";
 }
 
+export function getAlertSeverityTone(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "critical") {
+    return "danger";
+  }
+  if (normalized === "warning") {
+    return "warning";
+  }
+  return "info";
+}
+
+export function getAlertTypeLabel(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "tarea_vencida") {
+    return "Tarea vencida";
+  }
+  if (normalized === "proyecto_atrasado") {
+    return "Proyecto atrasado";
+  }
+  if (normalized === "tarea_bloqueada") {
+    return "Tarea bloqueada";
+  }
+  if (normalized === "tarea_critica_atrasada") {
+    return "Tarea crítica atrasada";
+  }
+  if (normalized === "tarea_fuera_de_secuencia") {
+    return "Fuera de secuencia";
+  }
+  if (normalized === "presupuesto_sobrepasado") {
+    return "Presupuesto sobrepasado";
+  }
+  if (normalized === "sin_tarifa") {
+    return "Sin tarifa";
+  }
+  return normalizePmCopy(value ?? "Alerta");
+}
 
 export function formatPercent(value) {
   const numericValue = Number(value ?? 0);
   return `${formatNumber(Number.isNaN(numericValue) ? 0 : numericValue)}%`;
 }
-
 
 export function isTaskOverdue(task) {
   if (!task?.fecha_vencimiento) {
@@ -199,7 +222,6 @@ export function isTaskOverdue(task) {
   return due < today;
 }
 
-
 export function getRateSourceLabel(value) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized === "usuario") {
@@ -213,7 +235,6 @@ export function getRateSourceLabel(value) {
   }
   return "Sin tarifa";
 }
-
 
 export function getRateSourceTone(value) {
   const normalized = String(value ?? "").toLowerCase();

@@ -1,8 +1,12 @@
-import { CalendarRange, Link2, Lock } from "lucide-react";
+import { AlertTriangle, CalendarRange, Link2, Lock, Route } from "lucide-react";
 
 import { DataCard, EmptyState, StatusBadge, formatDate, safeDisplayText } from "../inventory/shared";
-import { formatPercent, getTaskStatusLabel, getTaskStatusTone, normalizePmCopy } from "./shared";
-
+import {
+  formatPercent,
+  getTaskStatusLabel,
+  getTaskStatusTone,
+  normalizePmCopy,
+} from "./shared";
 
 function startOfDay(value) {
   const date = new Date(value);
@@ -10,13 +14,11 @@ function startOfDay(value) {
   return date;
 }
 
-
 function addDays(value, days) {
   const date = new Date(value);
   date.setDate(date.getDate() + days);
   return date;
 }
-
 
 function startOfWeek(value) {
   const date = startOfDay(value);
@@ -25,21 +27,18 @@ function startOfWeek(value) {
   return addDays(date, diff);
 }
 
-
 function endOfWeek(value) {
   return addDays(startOfWeek(value), 6);
 }
-
 
 function diffInDays(start, end) {
   const millisecondsPerDay = 1000 * 60 * 60 * 24;
   return Math.round((startOfDay(end) - startOfDay(start)) / millisecondsPerDay);
 }
 
-
 function getTaskDateRange(task) {
-  const startValue = task?.fecha_inicio || task?.fecha_vencimiento;
-  const endValue = task?.fecha_vencimiento || task?.fecha_inicio;
+  const startValue = task?.fecha_inicio || task?.schedule_suggestion?.fecha_inicio_sugerida || task?.fecha_vencimiento;
+  const endValue = task?.fecha_vencimiento || task?.schedule_suggestion?.fecha_fin_sugerida || task?.fecha_inicio;
   if (!startValue || !endValue) {
     return null;
   }
@@ -47,7 +46,6 @@ function getTaskDateRange(task) {
   const end = startOfDay(endValue);
   return start <= end ? { start, end } : { start: end, end: start };
 }
-
 
 function buildTimeline(tasks) {
   const datedRanges = tasks.map(getTaskDateRange).filter(Boolean);
@@ -58,7 +56,7 @@ function buildTimeline(tasks) {
   const minDate = datedRanges.reduce((current, range) => (range.start < current ? range.start : current), datedRanges[0].start);
   const maxDate = datedRanges.reduce((current, range) => (range.end > current ? range.end : current), datedRanges[0].end);
   const totalDays = Math.max(1, diffInDays(minDate, maxDate) + 1);
-  const scale = totalDays <= 28 ? "days" : "weeks";
+  const scale = totalDays <= 42 ? "days" : "weeks";
 
   if (scale === "days") {
     const markers = Array.from({ length: totalDays }, (_, index) => {
@@ -86,13 +84,11 @@ function buildTimeline(tasks) {
   return { scale, markers, start: weekStart, end: weekEnd, totalDays: diffInDays(weekStart, weekEnd) + 1 };
 }
 
-
 function buildBarStyle(task, timeline) {
   const range = getTaskDateRange(task);
   if (!range || !timeline) {
     return null;
   }
-
   const leftDays = diffInDays(timeline.start, range.start);
   const widthDays = diffInDays(range.start, range.end) + 1;
   return {
@@ -100,7 +96,6 @@ function buildBarStyle(task, timeline) {
     width: `${Math.max((widthDays / timeline.totalDays) * 100, 2)}%`,
   };
 }
-
 
 function getProgressWidth(task) {
   const rawValue = Number(task?.porcentaje_avance ?? 0);
@@ -110,10 +105,9 @@ function getProgressWidth(task) {
   return Math.min(100, Math.max(0, rawValue));
 }
 
-
 function getDependencyCopy(task) {
   const dependencyState = task?.dependency_state;
-  if (dependencyState?.blocked && dependencyState?.detail) {
+  if (dependencyState?.is_blocked && dependencyState?.detail) {
     return dependencyState.detail;
   }
   if (dependencyState?.title === "Prerrequisitos completados" && dependencyState?.detail) {
@@ -122,6 +116,13 @@ function getDependencyCopy(task) {
   return "";
 }
 
+function getSuggestedCopy(task) {
+  if (!task?.schedule_suggestion?.fuera_de_secuencia) {
+    return "";
+  }
+  const suggestedStart = task.schedule_suggestion.fecha_inicio_sugerida;
+  return suggestedStart ? `Sugerido: ${safeDisplayText(formatDate(suggestedStart), "—")}` : "Sugerencia pendiente";
+}
 
 function getTaskDateCopy(task) {
   const startLabel = formatDate(task?.fecha_inicio);
@@ -132,6 +133,18 @@ function getTaskDateCopy(task) {
   return startLabel || endLabel || "Sin fechas";
 }
 
+function getGanttBarClass(task) {
+  if (task?.schedule_suggestion?.fuera_de_secuencia) {
+    return "danger";
+  }
+  if (task?.dependency_state?.is_blocked) {
+    return "warning";
+  }
+  if (task?.estatus === "completada") {
+    return "success";
+  }
+  return getTaskStatusTone(task?.estatus);
+}
 
 export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask }) {
   const timeline = buildTimeline(tasks);
@@ -174,10 +187,12 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
               const barStyle = buildBarStyle(task, timeline);
               const isSelected = selectedTaskId === task.id;
               const dependencyCopy = getDependencyCopy(task);
-              const dependencyState = task?.dependency_state;
+              const suggestedCopy = getSuggestedCopy(task);
+              const blocked = Boolean(task?.dependency_state?.is_blocked);
+              const outOfSequence = Boolean(task?.schedule_suggestion?.fuera_de_secuencia);
               return (
                 <button
-                  className={`pm-gantt-row ${isSelected ? "is-selected" : ""} ${task.is_blocked ? "is-blocked" : ""}`}
+                  className={`pm-gantt-row ${isSelected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""} ${task.es_critica ? "is-critical" : ""} ${outOfSequence ? "is-out-of-sequence" : ""}`}
                   key={task.id}
                   onClick={() => onSelectTask?.(task.id)}
                   type="button"
@@ -189,20 +204,40 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                         <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                         <span className="table-note">{getTaskDateCopy(task)}</span>
                         <span className="table-note">{formatPercent(task.porcentaje_avance)} avance</span>
-                        {task.is_blocked ? (
-                          <span className="status-badge warning">
+                        {task.es_critica ? (
+                          <StatusBadge tone="danger">
+                            <Route size={12} strokeWidth={1.9} />
+                            Crítica
+                          </StatusBadge>
+                        ) : null}
+                        {blocked ? (
+                          <StatusBadge tone="warning">
                             <Lock size={12} strokeWidth={1.9} />
                             Bloqueada
-                          </span>
-                        ) : dependencyState?.title === "Prerrequisitos completados" ? (
-                          <span className="status-badge success">Prerrequisitos completados</span>
+                          </StatusBadge>
+                        ) : null}
+                        {outOfSequence ? (
+                          <StatusBadge tone="warning">
+                            <AlertTriangle size={12} strokeWidth={1.9} />
+                            Fuera de secuencia
+                          </StatusBadge>
                         ) : null}
                       </div>
                     </div>
-                    {dependencyCopy ? (
-                      <div className="pm-gantt-dependency-copy">
-                        <Link2 size={12} strokeWidth={1.9} />
-                        <span>{dependencyCopy}</span>
+                    {dependencyCopy || suggestedCopy ? (
+                      <div className="pm-gantt-dependency-stack">
+                        {dependencyCopy ? (
+                          <div className="pm-gantt-dependency-copy">
+                            <Link2 size={12} strokeWidth={1.9} />
+                            <span>{dependencyCopy}</span>
+                          </div>
+                        ) : null}
+                        {suggestedCopy ? (
+                          <div className="pm-gantt-suggestion-copy">
+                            <CalendarRange size={12} strokeWidth={1.9} />
+                            <span>{suggestedCopy}</span>
+                          </div>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -214,7 +249,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                       <span className="pm-gantt-cell" key={`${task.id}-${marker.key}`} />
                     ))}
                     {barStyle ? (
-                      <div className={`pm-gantt-bar ${getTaskStatusTone(task.estatus)} ${task.is_blocked ? "is-blocked" : ""}`} style={barStyle}>
+                      <div className={`pm-gantt-bar ${getGanttBarClass(task)} ${blocked ? "is-blocked" : ""} ${task.es_critica ? "is-critical" : ""} ${outOfSequence ? "is-out-of-sequence" : ""}`} style={barStyle}>
                         <span className="pm-gantt-bar-progress" style={{ width: `${getProgressWidth(task)}%` }} />
                         <span className="pm-gantt-bar-label">
                           <CalendarRange size={12} strokeWidth={1.9} />
