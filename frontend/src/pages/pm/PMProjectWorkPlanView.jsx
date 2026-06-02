@@ -1,9 +1,9 @@
 import {
   AlertTriangle,
+  CalendarRange,
   CheckCheck,
   CircleOff,
   Eye,
-  Link2,
   Lock,
   Pencil,
   Plus,
@@ -28,6 +28,7 @@ import PMProjectGanttLite from "./PMProjectGanttLite";
 import PMTaskDetailPanel from "./PMTaskDetailPanel";
 import {
   formatPercent,
+  formatWorkCalendarSummary,
   getTaskStatusLabel,
   getTaskStatusTone,
   isTaskOverdue,
@@ -89,16 +90,16 @@ function getPlanningDetail(task) {
     note = `Prerrequisitos completados: ${dependencyState.detail}`;
   }
 
-  const suggestion = scheduleSuggestion?.fecha_inicio_sugerida
-    ? `Mover inicio a ${safeDisplayText(formatDate(scheduleSuggestion.fecha_inicio_sugerida), "—")}`
-    : "";
-
-  return { badges, note, suggestion };
+  return { badges, note };
 }
 
 function getFirstBlockerTitle(task) {
   const blockers = task?.dependency_state?.blockers ?? task?.blockers ?? [];
   return blockers.length > 0 ? safeDisplayText(blockers[0]?.titulo, "otra tarea") : "";
+}
+
+function isTaskActionPending(taskActionLoading, taskId, action) {
+  return Boolean(taskActionLoading?.[`${taskId}:${action}`]);
 }
 
 export default function PMProjectWorkPlanView({
@@ -107,11 +108,15 @@ export default function PMProjectWorkPlanView({
   empresaId,
   materialConsumptions,
   materialPlans,
+  onApplyAllSuggestions,
+  onApplySuggestedDates,
+  onConfigureCalendar,
   onCreateTask,
   onDeactivateTask,
   onDependenciesChanged,
   onDismissAlert,
   onEditTask,
+  onEditTaskDates,
   onRefresh,
   onRecalculatePlanning,
   onResolveAlert,
@@ -125,9 +130,10 @@ export default function PMProjectWorkPlanView({
   selectedTaskId,
   taskActionLoading,
   taskDependencyContextMap,
-  tasks,
+  tasks = [],
   timeEntries,
   token,
+  workCalendar,
 }) {
   const taskTimeMetrics = (timeEntries ?? []).reduce((accumulator, entry) => {
     if (!entry.tarea_id) {
@@ -139,6 +145,8 @@ export default function PMProjectWorkPlanView({
     accumulator[entry.tarea_id] = current;
     return accumulator;
   }, {});
+
+  const outOfSequenceTasks = tasks.filter((task) => task?.schedule_suggestion?.fuera_de_secuencia);
 
   const headerActions = (
     <>
@@ -166,7 +174,7 @@ export default function PMProjectWorkPlanView({
     </>
   );
 
-  if ((tasks ?? []).length === 0) {
+  if (tasks.length === 0) {
     return (
       <section className="pm-workplan-stack">
         <div className="pm-workplan-toolbar">
@@ -237,15 +245,49 @@ export default function PMProjectWorkPlanView({
         />
       </section>
 
+      <div className="inventory-content-grid inventory-content-grid-2">
+        <DataCard
+          actions={(
+            <ActionButton icon={<CalendarRange size={16} strokeWidth={1.9} />} onClick={onConfigureCalendar} type="button">
+              Configurar calendario
+            </ActionButton>
+          )}
+          subtitle="Días laborales que usa la planeación para sugerir fechas."
+          title="Calendario laboral"
+        >
+          <div className="inventory-form-note">
+            <strong>{safeDisplayText(workCalendar?.nombre, "Calendario estándar")}</strong>
+            <p className="table-note">{formatWorkCalendarSummary(workCalendar)}</p>
+          </div>
+        </DataCard>
+
+        <DataCard
+          actions={outOfSequenceTasks.length > 0 ? (
+            <ActionButton onClick={onApplyAllSuggestions} tone="primary" type="button">
+              Aplicar sugerencias
+            </ActionButton>
+          ) : null}
+          subtitle="Tareas que inician antes de completar sus prerrequisitos."
+          title="Ajustes sugeridos"
+        >
+          {outOfSequenceTasks.length > 0 ? (
+            <div className="inventory-form-note inventory-form-note-warning">
+              <strong>Hay {outOfSequenceTasks.length} tareas con fechas fuera de secuencia.</strong>
+              <p className="table-note">Aplica las fechas sugeridas o edita manualmente las tareas afectadas.</p>
+            </div>
+          ) : (
+            <EmptyState compact note="La secuencia del proyecto está alineada con sus prerrequisitos." title="Sin conflictos" />
+          )}
+        </DataCard>
+      </div>
+
       {planningCriticalPath?.critical_path?.length ? (
         <DataCard subtitle="Cadena principal que afecta la fecha final del proyecto." title="Ruta crítica">
           <div className="pm-critical-path-strip">
             {planningCriticalPath.critical_path.map((item) => (
               <div className="pm-critical-path-step" key={item.task_id}>
                 <strong>{normalizePmCopy(safeDisplayText(item.titulo))}</strong>
-                <span>
-                  {item.duracion_dias} d · Holgura {item.holgura_dias ?? 0} d
-                </span>
+                <span>{item.duracion_dias} d · Holgura {item.holgura_dias ?? 0} d</span>
               </div>
             ))}
           </div>
@@ -263,36 +305,40 @@ export default function PMProjectWorkPlanView({
       <div className="pm-workplan-layout">
         <DataCard
           className="pm-workplan-card"
-          subtitle="Tabla operativa con planeación, bloqueo y sugerencias de fechas."
+          subtitle="Tabla operativa con bloqueo, sugerencias de fechas e impacto de reprogramación."
           title="Tabla de tareas"
         >
           <div className="pm-workplan-table">
-            <div className="pm-workplan-row pm-workplan-row-head pm-workplan-row-phase6-head">
-              <span>#</span>
+            <div className="pm-workplan-row pm-workplan-row-head pm-workplan-row-phase7-head">
               <span>Tarea</span>
               <span>Estatus</span>
-              <span>Responsable</span>
               <span>Inicio</span>
               <span>Fin</span>
-              <span>Duración</span>
-              <span>Planeación</span>
-              <span>Avance</span>
+              <span>Sugerido</span>
+              <span>Ruta crítica</span>
+              <span>Estado</span>
               <span>Acciones</span>
             </div>
-            {tasks.map((task, index) => {
+
+            {tasks.map((task) => {
               const taskMetrics = taskTimeMetrics[task.id] ?? { horas: 0, costo: 0 };
               const selected = selectedTaskId === task.id;
               const dependencyState = taskDependencyContextMap?.[task.id] ?? task.dependency_state ?? null;
               const blocked = Boolean(dependencyState?.is_blocked ?? dependencyState?.blocked ?? task.is_blocked);
               const blockerTitle = getFirstBlockerTitle(task);
-              const completing = Boolean(taskActionLoading?.[`${task.id}:complete`]);
-              const starting = Boolean(taskActionLoading?.[`${task.id}:start`]);
-              const deactivating = Boolean(taskActionLoading?.[`${task.id}:deactivate`]);
+              const completing = isTaskActionPending(taskActionLoading, task.id, "complete");
+              const starting = isTaskActionPending(taskActionLoading, task.id, "start");
+              const applyingSuggestion = isTaskActionPending(taskActionLoading, task.id, "apply-suggestion");
+              const editingDates = isTaskActionPending(taskActionLoading, task.id, "dates");
+              const deactivating = isTaskActionPending(taskActionLoading, task.id, "deactivate");
               const planningDetail = getPlanningDetail({ ...task, dependency_state: dependencyState });
+              const suggestionCopy = task?.schedule_suggestion?.fecha_inicio_sugerida
+                ? `${safeDisplayText(formatDate(task.schedule_suggestion.fecha_inicio_sugerida), "—")} → ${safeDisplayText(formatDate(task.schedule_suggestion.fecha_fin_sugerida), "—")}`
+                : "—";
 
               return (
                 <div
-                  className={`pm-workplan-row pm-workplan-row-phase6 ${selected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""} ${task.es_critica ? "is-critical" : ""} ${completing || starting || deactivating ? "pm-card-updating" : ""}`}
+                  className={`pm-workplan-row pm-workplan-row-phase7 ${selected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""} ${task.es_critica ? "is-critical" : ""} ${completing || starting || deactivating || applyingSuggestion || editingDates ? "pm-card-updating" : ""}`}
                   key={task.id}
                   onClick={() => onSelectTask?.(task.id)}
                   onKeyDown={(event) => {
@@ -304,30 +350,43 @@ export default function PMProjectWorkPlanView({
                   role="button"
                   tabIndex={0}
                 >
-                  <span>{task.orden > 0 ? task.orden : index + 1}</span>
                   <span>
                     <div className="inventory-cell-main">{normalizePmCopy(safeDisplayText(task.titulo))}</div>
                     <div className="inventory-cell-sub">
-                      {safeDisplayText(task.descripcion, "Sin descripción")} · {formatNumber(taskMetrics.horas)} h reales · {formatMoney(taskMetrics.costo)}
+                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}
+                      {" · "}
+                      {getDurationLabel(task)}
+                      {" · "}
+                      {formatNumber(taskMetrics.horas)} h reales
+                      {" · "}
+                      {formatMoney(taskMetrics.costo)}
                     </div>
                   </span>
-                  <span>
-                    <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
-                  </span>
-                  <span>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</span>
+
+                  <span><StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge></span>
                   <span>{safeDisplayText(formatDate(task.fecha_inicio), "—")}</span>
                   <span>{safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</span>
-                  <span>{getDurationLabel(task)}</span>
+
+                  <span>
+                    {task?.schedule_suggestion?.fuera_de_secuencia ? (
+                      <div className="pm-workplan-suggestion-stack">
+                        <strong>{suggestionCopy}</strong>
+                        <span>{safeDisplayText(task.schedule_suggestion.razon, "Fecha sugerida disponible.")}</span>
+                      </div>
+                    ) : (
+                      "—"
+                    )}
+                  </span>
+
+                  <span>{task.es_critica ? <StatusBadge tone="danger">En ruta crítica</StatusBadge> : "—"}</span>
+
                   <span>
                     <div className="pm-workplan-planning-stack">
                       <div className="pm-workplan-planning-badges">{planningDetail.badges}</div>
                       <div className="pm-workplan-planning-copy">{planningDetail.note}</div>
-                      {planningDetail.suggestion ? (
-                        <div className="pm-workplan-suggestion-copy">Fecha sugerida: {planningDetail.suggestion.replace("Mover inicio a ", "")}</div>
-                      ) : null}
                     </div>
                   </span>
-                  <span>{formatPercent(task.porcentaje_avance)}</span>
+
                   <span>
                     <div className="table-actions">
                       <ActionButton
@@ -339,24 +398,40 @@ export default function PMProjectWorkPlanView({
                         size="sm"
                         type="button"
                       >
-                        Ver
+                        Ver detalle
                       </ActionButton>
                       <ActionButton
                         icon={<Pencil size={14} strokeWidth={1.9} />}
                         onClick={(event) => {
                           event.stopPropagation();
-                          onEditTask?.(task.id);
+                          onEditTaskDates?.(task.id);
                         }}
                         size="sm"
                         type="button"
                       >
-                        Editar
+                        {editingDates ? "Guardando..." : "Editar fechas"}
                       </ActionButton>
+                      {task?.schedule_suggestion?.fuera_de_secuencia ? (
+                        <ActionButton
+                          className={applyingSuggestion ? "pm-button-loading" : ""}
+                          disabled={applyingSuggestion}
+                          icon={<Sparkles size={14} strokeWidth={1.9} />}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onApplySuggestedDates?.(task.id);
+                          }}
+                          size="sm"
+                          tone="primary"
+                          type="button"
+                        >
+                          {applyingSuggestion ? "Aplicando..." : "Aplicar sugerencia"}
+                        </ActionButton>
+                      ) : null}
                       {task.estatus === "pendiente" ? (
                         <ActionButton
-                          className={`${blocked ? "is-soft-disabled" : ""} ${starting ? "pm-button-loading" : ""}`.trim()}
+                          className={blocked ? "is-soft-disabled" : ""}
                           disabled={starting || completing || deactivating}
-                          icon={<Link2 size={14} strokeWidth={1.9} />}
+                          icon={<Lock size={14} strokeWidth={1.9} />}
                           onClick={(event) => {
                             event.stopPropagation();
                             onSetTaskStatus?.(task, "en_progreso");
@@ -370,7 +445,7 @@ export default function PMProjectWorkPlanView({
                       ) : null}
                       {task.estatus !== "completada" && task.estatus !== "cancelada" ? (
                         <ActionButton
-                          className={`${blocked ? "is-soft-disabled" : ""} ${completing ? "pm-button-loading" : ""}`.trim()}
+                          className={blocked ? "is-soft-disabled" : ""}
                           disabled={starting || completing || deactivating}
                           icon={<CheckCheck size={14} strokeWidth={1.9} />}
                           onClick={(event) => {
@@ -407,17 +482,27 @@ export default function PMProjectWorkPlanView({
           </div>
         </DataCard>
 
-        <PMProjectGanttLite criticalPath={planningCriticalPath} onSelectTask={onSelectTask} selectedTaskId={selectedTaskId} tasks={tasks} />
+        <PMProjectGanttLite
+          onApplySuggestedDates={onApplySuggestedDates}
+          onEditTaskDates={onEditTaskDates}
+          onSelectTask={onSelectTask}
+          selectedTaskId={selectedTaskId}
+          taskActionLoading={taskActionLoading}
+          tasks={tasks}
+        />
       </div>
 
       <PMTaskDetailPanel
         empresaId={empresaId}
         materialConsumptions={materialConsumptions}
         materialPlans={materialPlans}
+        onApplySuggestedDates={onApplySuggestedDates}
         onDependenciesChanged={onDependenciesChanged}
         onEditTask={onEditTask}
+        onEditTaskDates={onEditTaskDates}
         onSelectTask={onSelectTask}
         projectId={projectId}
+        taskActionLoading={taskActionLoading}
         taskDependencyContext={selectedTaskId ? taskDependencyContextMap?.[selectedTaskId] ?? null : null}
         taskId={selectedTaskId}
         taskSummary={tasks.find((task) => task.id === selectedTaskId) ?? null}

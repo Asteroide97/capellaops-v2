@@ -23,6 +23,7 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import {
   addPmProjectMember,
+  applyPmTaskSuggestedDates,
   createPmProjectComment,
   deactivatePmProjectMember,
   deactivatePmTask,
@@ -31,11 +32,14 @@ import {
   getPmProjectCosts,
   getPmProjectMaterials,
   getPmProjectPlanning,
+  getPmProjectWorkCalendar,
   listPmProjectMembers,
   listPmProjectAlerts,
   listPmProjectTimeEntries,
   refreshPmProjectPlanning,
   resolvePmAlert,
+  updatePmProjectWorkCalendar,
+  updatePmTaskDates,
   updatePmTask,
 } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
@@ -62,9 +66,12 @@ import PMProjectWorkPlanView from "./PMProjectWorkPlanView";
 import PMProjectDocumentsTab from "./PMProjectDocumentsTab";
 import PMProjectApprovalsTab from "./PMProjectApprovalsTab";
 import PMProjectPortalTab from "./PMProjectPortalTab";
+import PMRescheduleImpactModal from "./PMRescheduleImpactModal";
 import PMTaskDetailModal from "./PMTaskDetailModal";
+import PMWorkCalendarModal from "./PMWorkCalendarModal";
 import {
   formatPercent,
+  formatWorkCalendarSummary,
   getPriorityLabel,
   getPriorityTone,
   getProjectStatusLabel,
@@ -247,6 +254,13 @@ export default function PMProjectDetailPage() {
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [selectedTaskModalId, setSelectedTaskModalId] = useState(null);
+  const [workCalendarModalOpen, setWorkCalendarModalOpen] = useState(false);
+  const [calendarSaving, setCalendarSaving] = useState(false);
+  const [rescheduleModalState, setRescheduleModalState] = useState({
+    open: false,
+    taskId: null,
+    mode: "edit",
+  });
   const [memberForm, setMemberForm] = useState(defaultMemberForm);
   const [commentBody, setCommentBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -301,6 +315,16 @@ export default function PMProjectDetailPage() {
   function applyWorkPlanSnapshot(projectResponse, planningResponse, alertsResponse = []) {
     const nextTasks = planningResponse?.tasks ?? [];
     setProject(projectResponse);
+    setProjectPlanning(planningResponse ?? null);
+    setProjectDependencies(planningResponse?.dependencies ?? []);
+    setProjectAlerts(alertsResponse ?? []);
+    setTasks(nextTasks);
+    syncSelectedTask(nextTasks);
+    return nextTasks;
+  }
+
+  function applyPlanningOnlySnapshot(planningResponse, alertsResponse = []) {
+    const nextTasks = planningResponse?.tasks ?? [];
     setProjectPlanning(planningResponse ?? null);
     setProjectDependencies(planningResponse?.dependencies ?? []);
     setProjectAlerts(alertsResponse ?? []);
@@ -444,6 +468,7 @@ export default function PMProjectDetailPage() {
   const planningScheduleMap = projectPlanning?.schedule_suggestions_by_task_id ?? {};
   const planningSummary = projectPlanning?.alerts_summary ?? null;
   const planningCriticalPath = projectPlanning?.critical_path ?? null;
+  const workCalendar = projectPlanning?.work_calendar ?? null;
   const taskDependencyContextMap = useMemo(
     () =>
       tasks.reduce((accumulator, task) => {
@@ -505,6 +530,14 @@ export default function PMProjectDetailPage() {
         };
       }),
     [tasks, taskDependencyContextMap, taskMap, planningScheduleMap],
+  );
+  const outOfSequenceTasks = useMemo(
+    () => resolvedTasks.filter((task) => task?.schedule_suggestion?.fuera_de_secuencia),
+    [resolvedTasks],
+  );
+  const selectedRescheduleTask = useMemo(
+    () => resolvedTasks.find((task) => task.id === rescheduleModalState.taskId) ?? null,
+    [resolvedTasks, rescheduleModalState.taskId],
   );
   const activeMembers = useMemo(() => members.filter((item) => item.activo), [members]);
   const activeTasks = useMemo(
@@ -616,6 +649,37 @@ export default function PMProjectDetailPage() {
     setActiveView("plan");
   }
 
+  function openWorkCalendarModal() {
+    setWorkCalendarModalOpen(true);
+  }
+
+  function closeWorkCalendarModal() {
+    if (calendarSaving) {
+      return;
+    }
+    setWorkCalendarModalOpen(false);
+  }
+
+  function openTaskDatesModal(taskId, mode = "edit") {
+    if (!taskId) {
+      return;
+    }
+    setSelectedTaskId(taskId);
+    setRescheduleModalState({
+      open: true,
+      taskId,
+      mode,
+    });
+  }
+
+  function closeRescheduleModal() {
+    setRescheduleModalState({
+      open: false,
+      taskId: null,
+      mode: "edit",
+    });
+  }
+
   async function handleTaskSaved(savedTask) {
     if (savedTask?.id) {
       setSelectedTaskId(savedTask.id);
@@ -623,6 +687,115 @@ export default function PMProjectDetailPage() {
       upsertLocalTask(savedTask);
     }
     await refreshPmWorkPlanLight({ background: true });
+  }
+
+  async function syncPlanningStateFromResponse(planningResponse, successMessage = "") {
+    const alertsResponse = await listPmProjectAlerts({ projectId: id, token, empresaId });
+    applyPlanningOnlySnapshot(planningResponse, alertsResponse);
+    if (successMessage) {
+      setSuccess(successMessage);
+    }
+  }
+
+  async function handleSaveWorkCalendar(payload) {
+    setCalendarSaving(true);
+    setError("");
+    setSuccess("");
+    try {
+      await updatePmProjectWorkCalendar({
+        projectId: id,
+        token,
+        empresaId,
+        payload,
+      });
+      const planningResponse = await refreshPmProjectPlanning({ projectId: id, token, empresaId });
+      await syncPlanningStateFromResponse(planningResponse, "Calendario laboral actualizado.");
+      closeWorkCalendarModal();
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo guardar el calendario laboral.");
+    } finally {
+      setCalendarSaving(false);
+    }
+  }
+
+  async function handleTaskSchedulingSubmit({ taskId, fecha_inicio, fecha_fin, applyDependents, mode }) {
+    if (!taskId) {
+      return;
+    }
+    const action = mode === "suggestion" ? "apply-suggestion" : "dates";
+    if (isTaskActionPending(taskId, action)) {
+      return;
+    }
+    setTaskLoading(taskId, action, true);
+    setError("");
+    setSuccess("");
+    try {
+      const response = mode === "suggestion"
+        ? await applyPmTaskSuggestedDates({
+          projectId: id,
+          taskId,
+          token,
+          empresaId,
+          payload: { apply_dependents: applyDependents },
+        })
+        : await updatePmTaskDates({
+          projectId: id,
+          taskId,
+          token,
+          empresaId,
+          payload: {
+            fecha_inicio,
+            fecha_fin,
+            apply_dependents: applyDependents,
+          },
+        });
+      await syncPlanningStateFromResponse(response.planning, response.message || "Fechas actualizadas.");
+      closeRescheduleModal();
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo actualizar la planeación de la tarea.");
+    } finally {
+      setTaskLoading(taskId, action, false);
+    }
+  }
+
+  async function handleApplyAllSuggestions() {
+    if (!outOfSequenceTasks.length || planningRefreshing) {
+      return;
+    }
+    const confirmed = window.confirm(`Se aplicarán las fechas sugeridas a ${outOfSequenceTasks.length} tareas fuera de secuencia. ¿Deseas continuar?`);
+    if (!confirmed) {
+      return;
+    }
+    setPlanningRefreshing(true);
+    setError("");
+    setSuccess("");
+    try {
+      let lastPlanning = null;
+      for (const task of outOfSequenceTasks) {
+        try {
+          const response = await applyPmTaskSuggestedDates({
+            projectId: id,
+            taskId: task.id,
+            token,
+            empresaId,
+            payload: { apply_dependents: true },
+          });
+          lastPlanning = response.planning ?? lastPlanning;
+        } catch {
+          // Si una sugerencia deja de aplicar por reprogramación previa, el refresh final corrige el estado.
+        }
+      }
+      if (lastPlanning) {
+        await syncPlanningStateFromResponse(lastPlanning, "Sugerencias aplicadas.");
+      } else {
+        const planningResponse = await refreshPmProjectPlanning({ projectId: id, token, empresaId });
+        await syncPlanningStateFromResponse(planningResponse, "Planeación actualizada.");
+      }
+    } catch (requestError) {
+      setError(requestError.message || "No se pudieron aplicar las fechas sugeridas.");
+    } finally {
+      setPlanningRefreshing(false);
+    }
   }
 
   function handleBlockedTaskAttempt(task) {
@@ -1126,10 +1299,14 @@ export default function PMProjectDetailPage() {
           empresaId={empresaId}
           materialConsumptions={projectMaterials?.consumptions ?? []}
           materialPlans={projectMaterials?.plans ?? []}
+          onApplyAllSuggestions={handleApplyAllSuggestions}
+          onApplySuggestedDates={(taskId) => openTaskDatesModal(taskId, "suggestion")}
+          onConfigureCalendar={openWorkCalendarModal}
           onCreateTask={openNewTaskModal}
           onDeactivateTask={handleDeactivateTask}
           onDependenciesChanged={() => refreshPmWorkPlanLight({ background: true })}
           onDismissAlert={handleDismissAlert}
+          onEditTaskDates={(taskId) => openTaskDatesModal(taskId, "edit")}
           onEditTask={openExistingTaskModal}
           onRefresh={handleRefreshCurrentView}
           onRecalculatePlanning={handleRecalculatePlanning}
@@ -1147,6 +1324,7 @@ export default function PMProjectDetailPage() {
           tasks={resolvedTasks}
           timeEntries={projectTimeEntries}
           token={token}
+          workCalendar={workCalendar}
         />
       ) : null}
 
@@ -1457,6 +1635,37 @@ export default function PMProjectDetailPage() {
         projectId={id}
         taskId={selectedTaskModalId}
         tasks={resolvedTasks}
+        token={token}
+      />
+
+      <PMWorkCalendarModal
+        calendar={workCalendar}
+        onClose={closeWorkCalendarModal}
+        onSave={handleSaveWorkCalendar}
+        open={workCalendarModalOpen}
+        saving={calendarSaving}
+      />
+
+      <PMRescheduleImpactModal
+        empresaId={empresaId}
+        initialEnd={selectedRescheduleTask?.fecha_vencimiento ?? null}
+        initialStart={selectedRescheduleTask?.fecha_inicio ?? null}
+        mode={rescheduleModalState.mode}
+        onClose={closeRescheduleModal}
+        onSubmit={handleTaskSchedulingSubmit}
+        open={rescheduleModalState.open}
+        projectId={id}
+        saving={
+          selectedRescheduleTask
+            ? isTaskActionPending(
+              selectedRescheduleTask.id,
+              rescheduleModalState.mode === "suggestion" ? "apply-suggestion" : "dates",
+            )
+            : false
+        }
+        suggestionEnd={selectedRescheduleTask?.schedule_suggestion?.fecha_fin_sugerida ?? null}
+        suggestionStart={selectedRescheduleTask?.schedule_suggestion?.fecha_inicio_sugerida ?? null}
+        task={selectedRescheduleTask}
         token={token}
       />
     </div>

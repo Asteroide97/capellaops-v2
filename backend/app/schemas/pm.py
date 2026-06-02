@@ -205,6 +205,35 @@ class PMTareaUpdate(BaseModel):
     activo: bool | None = None
 
 
+class PMWorkCalendarOut(BaseModel):
+    id: str | None = None
+    empresa_id: str | None = None
+    proyecto_id: str | None = None
+    nombre: str = "Calendario estándar"
+    lunes: bool = True
+    martes: bool = True
+    miercoles: bool = True
+    jueves: bool = True
+    viernes: bool = True
+    sabado: bool = False
+    domingo: bool = False
+    activo: bool = True
+    origen: str = "default"
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class PMWorkCalendarUpdate(BaseModel):
+    nombre: str = Field(default="Calendario estándar", min_length=1, max_length=120)
+    lunes: bool = True
+    martes: bool = True
+    miercoles: bool = True
+    jueves: bool = True
+    viernes: bool = True
+    sabado: bool = False
+    domingo: bool = False
+
+
 class PMTaskBlockerOut(BaseModel):
     tarea_id: str
     titulo: str
@@ -276,6 +305,18 @@ class PMScheduleSuggestionOut(BaseModel):
     dias_desplazamiento: int = 0
     fuera_de_secuencia: bool = False
     razon: str | None = None
+    usa_calendario_laboral: bool = False
+    calendario_nombre: str | None = None
+
+
+class PMScheduleApplySuggestionRequest(BaseModel):
+    apply_dependents: bool = False
+
+
+class PMTaskDateUpdateRequest(BaseModel):
+    fecha_inicio: date
+    fecha_fin: date
+    apply_dependents: bool = False
 
 
 class PMTareaListItem(BaseModel):
@@ -680,6 +721,24 @@ class PMCriticalPathOut(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class PMRescheduleAffectedTaskOut(BaseModel):
+    task_id: str
+    titulo: str
+    estatus: str
+    fecha_inicio_actual: date | None = None
+    fecha_fin_actual: date | None = None
+    fecha_inicio_sugerida: date | None = None
+    fecha_fin_sugerida: date | None = None
+
+
+class PMRescheduleImpactOut(BaseModel):
+    task_id: str
+    affected_task_ids: list[str] = Field(default_factory=list)
+    affected_tasks: list[PMRescheduleAffectedTaskOut] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    total_affected: int = 0
+
+
 class PMAlertOut(BaseModel):
     id: str
     empresa_id: str
@@ -720,6 +779,16 @@ class PMProjectPlanningOut(BaseModel):
     schedule_suggestions_by_task_id: dict[str, PMScheduleSuggestionOut] = Field(default_factory=dict)
     critical_path: PMCriticalPathOut = Field(default_factory=PMCriticalPathOut)
     alerts_summary: PMPlanningSummaryOut = Field(default_factory=PMPlanningSummaryOut)
+    work_calendar: PMWorkCalendarOut | None = None
+
+
+class PMApplyScheduleOut(BaseModel):
+    task: PMPlanningTaskOut | None = None
+    planning: PMProjectPlanningOut
+    affected_tasks: list[PMRescheduleAffectedTaskOut] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    alerts_summary: PMPlanningSummaryOut
+    message: str
 
 
 class PMProjectMembersListResponse(BaseModel):

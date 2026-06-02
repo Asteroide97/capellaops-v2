@@ -1,6 +1,21 @@
-import { AlertTriangle, CalendarRange, Link2, Lock, Route } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarRange,
+  Link2,
+  Lock,
+  Pencil,
+  Route,
+  Sparkles,
+} from "lucide-react";
 
-import { DataCard, EmptyState, StatusBadge, formatDate, safeDisplayText } from "../inventory/shared";
+import {
+  ActionButton,
+  DataCard,
+  EmptyState,
+  StatusBadge,
+  formatDate,
+  safeDisplayText,
+} from "../inventory/shared";
 import {
   formatPercent,
   getTaskStatusLabel,
@@ -121,7 +136,11 @@ function getSuggestedCopy(task) {
     return "";
   }
   const suggestedStart = task.schedule_suggestion.fecha_inicio_sugerida;
-  return suggestedStart ? `Sugerido: ${safeDisplayText(formatDate(suggestedStart), "—")}` : "Sugerencia pendiente";
+  const suggestedEnd = task.schedule_suggestion.fecha_fin_sugerida;
+  if (!suggestedStart && !suggestedEnd) {
+    return "Sugerencia pendiente";
+  }
+  return `Sugerido: ${safeDisplayText(formatDate(suggestedStart), "—")} → ${safeDisplayText(formatDate(suggestedEnd), "—")}`;
 }
 
 function getTaskDateCopy(task) {
@@ -146,10 +165,21 @@ function getGanttBarClass(task) {
   return getTaskStatusTone(task?.estatus);
 }
 
-export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask }) {
+function isTaskActionPending(taskActionLoading, taskId, action) {
+  return Boolean(taskActionLoading?.[`${taskId}:${action}`]);
+}
+
+export default function PMProjectGanttLite({
+  tasks = [],
+  selectedTaskId,
+  onSelectTask,
+  onEditTaskDates,
+  onApplySuggestedDates,
+  taskActionLoading = {},
+}) {
   const timeline = buildTimeline(tasks);
 
-  if ((tasks ?? []).length === 0) {
+  if (tasks.length === 0) {
     return (
       <DataCard className="pm-gantt-card" subtitle="Las barras aparecerán cuando existan tareas." title="Línea de tiempo">
         <EmptyState compact note="Crea la primera tarea para ver la vista tipo Gantt." title="Sin tareas" />
@@ -182,6 +212,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
               </div>
             ))}
           </div>
+
           <div className="pm-gantt-body">
             {tasks.map((task) => {
               const barStyle = buildBarStyle(task, timeline);
@@ -190,12 +221,22 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
               const suggestedCopy = getSuggestedCopy(task);
               const blocked = Boolean(task?.dependency_state?.is_blocked);
               const outOfSequence = Boolean(task?.schedule_suggestion?.fuera_de_secuencia);
+              const editingDates = isTaskActionPending(taskActionLoading, task.id, "dates");
+              const applyingSuggestion = isTaskActionPending(taskActionLoading, task.id, "apply-suggestion");
+
               return (
-                <button
+                <div
                   className={`pm-gantt-row ${isSelected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""} ${task.es_critica ? "is-critical" : ""} ${outOfSequence ? "is-out-of-sequence" : ""}`}
                   key={task.id}
                   onClick={() => onSelectTask?.(task.id)}
-                  type="button"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectTask?.(task.id);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
                 >
                   <div className="pm-gantt-row-head">
                     <div className="pm-gantt-row-title">
@@ -224,6 +265,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                         ) : null}
                       </div>
                     </div>
+
                     {dependencyCopy || suggestedCopy ? (
                       <div className="pm-gantt-dependency-stack">
                         {dependencyCopy ? (
@@ -240,7 +282,40 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                         ) : null}
                       </div>
                     ) : null}
+
+                    <div className="pm-gantt-row-actions">
+                      <ActionButton
+                        className={editingDates ? "pm-button-loading" : ""}
+                        disabled={editingDates || applyingSuggestion}
+                        icon={<Pencil size={14} strokeWidth={1.9} />}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onEditTaskDates?.(task.id);
+                        }}
+                        size="sm"
+                        type="button"
+                      >
+                        {editingDates ? "Guardando..." : "Editar fechas"}
+                      </ActionButton>
+                      {outOfSequence ? (
+                        <ActionButton
+                          className={applyingSuggestion ? "pm-button-loading" : ""}
+                          disabled={editingDates || applyingSuggestion}
+                          icon={<Sparkles size={14} strokeWidth={1.9} />}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onApplySuggestedDates?.(task.id);
+                          }}
+                          size="sm"
+                          tone="primary"
+                          type="button"
+                        >
+                          {applyingSuggestion ? "Aplicando..." : "Aplicar sugerencia"}
+                        </ActionButton>
+                      ) : null}
+                    </div>
                   </div>
+
                   <div
                     className={`pm-gantt-track pm-gantt-track-${timeline.scale}`}
                     style={{ gridTemplateColumns: `repeat(${timeline.markers.length}, minmax(${timeline.scale === "days" ? "3.25rem" : "6rem"}, 1fr))` }}
@@ -260,7 +335,7 @@ export default function PMProjectGanttLite({ tasks, selectedTaskId, onSelectTask
                       <span className="pm-gantt-no-dates">Sin fechas</span>
                     )}
                   </div>
-                </button>
+                </div>
               );
             })}
           </div>

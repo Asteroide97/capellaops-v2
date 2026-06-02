@@ -10,6 +10,7 @@ from app.api.deps import TenantContext, get_tenant_context
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.schemas.pm import (
+    PMApplyScheduleOut,
     PMAlertOut,
     PMAlertResolveRequest,
     PMBudgetVsActualOut,
@@ -35,6 +36,7 @@ from app.schemas.pm import (
     PMCriticalPathOut,
     PMProjectMembersListResponse,
     PMProjectPlanningOut,
+    PMRescheduleImpactOut,
     PMProjectBudgetBundleOut,
     PMProjectCostsOut,
     PMCreateProjectRequisitionRequest,
@@ -82,9 +84,13 @@ from app.schemas.pm import (
     PMTareaDependenciaOut,
     PMTareaCreate,
     PMTaskDependenciesOut,
+    PMTaskDateUpdateRequest,
     PMTareaListResponse,
     PMTareaOut,
     PMTareaUpdate,
+    PMScheduleApplySuggestionRequest,
+    PMWorkCalendarOut,
+    PMWorkCalendarUpdate,
 )
 from app.services.pm import (
     PMContext,
@@ -157,8 +163,11 @@ from app.services.pm import (
     resolve_pm_alert,
     serialize_pm_config,
     approve_project_approval,
+    apply_task_suggested_dates,
     reject_project_approval,
     revoke_external_invite,
+    calculate_reschedule_impact,
+    get_project_work_calendar,
     update_project_document,
     update_budget_indirect,
     update_budget_item,
@@ -171,7 +180,9 @@ from app.services.pm import (
     update_project_material_plan,
     update_role_hourly_rate,
     update_subtask,
+    update_task_dates_with_impact,
     update_task,
+    update_project_work_calendar,
     update_user_hourly_rate,
 )
 from app.schemas.procurement import RequisitionResponse
@@ -1265,6 +1276,43 @@ def get_project_critical_path_endpoint(
     return get_project_critical_path(db, pm_context, project_id=project_id)
 
 
+@router.get("/projects/{project_id}/work-calendar", response_model=PMWorkCalendarOut)
+def get_project_work_calendar_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMWorkCalendarOut:
+    return get_project_work_calendar(db, pm_context, project_id=project_id)
+
+
+@router.put("/projects/{project_id}/work-calendar", response_model=PMWorkCalendarOut)
+def update_project_work_calendar_endpoint(
+    project_id: str,
+    payload: PMWorkCalendarUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMWorkCalendarOut:
+    return run_pm_write(
+        db,
+        "update_project_work_calendar",
+        lambda: update_project_work_calendar(
+            db,
+            pm_context,
+            project_id=project_id,
+            nombre=payload.nombre,
+            lunes=payload.lunes,
+            martes=payload.martes,
+            miercoles=payload.miercoles,
+            jueves=payload.jueves,
+            viernes=payload.viernes,
+            sabado=payload.sabado,
+            domingo=payload.domingo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
 @router.post("/projects/{project_id}/refresh-planning", response_model=PMProjectPlanningOut)
 def refresh_project_planning_endpoint(
     project_id: str,
@@ -1275,6 +1323,25 @@ def refresh_project_planning_endpoint(
         db,
         "refresh_project_planning",
         lambda: refresh_project_planning(db, pm_context, project_id=project_id),
+    )
+
+
+@router.get("/projects/{project_id}/tasks/{task_id}/reschedule-impact", response_model=PMRescheduleImpactOut)
+def get_task_reschedule_impact_endpoint(
+    project_id: str,
+    task_id: str,
+    fecha_inicio: str,
+    fecha_fin: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMRescheduleImpactOut:
+    return calculate_reschedule_impact(
+        db,
+        pm_context,
+        project_id=project_id,
+        task_id=task_id,
+        fecha_inicio=date.fromisoformat(fecha_inicio),
+        fecha_fin=date.fromisoformat(fecha_fin),
     )
 
 
@@ -1404,6 +1471,54 @@ def get_task_dependencies_endpoint(
     db: Session = Depends(get_db),
 ) -> PMTaskDependenciesOut:
     return get_task_dependencies(db, pm_context, task_id=task_id)
+
+
+@router.post("/projects/{project_id}/tasks/{task_id}/apply-suggested-dates", response_model=PMApplyScheduleOut)
+def apply_task_suggested_dates_endpoint(
+    project_id: str,
+    task_id: str,
+    payload: PMScheduleApplySuggestionRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMApplyScheduleOut:
+    return run_pm_write(
+        db,
+        "apply_task_suggested_dates",
+        lambda: apply_task_suggested_dates(
+            db,
+            pm_context,
+            project_id=project_id,
+            task_id=task_id,
+            apply_dependents=payload.apply_dependents,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/projects/{project_id}/tasks/{task_id}/update-dates", response_model=PMApplyScheduleOut)
+def update_task_dates_endpoint(
+    project_id: str,
+    task_id: str,
+    payload: PMTaskDateUpdateRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMApplyScheduleOut:
+    return run_pm_write(
+        db,
+        "update_task_dates",
+        lambda: update_task_dates_with_impact(
+            db,
+            pm_context,
+            project_id=project_id,
+            task_id=task_id,
+            fecha_inicio=payload.fecha_inicio,
+            fecha_fin=payload.fecha_fin,
+            apply_dependents=payload.apply_dependents,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.post("/tasks/{task_id}/dependencies", response_model=PMTaskDependenciesOut, status_code=status.HTTP_201_CREATED)

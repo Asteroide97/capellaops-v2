@@ -69,6 +69,7 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     external_invites = relationship("PMInvitadoExterno", back_populates="proyecto", cascade="all, delete-orphan")
     portal_access_logs = relationship("PMPortalAccessLog", back_populates="proyecto", cascade="all, delete-orphan")
     alerts = relationship("PMAlerta", back_populates="proyecto", cascade="all, delete-orphan")
+    work_calendars = relationship("PMCalendarioLaboral", back_populates="proyecto", cascade="all, delete-orphan")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="proyecto", cascade="all, delete-orphan")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
     time_entries = relationship("PMTimeEntry", back_populates="proyecto", cascade="all, delete-orphan")
@@ -680,6 +681,31 @@ class PMDocumento(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     updated_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
 
     proyecto = relationship("PMProyecto", back_populates="documents")
+
+
+class PMCalendarioLaboral(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_calendarios_laborales"
+    __table_args__ = (
+        Index("ix_pm_calendarios_laborales_empresa_id", "empresa_id"),
+        Index("ix_pm_calendarios_laborales_proyecto_id", "proyecto_id"),
+        Index("ix_pm_calendarios_laborales_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str | None] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=True, index=True)
+    nombre: Mapped[str] = mapped_column(String(120), nullable=False, default="Calendario estándar", server_default="Calendario estándar")
+    lunes: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    martes: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    miercoles: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    jueves: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    viernes: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    sabado: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    domingo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="work_calendars")
 
 
 class PMAprobacion(UUIDPrimaryKeyMixin, TimestampMixin, Base):

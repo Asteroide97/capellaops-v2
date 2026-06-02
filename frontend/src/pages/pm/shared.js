@@ -64,6 +64,37 @@ export const pmExternalAccessModeOptions = [
   { value: "comentario", label: "Puede comentar" },
 ];
 
+export const weekdayOptions = [
+  { key: "lunes", label: "Lunes" },
+  { key: "martes", label: "Martes" },
+  { key: "miercoles", label: "Miércoles" },
+  { key: "jueves", label: "Jueves" },
+  { key: "viernes", label: "Viernes" },
+  { key: "sabado", label: "Sábado" },
+  { key: "domingo", label: "Domingo" },
+];
+
+const mojibakeFixups = [
+  ["\u00C3\u00A1", "á"],
+  ["\u00C3\u00A9", "é"],
+  ["\u00C3\u00AD", "í"],
+  ["\u00C3\u00B3", "ó"],
+  ["\u00C3\u00BA", "ú"],
+  ["\u00C3\u0081", "Á"],
+  ["\u00C3\u0089", "É"],
+  ["\u00C3\u008D", "Í"],
+  ["\u00C3\u0093", "Ó"],
+  ["\u00C3\u009A", "Ú"],
+  ["\u00C3\u00B1", "ñ"],
+  ["\u00C3\u0091", "Ñ"],
+  ["\u00C2\u00B7", "·"],
+  ["\u00C2", ""],
+  ["\u00E2\u20AC\u201D", "—"],
+  ["\u00E2\u20AC\u201C", "–"],
+  ["\u00E2\u2020\u2019", "→"],
+  ["\u00E2\u20AC\u00A6", "…"],
+];
+
 const pmVisualCopyFixups = [
   [/Construccion/g, "Construcción"],
   [/construccion/g, "construcción"],
@@ -71,37 +102,50 @@ const pmVisualCopyFixups = [
   [/operacion/g, "operación"],
   [/Ejecucion/g, "Ejecución"],
   [/ejecucion/g, "ejecución"],
+  [/Gestion/g, "Gestión"],
+  [/gestion/g, "gestión"],
   [/Variacion/g, "Variación"],
   [/variacion/g, "variación"],
+  [/atencion/g, "atención"],
+  [/Atencion/g, "Atención"],
+  [/proximos/g, "próximos"],
+  [/Proximos/g, "Próximos"],
 ];
 
 export function normalizePmCopy(value) {
-  const text = String(value ?? "");
-  return pmVisualCopyFixups.reduce((current, [pattern, replacement]) => current.replace(pattern, replacement), text);
+  const source = String(value ?? "");
+  const withoutMojibake = mojibakeFixups.reduce(
+    (current, [pattern, replacement]) => current.split(pattern).join(replacement),
+    source,
+  );
+  return pmVisualCopyFixups.reduce(
+    (current, [pattern, replacement]) => current.replace(pattern, replacement),
+    withoutMojibake,
+  );
 }
 
 export function getProjectStatusLabel(value) {
-  return projectStatusOptions.find((item) => item.value === value)?.label ?? value ?? "Borrador";
+  return projectStatusOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Borrador");
 }
 
 export function getTaskStatusLabel(value) {
-  return taskStatusOptions.find((item) => item.value === value)?.label ?? value ?? "Pendiente";
+  return taskStatusOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Pendiente");
 }
 
 export function getPriorityLabel(value) {
-  return priorityOptions.find((item) => item.value === value)?.label ?? value ?? "Media";
+  return priorityOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Media");
 }
 
 export function getDocumentTypeLabel(value) {
-  return pmDocumentTypeOptions.find((item) => item.value === value)?.label ?? value ?? "Documento";
+  return pmDocumentTypeOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Documento");
 }
 
 export function getApprovalTypeLabel(value) {
-  return pmApprovalTypeOptions.find((item) => item.value === value)?.label ?? value ?? "Otro";
+  return pmApprovalTypeOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Otro");
 }
 
 export function getExternalAccessModeLabel(value) {
-  return pmExternalAccessModeOptions.find((item) => item.value === value)?.label ?? value ?? "Solo lectura";
+  return pmExternalAccessModeOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Solo lectura");
 }
 
 export function getProjectStatusTone(value) {
@@ -189,7 +233,7 @@ export function getAlertTypeLabel(value) {
     return "Tarea bloqueada";
   }
   if (normalized === "tarea_critica_atrasada") {
-    return "Tarea crítica atrasada";
+    return "Tarea en ruta crítica atrasada";
   }
   if (normalized === "tarea_fuera_de_secuencia") {
     return "Fuera de secuencia";
@@ -248,4 +292,31 @@ export function getRateSourceTone(value) {
     return "warning";
   }
   return "danger";
+}
+
+export function formatWorkCalendarSummary(calendar) {
+  if (!calendar) {
+    return "Este proyecto usa calendario lunes a viernes.";
+  }
+  const activeDays = weekdayOptions
+    .filter((item) => Boolean(calendar?.[item.key]))
+    .map((item) => item.label.toLowerCase());
+
+  if (activeDays.length === 0) {
+    return "Este proyecto no tiene días laborales configurados.";
+  }
+  if (activeDays.length === 7) {
+    return "Este proyecto usa calendario de lunes a domingo.";
+  }
+  if (
+    activeDays.length === 5
+    && activeDays[0] === "lunes"
+    && activeDays[1] === "martes"
+    && activeDays[2] === "miércoles"
+    && activeDays[3] === "jueves"
+    && activeDays[4] === "viernes"
+  ) {
+    return "Este proyecto usa calendario lunes a viernes.";
+  }
+  return `Días laborales: ${activeDays.join(", ")}.`;
 }

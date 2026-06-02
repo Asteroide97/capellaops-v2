@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -17,6 +17,7 @@ from app.models.pm import (
     EmpresaPMConfig,
     PMAprobacion,
     PMAlerta,
+    PMCalendarioLaboral,
     PMChecklistItem,
     PMComentario,
     PMDocumento,
@@ -40,6 +41,7 @@ from app.models.pm import (
     PMTimeEntry,
 )
 from app.schemas.pm import (
+    PMApplyScheduleOut,
     PMBudgetVsActualOut,
     PMAprobacionOut,
     PMAlertOut,
@@ -83,6 +85,8 @@ from app.schemas.pm import (
     PMProyectoMiembroOut,
     PMProyectoOut,
     PMProyectoListResponse,
+    PMRescheduleAffectedTaskOut,
+    PMRescheduleImpactOut,
     PMStatusCount,
     PMSubtareaOut,
     PMScheduleSuggestionOut,
@@ -100,6 +104,7 @@ from app.schemas.pm import (
     PMTareaListItem,
     PMTareaListResponse,
     PMTareaOut,
+    PMWorkCalendarOut,
 )
 from app.services.access import can_access_module
 from app.services.storage import upload_pm_document
@@ -143,6 +148,26 @@ PM_ALERT_TYPES = {
 PM_ALERT_SEVERITIES = {"info", "warning", "critical"}
 PM_ALERT_STATUS = {"abierta", "resuelta", "descartada"}
 ZERO = Decimal("0")
+WORKDAY_FIELDS = {
+    0: "lunes",
+    1: "martes",
+    2: "miercoles",
+    3: "jueves",
+    4: "viernes",
+    5: "sabado",
+    6: "domingo",
+}
+DEFAULT_WORK_CALENDAR_VALUES = {
+    "nombre": "Calendario estÃ¡ndar",
+    "lunes": True,
+    "martes": True,
+    "miercoles": True,
+    "jueves": True,
+    "viernes": True,
+    "sabado": False,
+    "domingo": False,
+    "activo": True,
+}
 
 
 @dataclass
@@ -1687,7 +1712,133 @@ def format_task_title_list(titles: list[str]) -> str:
     return f"{resolved[0]}, {resolved[1]} y {len(resolved) - 2} mas"
 
 
-def get_task_duration_days(task: PMTarea) -> int:
+def serialize_work_calendar(
+    calendar: PMCalendarioLaboral | None,
+    *,
+    empresa_id: str,
+    project_id: str | None,
+    origin: str,
+) -> PMWorkCalendarOut:
+    if calendar is None:
+        return PMWorkCalendarOut(
+            id=None,
+            empresa_id=empresa_id,
+            proyecto_id=project_id if origin == "project" else None,
+            origen=origin,
+            **DEFAULT_WORK_CALENDAR_VALUES,
+        )
+    return PMWorkCalendarOut(
+        id=calendar.id,
+        empresa_id=calendar.empresa_id,
+        proyecto_id=calendar.proyecto_id,
+        nombre=calendar.nombre,
+        lunes=calendar.lunes,
+        martes=calendar.martes,
+        miercoles=calendar.miercoles,
+        jueves=calendar.jueves,
+        viernes=calendar.viernes,
+        sabado=calendar.sabado,
+        domingo=calendar.domingo,
+        activo=calendar.activo,
+        origen=origin,
+        created_at=calendar.created_at,
+        updated_at=calendar.updated_at,
+    )
+
+
+def validate_work_calendar_days(*, lunes: bool, martes: bool, miercoles: bool, jueves: bool, viernes: bool, sabado: bool, domingo: bool) -> None:
+    if not any([lunes, martes, miercoles, jueves, viernes, sabado, domingo]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecciona al menos un dia laboral.")
+
+
+def get_effective_work_calendar(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str | None,
+) -> PMWorkCalendarOut:
+    project_calendar = None
+    if project_id:
+        project_calendar = db.scalar(
+            select(PMCalendarioLaboral)
+            .where(
+                PMCalendarioLaboral.empresa_id == empresa_id,
+                PMCalendarioLaboral.proyecto_id == project_id,
+                PMCalendarioLaboral.activo == True,
+            )
+            .order_by(desc(PMCalendarioLaboral.updated_at), desc(PMCalendarioLaboral.created_at))
+        )
+    if project_calendar:
+        return serialize_work_calendar(project_calendar, empresa_id=empresa_id, project_id=project_id, origin="project")
+
+    company_calendar = db.scalar(
+        select(PMCalendarioLaboral)
+        .where(
+            PMCalendarioLaboral.empresa_id == empresa_id,
+            PMCalendarioLaboral.proyecto_id.is_(None),
+            PMCalendarioLaboral.activo == True,
+        )
+        .order_by(desc(PMCalendarioLaboral.updated_at), desc(PMCalendarioLaboral.created_at))
+    )
+    if company_calendar:
+        return serialize_work_calendar(company_calendar, empresa_id=empresa_id, project_id=None, origin="company")
+
+    return serialize_work_calendar(None, empresa_id=empresa_id, project_id=project_id, origin="default")
+
+
+def is_working_day(value: date, calendar: PMWorkCalendarOut) -> bool:
+    field_name = WORKDAY_FIELDS.get(value.weekday())
+    return bool(getattr(calendar, field_name, False))
+
+
+def next_working_day(value: date, calendar: PMWorkCalendarOut) -> date:
+    current = value
+    for _ in range(14):
+        if is_working_day(current, calendar):
+            return current
+        current += timedelta(days=1)
+    return current
+
+
+def add_working_days(start_date: date, days: int, calendar: PMWorkCalendarOut) -> date:
+    current = next_working_day(start_date, calendar)
+    if days <= 0:
+        return current
+    remaining = days
+    while remaining > 0:
+        current = next_working_day(current + timedelta(days=1), calendar)
+        remaining -= 1
+    return current
+
+
+def calculate_duration_working_days(start: date | None, end: date | None, calendar: PMWorkCalendarOut) -> int:
+    if not start or not end:
+        return 1
+    start_date = start if start <= end else end
+    end_date = end if end >= start else start
+    current = start_date
+    working_days = 0
+    while current <= end_date:
+        if is_working_day(current, calendar):
+            working_days += 1
+        current += timedelta(days=1)
+    return max(1, working_days)
+
+
+def calculate_finish_from_working_duration(start: date, duration_days: int, calendar: PMWorkCalendarOut) -> date:
+    current = next_working_day(start, calendar)
+    if duration_days <= 1:
+        return current
+    remaining = duration_days - 1
+    while remaining > 0:
+        current = next_working_day(current + timedelta(days=1), calendar)
+        remaining -= 1
+    return current
+
+
+def get_task_duration_days(task: PMTarea, calendar: PMWorkCalendarOut | None = None) -> int:
+    if calendar and task.fecha_inicio and task.fecha_vencimiento:
+        return calculate_duration_working_days(task.fecha_inicio, task.fecha_vencimiento, calendar)
     if task.fecha_inicio and task.fecha_vencimiento:
         return max(1, abs((task.fecha_vencimiento - task.fecha_inicio).days) + 1)
     estimated_hours = decimal_or_zero(task.estimacion_horas)
@@ -1749,6 +1900,99 @@ def list_project_serialized_dependencies(
         )
         for dependency, successor, prerequisite in rows
     ]
+
+
+def build_dependency_maps(
+    *,
+    tasks: list[PMTarea],
+    dependencies: list[PMTareaDependenciaOut],
+) -> tuple[dict[str, list[PMTareaDependenciaOut]], dict[str, list[PMTareaDependenciaOut]], dict[str, int]]:
+    task_ids = {task.id for task in tasks}
+    predecessors: dict[str, list[PMTareaDependenciaOut]] = {task.id: [] for task in tasks}
+    successors: dict[str, list[PMTareaDependenciaOut]] = {task.id: [] for task in tasks}
+    indegree: dict[str, int] = {task.id: 0 for task in tasks}
+    for dependency in dependencies:
+        if dependency.tarea_id not in task_ids or dependency.depende_de_tarea_id not in task_ids:
+            continue
+        predecessors[dependency.tarea_id].append(dependency)
+        successors[dependency.depende_de_tarea_id].append(dependency)
+        indegree[dependency.tarea_id] += 1
+    return predecessors, successors, indegree
+
+
+def topological_sort_task_ids(
+    *,
+    tasks: list[PMTarea],
+    successors_by_task_id: dict[str, list[PMTareaDependenciaOut]],
+    indegree: dict[str, int],
+) -> tuple[list[str], bool]:
+    queue = [task.id for task in tasks if indegree.get(task.id, 0) == 0]
+    ordered_ids: list[str] = []
+    pending_indegree = dict(indegree)
+    while queue:
+        current_id = queue.pop(0)
+        ordered_ids.append(current_id)
+        for dependency in successors_by_task_id.get(current_id, []):
+            successor_id = dependency.tarea_id
+            pending_indegree[successor_id] = pending_indegree.get(successor_id, 0) - 1
+            if pending_indegree[successor_id] == 0:
+                queue.append(successor_id)
+    has_cycle = len(ordered_ids) != len(tasks)
+    return ordered_ids, has_cycle
+
+
+def build_schedule_suggestion_for_task(
+    *,
+    task: PMTarea,
+    task_dependencies: list[PMTareaDependenciaOut],
+    task_map: dict[str, PMTarea],
+    calendar: PMWorkCalendarOut,
+    current_start: date | None,
+    current_end: date | None,
+    end_resolver,
+) -> PMScheduleSuggestionOut:
+    suggested_start: date | None = None
+    suggested_finish: date | None = None
+    reason: str | None = None
+    days_shift = 0
+    dependency_candidates: list[tuple[date, str]] = []
+
+    for dependency in task_dependencies:
+        prerequisite_task = task_map.get(dependency.depende_de_tarea_id)
+        prerequisite_end = end_resolver(prerequisite_task) if prerequisite_task else None
+        if prerequisite_end is None:
+            continue
+        dependency_title = normalize_optional_text(
+            prerequisite_task.titulo if prerequisite_task else dependency.depende_de_tarea_titulo
+        ) or "Otra tarea"
+        candidate_start = add_working_days(prerequisite_end + timedelta(days=1), max(0, int(dependency.lag_dias or 0)), calendar)
+        dependency_candidates.append((candidate_start, dependency_title))
+        if suggested_start is None or candidate_start > suggested_start:
+            suggested_start = candidate_start
+
+    if suggested_start is not None:
+        duration_days = get_task_duration_days(task, calendar)
+        suggested_finish = calculate_finish_from_working_duration(suggested_start, duration_days, calendar)
+
+    if current_start and suggested_start and current_start < suggested_start:
+        days_shift = (suggested_start - current_start).days
+        dominant_dependencies = [title for candidate, title in dependency_candidates if candidate == suggested_start]
+        reason = (
+            f"{task.titulo} esta programada antes de que termine {format_task_title_list(dominant_dependencies)}."
+        )
+
+    return PMScheduleSuggestionOut(
+        task_id=task.id,
+        fecha_inicio_actual=current_start,
+        fecha_fin_actual=current_end,
+        fecha_inicio_sugerida=suggested_start,
+        fecha_fin_sugerida=suggested_finish,
+        dias_desplazamiento=days_shift,
+        fuera_de_secuencia=days_shift > 0,
+        razon=reason,
+        usa_calendario_laboral=True,
+        calendario_nombre=calendar.nombre,
+    )
 
 
 def calculate_task_dependency_state(
@@ -1870,50 +2114,22 @@ def calculate_schedule_suggestions(
         tasks=tasks,
         dependencies=dependencies,
     )
+    calendar = get_effective_work_calendar(db, empresa_id=empresa_id, project_id=project_id)
     task_map = {task.id: task for task in tasks}
+    dependencies_by_task, _successors_by_task, _indegree = build_dependency_maps(tasks=tasks, dependencies=dependencies)
     suggestions: dict[str, PMScheduleSuggestionOut] = {}
     for task in tasks:
         dependency_state = dependency_state_by_task_id.get(task.id)
-        current_start = task.fecha_inicio
-        current_end = task.fecha_vencimiento
-        suggested_start: date | None = None
-        suggested_finish: date | None = None
-        reason: str | None = None
-        days_shift = 0
-        dependency_candidates: list[tuple[date, str]] = []
-        for dependency in dependency_state.dependencies if dependency_state else []:
-            prerequisite_task = task_map.get(dependency.depende_de_tarea_id)
-            prerequisite_end = get_task_schedule_end(prerequisite_task) if prerequisite_task else None
-            if prerequisite_end is None:
-                continue
-            dependency_title = normalize_optional_text(
-                prerequisite_task.titulo if prerequisite_task else dependency.depende_de_tarea_titulo
-            ) or "Otra tarea"
-            candidate_start = prerequisite_end + timedelta(days=max(0, dependency.lag_dias) + 1)
-            dependency_candidates.append((candidate_start, dependency_title))
-            if suggested_start is None or candidate_start > suggested_start:
-                suggested_start = candidate_start
+        task_dependencies = dependency_state.dependencies if dependency_state else dependencies_by_task.get(task.id, [])
 
-        if suggested_start is not None:
-            duration_days = get_task_duration_days(task)
-            suggested_finish = suggested_start + timedelta(days=max(duration_days - 1, 0))
-
-        if current_start and suggested_start and current_start < suggested_start:
-            days_shift = (suggested_start - current_start).days
-            dominant_dependencies = [title for candidate, title in dependency_candidates if candidate == suggested_start]
-            reason = (
-                f"{task.titulo} está programada antes de que termine {format_task_title_list(dominant_dependencies)}."
-            )
-
-        suggestions[task.id] = PMScheduleSuggestionOut(
-            task_id=task.id,
-            fecha_inicio_actual=current_start,
-            fecha_fin_actual=current_end,
-            fecha_inicio_sugerida=suggested_start,
-            fecha_fin_sugerida=suggested_finish,
-            dias_desplazamiento=days_shift,
-            fuera_de_secuencia=days_shift > 0,
-            razon=reason,
+        suggestions[task.id] = build_schedule_suggestion_for_task(
+            task=task,
+            task_dependencies=task_dependencies,
+            task_map=task_map,
+            calendar=calendar,
+            current_start=task.fecha_inicio,
+            current_end=task.fecha_vencimiento,
+            end_resolver=get_task_schedule_end,
         )
     return suggestions
 
@@ -1933,6 +2149,7 @@ def calculate_critical_path(
     if not tasks:
         return PMCriticalPathOut()
 
+    calendar = get_effective_work_calendar(db, empresa_id=empresa_id, project_id=project_id)
     task_map = {task.id: task for task in tasks}
     task_ids = list(task_map.keys())
     predecessors: dict[str, list[tuple[str, int]]] = {task_id: [] for task_id in task_ids}
@@ -1959,10 +2176,10 @@ def calculate_critical_path(
     if len(topo) != len(task_ids):
         return PMCriticalPathOut(
             has_cycle=True,
-            warnings=["Se detectó un ciclo en dependencias. No se pudo calcular la ruta crítica."],
+            warnings=["Se detectÃ³ un ciclo en dependencias. No se pudo calcular la ruta crÃ­tica."],
         )
 
-    durations = {task.id: get_task_duration_days(task) for task in tasks}
+    durations = {task.id: get_task_duration_days(task, calendar) for task in tasks}
     earliest_start: dict[str, int] = {}
     earliest_finish: dict[str, int] = {}
     predecessor_choice: dict[str, str | None] = {}
@@ -2121,6 +2338,7 @@ def build_project_planning_payload(
     dependency_state_by_task_id: dict[str, PMDependencyStateOut],
     schedule_suggestions_by_task_id: dict[str, PMScheduleSuggestionOut],
     critical_path: PMCriticalPathOut,
+    work_calendar: PMWorkCalendarOut | None = None,
     alerts: list[PMAlerta] | None = None,
 ) -> PMProjectPlanningOut:
     critical_ids = set(critical_path.critical_task_ids)
@@ -2152,6 +2370,7 @@ def build_project_planning_payload(
         schedule_suggestions_by_task_id=schedule_suggestions_by_task_id,
         critical_path=critical_path,
         alerts_summary=planning_summary,
+        work_calendar=work_calendar,
     )
 
 
@@ -2256,7 +2475,7 @@ def generate_pm_alerts(
                 task_id=task.id,
                 tipo="tarea_critica_atrasada",
                 severidad="critical",
-                titulo="Tarea crítica atrasada",
+                titulo="Tarea crÃ­tica atrasada",
                 descripcion=f"{task.titulo} forma parte de la ruta critica y ya esta atrasada.",
             )
 
@@ -2330,6 +2549,7 @@ def get_project_planning(
 ) -> PMProjectPlanningOut:
     ensure_pm_tasks_enabled(pm_context)
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    work_calendar = get_effective_work_calendar(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     dependencies = list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     dependency_state_by_task_id = calculate_task_dependency_state(
@@ -2370,6 +2590,7 @@ def get_project_planning(
         dependency_state_by_task_id=dependency_state_by_task_id,
         schedule_suggestions_by_task_id=schedule_suggestions_by_task_id,
         critical_path=critical_path,
+        work_calendar=work_calendar,
         alerts=alerts,
     )
 
@@ -2382,6 +2603,7 @@ def refresh_project_planning(
 ) -> PMProjectPlanningOut:
     ensure_pm_tasks_enabled(pm_context)
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    work_calendar = get_effective_work_calendar(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     dependencies = list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     dependency_state_by_task_id = calculate_task_dependency_state(
@@ -2430,8 +2652,351 @@ def refresh_project_planning(
         dependency_state_by_task_id=dependency_state_by_task_id,
         schedule_suggestions_by_task_id=schedule_suggestions_by_task_id,
         critical_path=critical_path,
+        work_calendar=work_calendar,
         alerts=alerts,
     )
+
+
+def get_project_work_calendar(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> PMWorkCalendarOut:
+    ensure_pm_tasks_enabled(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    return get_effective_work_calendar(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+
+
+def update_project_work_calendar(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    nombre: str,
+    lunes: bool,
+    martes: bool,
+    miercoles: bool,
+    jueves: bool,
+    viernes: bool,
+    sabado: bool,
+    domingo: bool,
+    ip_address: str | None,
+) -> PMWorkCalendarOut:
+    ensure_pm_tasks_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    validate_work_calendar_days(
+        lunes=lunes,
+        martes=martes,
+        miercoles=miercoles,
+        jueves=jueves,
+        viernes=viernes,
+        sabado=sabado,
+        domingo=domingo,
+    )
+    calendar = db.scalar(
+        select(PMCalendarioLaboral)
+        .where(
+            PMCalendarioLaboral.empresa_id == pm_context.empresa_id,
+            PMCalendarioLaboral.proyecto_id == project_id,
+        )
+        .order_by(desc(PMCalendarioLaboral.updated_at), desc(PMCalendarioLaboral.created_at))
+    )
+    if not calendar:
+        calendar = PMCalendarioLaboral(
+            empresa_id=pm_context.empresa_id,
+            proyecto_id=project.id,
+            created_by=pm_context.user.id,
+        )
+        db.add(calendar)
+    calendar.nombre = normalize_required_text(nombre, "Nombre")
+    calendar.lunes = bool(lunes)
+    calendar.martes = bool(martes)
+    calendar.miercoles = bool(miercoles)
+    calendar.jueves = bool(jueves)
+    calendar.viernes = bool(viernes)
+    calendar.sabado = bool(sabado)
+    calendar.domingo = bool(domingo)
+    calendar.activo = True
+    calendar.updated_by = pm_context.user.id
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.work_calendar.update",
+            entity_name="pm_calendario_laboral",
+            entity_id=calendar.id,
+            ip_address=ip_address,
+            metadata_json={
+                "project_id": project.id,
+                "nombre": calendar.nombre,
+                "lunes": calendar.lunes,
+                "martes": calendar.martes,
+                "miercoles": calendar.miercoles,
+                "jueves": calendar.jueves,
+                "viernes": calendar.viernes,
+                "sabado": calendar.sabado,
+                "domingo": calendar.domingo,
+            },
+        )
+    )
+    return serialize_work_calendar(calendar, empresa_id=pm_context.empresa_id, project_id=project_id, origin="project")
+
+
+def build_reschedule_impact_plan(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    task_id: str,
+    fecha_inicio: date,
+    fecha_fin: date,
+    tasks: list[PMTarea] | None = None,
+    dependencies: list[PMTareaDependenciaOut] | None = None,
+) -> PMRescheduleImpactOut:
+    if fecha_fin < fecha_inicio:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La fecha final no puede ser anterior a la fecha de inicio.",
+        )
+    tasks = tasks if tasks is not None else list_project_tasks_for_planning(db, empresa_id=empresa_id, project_id=project_id)
+    dependencies = (
+        dependencies if dependencies is not None else list_project_serialized_dependencies(db, empresa_id=empresa_id, project_id=project_id)
+    )
+    task_map = {task.id: task for task in tasks}
+    task = task_map.get(task_id)
+    if not task:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tarea no encontrada.")
+
+    calendar = get_effective_work_calendar(db, empresa_id=empresa_id, project_id=project_id)
+    predecessors_by_task_id, successors_by_task_id, indegree = build_dependency_maps(tasks=tasks, dependencies=dependencies)
+    topo_order, has_cycle = topological_sort_task_ids(tasks=tasks, successors_by_task_id=successors_by_task_id, indegree=indegree)
+
+    descendants: set[str] = set()
+    queue = [task_id]
+    while queue:
+        current_id = queue.pop(0)
+        for dependency in successors_by_task_id.get(current_id, []):
+            successor_id = dependency.tarea_id
+            if successor_id in descendants:
+                continue
+            descendants.add(successor_id)
+            queue.append(successor_id)
+
+    warnings: list[str] = []
+    if has_cycle:
+        warnings.append("Se detecto un ciclo en dependencias. La reprogramacion puede ser parcial.")
+
+    simulated_dates = {
+        current_task.id: {
+            "start": current_task.fecha_inicio,
+            "end": current_task.fecha_vencimiento,
+            "completed": str(current_task.estatus or "").lower() == "completada",
+            "completed_date": current_task.fecha_completada,
+        }
+        for current_task in tasks
+    }
+    simulated_dates[task_id]["start"] = fecha_inicio
+    simulated_dates[task_id]["end"] = fecha_fin
+
+    def resolve_end(simulated_task: PMTarea | None) -> date | None:
+        if simulated_task is None:
+            return None
+        current = simulated_dates.get(simulated_task.id, {})
+        if current.get("completed") and current.get("completed_date"):
+            return current.get("completed_date")
+        return current.get("end") or current.get("start") or simulated_task.fecha_completada or simulated_task.fecha_vencimiento or simulated_task.fecha_inicio
+
+    affected_tasks: list[PMRescheduleAffectedTaskOut] = []
+    affected_task_ids: list[str] = []
+    ordered_ids = topo_order if topo_order else [item.id for item in tasks]
+    for current_id in ordered_ids:
+        if current_id not in descendants:
+            continue
+        current_task = task_map[current_id]
+        if str(current_task.estatus or "").lower() == "completada":
+            warnings.append(f"La tarea {current_task.titulo} ya esta completada y no fue reprogramada.")
+            continue
+        suggestion = build_schedule_suggestion_for_task(
+            task=current_task,
+            task_dependencies=predecessors_by_task_id.get(current_id, []),
+            task_map=task_map,
+            calendar=calendar,
+            current_start=simulated_dates[current_id]["start"],
+            current_end=simulated_dates[current_id]["end"],
+            end_resolver=resolve_end,
+        )
+        if not suggestion.fecha_inicio_sugerida or not suggestion.fecha_fin_sugerida:
+            continue
+        current_start = simulated_dates[current_id]["start"]
+        current_end = simulated_dates[current_id]["end"]
+        if current_start == suggestion.fecha_inicio_sugerida and current_end == suggestion.fecha_fin_sugerida:
+            continue
+        simulated_dates[current_id]["start"] = suggestion.fecha_inicio_sugerida
+        simulated_dates[current_id]["end"] = suggestion.fecha_fin_sugerida
+        affected_task_ids.append(current_id)
+        affected_tasks.append(
+            PMRescheduleAffectedTaskOut(
+                task_id=current_id,
+                titulo=current_task.titulo,
+                estatus=current_task.estatus,
+                fecha_inicio_actual=current_start,
+                fecha_fin_actual=current_end,
+                fecha_inicio_sugerida=suggestion.fecha_inicio_sugerida,
+                fecha_fin_sugerida=suggestion.fecha_fin_sugerida,
+            )
+        )
+
+    return PMRescheduleImpactOut(
+        task_id=task_id,
+        affected_task_ids=affected_task_ids,
+        affected_tasks=affected_tasks,
+        warnings=warnings,
+        total_affected=len(affected_tasks),
+    )
+
+
+def calculate_reschedule_impact(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    task_id: str,
+    fecha_inicio: date,
+    fecha_fin: date,
+) -> PMRescheduleImpactOut:
+    ensure_pm_tasks_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    task = get_task_for_company(db, pm_context.empresa_id, task_id)
+    if task.proyecto_id != project.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tarea no pertenece al proyecto indicado.")
+    return build_reschedule_impact_plan(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project.id,
+        task_id=task.id,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
+    )
+
+
+def update_task_dates_with_impact(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    task_id: str,
+    fecha_inicio: date,
+    fecha_fin: date,
+    apply_dependents: bool,
+    ip_address: str | None,
+) -> PMApplyScheduleOut:
+    ensure_pm_tasks_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    task = get_task_for_company(db, pm_context.empresa_id, task_id)
+    if task.proyecto_id != project.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tarea no pertenece al proyecto indicado.")
+
+    impact = build_reschedule_impact_plan(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project.id,
+        task_id=task.id,
+        fecha_inicio=fecha_inicio,
+        fecha_fin=fecha_fin,
+    )
+
+    task.fecha_inicio = fecha_inicio
+    task.fecha_vencimiento = fecha_fin
+    task.updated_by = pm_context.user.id
+
+    applied_affected_tasks: list[PMRescheduleAffectedTaskOut] = []
+    if apply_dependents and impact.affected_tasks:
+        tasks_for_project = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+        task_map = {current_task.id: current_task for current_task in tasks_for_project}
+        for affected in impact.affected_tasks:
+            affected_task = task_map.get(affected.task_id)
+            if not affected_task or str(affected_task.estatus or "").lower() == "completada":
+                continue
+            affected_task.fecha_inicio = affected.fecha_inicio_sugerida
+            affected_task.fecha_vencimiento = affected.fecha_fin_sugerida
+            affected_task.updated_by = pm_context.user.id
+            applied_affected_tasks.append(affected)
+
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.task.update_dates",
+            entity_name="pm_tarea",
+            entity_id=task.id,
+            ip_address=ip_address,
+            metadata_json={
+                "project_id": project.id,
+                "fecha_inicio": fecha_inicio.isoformat(),
+                "fecha_fin": fecha_fin.isoformat(),
+                "apply_dependents": apply_dependents,
+                "affected_task_ids": [item.task_id for item in applied_affected_tasks],
+            },
+        )
+    )
+
+    planning = refresh_project_planning(db, pm_context, project_id=project.id)
+    planning_task = next((item for item in planning.tasks if item.id == task.id), None)
+    message = "Fechas de la tarea actualizadas."
+    if apply_dependents and applied_affected_tasks:
+        message = f"Fechas actualizadas y {len(applied_affected_tasks)} tareas dependientes reprogramadas."
+    elif impact.total_affected > 0 and not apply_dependents:
+        message = f"Fechas actualizadas. Este cambio afecta {impact.total_affected} tareas dependientes."
+    return PMApplyScheduleOut(
+        task=planning_task,
+        planning=planning,
+        affected_tasks=applied_affected_tasks if apply_dependents else impact.affected_tasks,
+        warnings=impact.warnings,
+        alerts_summary=planning.alerts_summary,
+        message=message,
+    )
+
+
+def apply_task_suggested_dates(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    task_id: str,
+    apply_dependents: bool,
+    ip_address: str | None,
+) -> PMApplyScheduleOut:
+    ensure_pm_tasks_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    task = get_task_for_company(db, pm_context.empresa_id, task_id)
+    if task.proyecto_id != project.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tarea no pertenece al proyecto indicado.")
+    suggestions = calculate_schedule_suggestions(
+        db,
+        project_id=project.id,
+        empresa_id=pm_context.empresa_id,
+        tasks=list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project.id),
+        dependencies=list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project.id),
+    )
+    suggestion = suggestions.get(task.id)
+    if not suggestion or not suggestion.fecha_inicio_sugerida or not suggestion.fecha_fin_sugerida:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tarea no tiene una fecha sugerida disponible.")
+
+    result = update_task_dates_with_impact(
+        db,
+        pm_context,
+        project_id=project.id,
+        task_id=task.id,
+        fecha_inicio=suggestion.fecha_inicio_sugerida,
+        fecha_fin=suggestion.fecha_fin_sugerida,
+        apply_dependents=apply_dependents,
+        ip_address=ip_address,
+    )
+    result.message = "Fecha sugerida aplicada." if not apply_dependents else "Fecha sugerida aplicada y dependientes reprogramados."
+    return result
 
 
 def get_project_critical_path(
@@ -6417,7 +6982,7 @@ def validate_approval_entity_reference(
 ) -> tuple[str | None, str | None]:
     normalized_type = normalize_optional_text(entity_type)
     normalized_id = normalize_optional_text(entity_id)
-    if normalized_type in {"sin_relacion", "sin_relación"}:
+    if normalized_type in {"sin_relacion", "sin_relaciÃ³n"}:
         normalized_type = None
     if not normalized_type:
         return None, None
@@ -6886,12 +7451,12 @@ def resolve_portal_token(
     raw_token = normalize_required_text(token, "Token")
     invite = db.scalar(select(PMInvitadoExterno).where(PMInvitadoExterno.token_hash == hash_portal_token(raw_token)))
     if not invite:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Este enlace no está disponible.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Este enlace no estÃ¡ disponible.")
 
     project = get_project_for_company(db, invite.empresa_id, invite.proyecto_id)
     config, _ = get_or_create_pm_config(db, invite.empresa_id)
     if not config.pm_enabled or not config.pm_portal_enabled:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace no está disponible.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace no estÃ¡ disponible.")
 
     if not invite.activo or invite.revocado_at is not None:
         log_portal_access(
@@ -6916,11 +7481,11 @@ def resolve_portal_token(
             invite_id=invite.id,
             action="acceso_denegado_expirado",
             result="denegado",
-            detail="El acceso externo expiró.",
+            detail="El acceso externo expirÃ³.",
             ip_address=ip_address,
             user_agent=user_agent,
         )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace expiró.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace expirÃ³.")
 
     if track_access:
         invite.ultimo_acceso_at = utcnow()
@@ -6932,7 +7497,7 @@ def resolve_portal_token(
             invite_id=invite.id,
             action="acceso_portal",
             result="ok",
-            detail="Acceso externo válido.",
+            detail="Acceso externo vÃ¡lido.",
             ip_address=ip_address,
             user_agent=user_agent,
         )
@@ -7058,3 +7623,4 @@ def create_portal_comment(
         user_agent=user_agent,
     )
     return serialize_portal_comment(comment)
+

@@ -1177,8 +1177,52 @@ export function refreshPmProjectPlanning({ projectId, token, empresaId }) {
 }
 
 
+export function getPmProjectWorkCalendar({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/work-calendar`, { token, empresaId });
+}
+
+
+export function updatePmProjectWorkCalendar({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/work-calendar`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function getPmProjectCriticalPath({ projectId, token, empresaId }) {
   return apiRequest(`/pm/projects/${projectId}/critical-path`, { token, empresaId });
+}
+
+
+export function getPmTaskRescheduleImpact({ projectId, taskId, token, empresaId, params }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "fecha_inicio", params?.fecha_inicio);
+  appendQueryValue(query, "fecha_fin", params?.fecha_fin);
+  const suffix = query.toString();
+  return apiRequest(`/pm/projects/${projectId}/tasks/${taskId}/reschedule-impact${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function applyPmTaskSuggestedDates({ projectId, taskId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/projects/${projectId}/tasks/${taskId}/apply-suggested-dates`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmTaskDates({ projectId, taskId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/tasks/${taskId}/update-dates`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
 }
 
 

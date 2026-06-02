@@ -1,14 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  CalendarRange,
   CheckSquare,
   Clock3,
   Link2,
   Lock,
   MessageSquare,
   PackageOpen,
+  Pencil,
   Plus,
   Route,
+  Sparkles,
 } from "lucide-react";
 
 import {
@@ -45,16 +48,37 @@ const defaultDependencyForm = {
   notas: "",
 };
 
+function isActionPending(taskActionLoading = {}, taskId, action) {
+  return Boolean(taskActionLoading?.[`${taskId}:${action}`]);
+}
+
+function formatTaskTitleList(items = []) {
+  const titles = [...new Set(items.filter(Boolean))];
+  if (titles.length === 0) {
+    return "";
+  }
+  if (titles.length === 1) {
+    return titles[0];
+  }
+  if (titles.length === 2) {
+    return `${titles[0]} y ${titles[1]}`;
+  }
+  return `${titles[0]}, ${titles[1]} y ${titles.length - 2} más`;
+}
+
 export default function PMTaskDetailPanel({
   empresaId,
   materialConsumptions,
   materialPlans,
+  onApplySuggestedDates,
   onDependenciesChanged,
   onEditTask,
+  onEditTaskDates,
   onSelectTask,
   projectId,
-  taskId,
+  taskActionLoading,
   taskDependencyContext,
+  taskId,
   taskSummary,
   tasks,
   timeEntries,
@@ -176,6 +200,13 @@ export default function PMTaskDetailPanel({
     [relatedTimeEntries],
   );
 
+  const scheduleSuggestion = taskSummary?.schedule_suggestion ?? task?.schedule_suggestion ?? null;
+  const isCritical = Boolean(taskSummary?.es_critica ?? task?.es_critica);
+  const slackDays = taskSummary?.holgura_dias ?? task?.holgura_dias;
+  const successors = dependencies?.successors ?? [];
+  const applySuggestedLoading = isActionPending(taskActionLoading, taskId, "apply-suggestion");
+  const editDatesLoading = isActionPending(taskActionLoading, taskId, "dates");
+
   function closeDependencyModal() {
     if (savingDependency) {
       return;
@@ -259,14 +290,14 @@ export default function PMTaskDetailPanel({
   if (!taskId) {
     return (
       <DataCard subtitle="Selecciona una fila para abrir el contexto operativo." title="Detalle de tarea">
-        <EmptyState compact note="Aquí verás descripción, checklist, comentarios, horas, materiales y prerrequisitos de la tarea seleccionada." title="Sin tarea seleccionada" />
+        <EmptyState
+          compact
+          note="Aquí verás descripción, checklist, comentarios, horas, materiales y prerrequisitos de la tarea seleccionada."
+          title="Sin tarea seleccionada"
+        />
       </DataCard>
     );
   }
-
-  const scheduleSuggestion = taskSummary?.schedule_suggestion ?? task?.schedule_suggestion ?? null;
-  const isCritical = Boolean(taskSummary?.es_critica ?? task?.es_critica);
-  const slackDays = taskSummary?.holgura_dias ?? task?.holgura_dias;
 
   return (
     <>
@@ -276,8 +307,8 @@ export default function PMTaskDetailPanel({
             <ActionButton disabled={!taskId} onClick={() => onEditTask?.(taskId)} tone="primary" type="button">
               Editar tarea
             </ActionButton>
-            <ActionButton disabled={!taskId} onClick={() => onEditTask?.(taskId)} type="button">
-              Editar prerrequisitos
+            <ActionButton disabled={!taskId || editDatesLoading} onClick={() => onEditTaskDates?.(taskId)} type="button">
+              {editDatesLoading ? "Guardando..." : "Editar fechas"}
             </ActionButton>
             <ActionButton disabled={!taskId} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openDependencyModal} type="button">
               Agregar prerrequisito
@@ -307,6 +338,7 @@ export default function PMTaskDetailPanel({
                   {isCritical ? <StatusBadge tone="danger">En ruta crítica</StatusBadge> : null}
                 </div>
               </div>
+
               <div className="pm-task-detail-metrics">
                 <div>
                   <span>Avance</span>
@@ -348,12 +380,65 @@ export default function PMTaskDetailPanel({
             ) : null}
 
             {scheduleSuggestion?.fuera_de_secuencia ? (
-              <div className="inventory-form-note inventory-form-note-warning">
-                <strong>Fecha fuera de secuencia</strong>
+              <div className="pm-task-schedule-panel">
+                <div className="pm-detail-block-header">
+                  <div className="pm-inline-metadata">
+                    <CalendarRange size={16} strokeWidth={1.9} />
+                    <strong>Fecha sugerida</strong>
+                  </div>
+                  <div className="inventory-actions inventory-actions-wrap">
+                    <ActionButton
+                      className={applySuggestedLoading ? "pm-button-loading" : ""}
+                      disabled={applySuggestedLoading || editDatesLoading}
+                      icon={<Sparkles size={14} strokeWidth={1.9} />}
+                      onClick={() => onApplySuggestedDates?.(taskId)}
+                      tone="primary"
+                      type="button"
+                    >
+                      {applySuggestedLoading ? "Aplicando..." : "Aplicar fecha sugerida"}
+                    </ActionButton>
+                    <ActionButton
+                      className={editDatesLoading ? "pm-button-loading" : ""}
+                      disabled={applySuggestedLoading || editDatesLoading}
+                      icon={<Pencil size={14} strokeWidth={1.9} />}
+                      onClick={() => onEditTaskDates?.(taskId)}
+                      type="button"
+                    >
+                      {editDatesLoading ? "Guardando..." : "Editar fechas"}
+                    </ActionButton>
+                  </div>
+                </div>
                 <p className="table-note">
-                  {safeDisplayText(scheduleSuggestion.razon, "La tarea inicia antes de que termine su prerrequisito.")}
-                  {" "}
-                  Fecha sugerida: {safeDisplayText(formatDate(scheduleSuggestion.fecha_inicio_sugerida), "—")}.
+                  La tarea debería iniciar después de completar sus prerrequisitos.
+                </p>
+                <div className="pm-task-schedule-grid">
+                  <div>
+                    <span>Actual</span>
+                    <strong>
+                      {safeDisplayText(formatDate(task.fecha_inicio), "—")} → {safeDisplayText(formatDate(task.fecha_vencimiento), "—")}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Sugerido</span>
+                    <strong>
+                      {safeDisplayText(formatDate(scheduleSuggestion.fecha_inicio_sugerida), "—")} → {safeDisplayText(formatDate(scheduleSuggestion.fecha_fin_sugerida), "—")}
+                    </strong>
+                  </div>
+                </div>
+                <div className="pm-task-impact-note">
+                  <AlertTriangle size={14} strokeWidth={1.9} />
+                  <span>
+                    {safeDisplayText(scheduleSuggestion.razon, "La tarea inicia antes de que termine su prerrequisito.")}
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {successors.length > 0 ? (
+              <div className="inventory-form-note">
+                <strong>Impacto en dependientes</strong>
+                <p className="table-note">
+                  Esta tarea desbloquea {successors.length} tareas. Cambiar sus fechas puede afectar tareas dependientes.
                 </p>
               </div>
             ) : null}
@@ -405,7 +490,14 @@ export default function PMTaskDetailPanel({
                           <ActionButton onClick={() => onSelectTask?.(dependency.depende_de_tarea_id)} size="sm" type="button">
                             Ver tarea
                           </ActionButton>
-                          <ActionButton className={savingDependency ? "pm-button-loading" : ""} disabled={savingDependency} onClick={() => handleDeactivateDependency(dependency.id)} size="sm" tone="danger" type="button">
+                          <ActionButton
+                            className={savingDependency ? "pm-button-loading" : ""}
+                            disabled={savingDependency}
+                            onClick={() => handleDeactivateDependency(dependency.id)}
+                            size="sm"
+                            tone="danger"
+                            type="button"
+                          >
                             {savingDependency ? "Quitando..." : "Quitar"}
                           </ActionButton>
                         </div>
@@ -422,9 +514,9 @@ export default function PMTaskDetailPanel({
                   <Lock size={16} strokeWidth={1.9} />
                   <strong>Esta tarea desbloquea</strong>
                 </div>
-                {(dependencies?.successors?.length ?? 0) ? (
+                {successors.length ? (
                   <div className="pm-detail-list">
-                    {dependencies.successors.map((successor) => (
+                    {successors.map((successor) => (
                       <div className="pm-detail-list-item" key={successor.tarea_id}>
                         <div>
                           <strong>{normalizePmCopy(safeDisplayText(successor.titulo))}</strong>

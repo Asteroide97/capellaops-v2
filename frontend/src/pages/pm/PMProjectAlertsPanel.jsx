@@ -35,6 +35,7 @@ export default function PMProjectAlertsPanel({
             const resolving = isPending(actionLoading, alert.id, "resolve");
             const dismissing = isPending(actionLoading, alert.id, "dismiss");
             const busy = resolving || dismissing;
+
             return (
               <div className={`pm-alert-card pm-alert-card-${getAlertSeverityTone(alert.severidad)}`} key={alert.id}>
                 <div className="pm-alert-card-head">
@@ -53,6 +54,7 @@ export default function PMProjectAlertsPanel({
                     <span>{safeDisplayText(formatDate(alert.updated_at), "—")}</span>
                   </div>
                 </div>
+
                 <div className="pm-alert-card-actions">
                   <ActionButton
                     className={resolving ? "pm-button-loading" : ""}

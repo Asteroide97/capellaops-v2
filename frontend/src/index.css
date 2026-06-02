@@ -1835,6 +1835,19 @@ textarea {
   background: var(--surface);
 }
 
+.pm-workplan-row-phase7,
+.pm-workplan-row-phase7-head {
+  grid-template-columns:
+    minmax(280px, 1.45fr)
+    8rem
+    7.5rem
+    7.5rem
+    minmax(240px, 1fr)
+    8.5rem
+    minmax(240px, 1fr)
+    minmax(320px, 1.15fr);
+}
+
 .pm-workplan-row[role="button"] {
   cursor: pointer;
 }
@@ -1902,6 +1915,15 @@ textarea {
   color: var(--text-secondary);
   font-size: 0.82rem;
   line-height: 1.4;
+}
+
+.pm-workplan-suggestion-stack {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.pm-workplan-suggestion-stack strong {
+  font-size: 0.88rem;
 }
 
 .pm-workplan-fab {
@@ -2002,6 +2024,12 @@ textarea {
   gap: 0.35rem;
   color: #92400e;
   font-size: 0.82rem;
+}
+
+.pm-gantt-row-actions {
+  display: flex;
+  gap: 0.55rem;
+  flex-wrap: wrap;
 }
 
 .pm-gantt-track {
@@ -2134,6 +2162,38 @@ textarea {
   gap: 0.75rem;
 }
 
+.pm-task-schedule-panel {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  background: rgba(255, 251, 235, 0.94);
+}
+
+.pm-task-schedule-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.pm-task-schedule-grid > div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.8rem 0.9rem;
+  border-radius: 0.95rem;
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.pm-task-impact-note {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  color: #92400e;
+  font-size: 0.88rem;
+}
+
 .pm-detail-block {
   display: grid;
   gap: 0.75rem;
@@ -2227,6 +2287,47 @@ textarea {
 .pm-task-prereq-copy span {
   color: var(--text-secondary);
   font-size: 0.88rem;
+}
+
+.pm-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.pm-calendar-day-option {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pm-reschedule-stack,
+.pm-impact-list,
+.pm-warning-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pm-impact-summary-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.85rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.pm-warning-list-item {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  color: #92400e;
 }
 
 .pm-detail-list-item-button {

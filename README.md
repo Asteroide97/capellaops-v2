@@ -952,6 +952,39 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Integración con calendario externo
 - Notificaciones por email
 
+## PM Fase 7 - Aplicar fechas sugeridas, Gantt editable básico y calendario laboral
+
+- El plan de trabajo ya permite corregir la secuencia desde la UI:
+  - aplicar fecha sugerida por tarea
+  - editar fechas desde plan de trabajo, Gantt y detalle
+  - reprogramar dependientes con confirmación
+- La planeación ahora usa calendario laboral por proyecto:
+  - lunes a viernes por default
+  - calendario configurable por proyecto
+  - sugerencias de fechas con días laborales
+- El backend ahora expone:
+  - `GET /pm/projects/{project_id}/work-calendar`
+  - `PUT /pm/projects/{project_id}/work-calendar`
+  - `GET /pm/projects/{project_id}/tasks/{task_id}/reschedule-impact`
+  - `POST /pm/projects/{project_id}/tasks/{task_id}/apply-suggested-dates`
+  - `POST /pm/projects/{project_id}/tasks/{task_id}/update-dates`
+- El frontend ya muestra:
+  - calendario laboral activo
+  - banner de tareas fuera de secuencia
+  - fecha sugerida actual vs sugerida
+  - impacto en tareas dependientes
+  - confirmación antes de reprogramar cadena
+- Las alertas de fuera de secuencia se resuelven automáticamente cuando la tarea queda alineada con sus prerrequisitos.
+
+### Pendientes de PM Fase 7
+
+- Drag & drop real en Gantt
+- Feriados
+- Calendarios por persona o equipo
+- Restricciones avanzadas de cronograma
+- Línea base de cronograma
+- Integración Google Calendar / Outlook Calendar
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.
