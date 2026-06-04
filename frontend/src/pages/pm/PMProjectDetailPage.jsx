@@ -25,6 +25,8 @@ import { useNavigate, useParams } from "react-router-dom";
 import {
   addPmProjectMember,
   applyPmTaskSuggestedDates,
+  applyPmProjectChange,
+  createPmProjectChange,
   createPmProjectComment,
   deactivatePmProjectMember,
   deactivatePmTask,
@@ -34,11 +36,13 @@ import {
   getPmProjectMaterials,
   getPmProjectPlanning,
   getPmProjectWorkCalendar,
+  listPmProjectBaselines,
   listPmProjectMembers,
   listPmProjectAlerts,
   listPmProjectTimeEntries,
   refreshPmProjectPlanning,
   resolvePmAlert,
+  submitPmProjectChange,
   updatePmProjectWorkCalendar,
   updatePmTaskDates,
   updatePmTask,
@@ -230,6 +234,51 @@ function getTaskActionKey(taskId, action) {
   return `${taskId}:${action}`;
 }
 
+function buildDateChangePayload(task, nextStart, nextEnd, requiresApproval) {
+  const taskTitle = normalizePmCopy(safeDisplayText(task?.titulo, "Tarea"));
+  const currentStart = task?.fecha_inicio ?? null;
+  const currentEnd = task?.fecha_vencimiento ?? null;
+  const currentEndDate = currentEnd ? new Date(currentEnd) : currentStart ? new Date(currentStart) : null;
+  const nextEndDate = nextEnd ? new Date(nextEnd) : nextStart ? new Date(nextStart) : null;
+  let impactDays = 0;
+
+  if (currentEndDate && nextEndDate) {
+    currentEndDate.setHours(0, 0, 0, 0);
+    nextEndDate.setHours(0, 0, 0, 0);
+    impactDays = Math.round((nextEndDate - currentEndDate) / (1000 * 60 * 60 * 24));
+  }
+
+  return {
+    tipo_cambio: "fecha",
+    titulo: `Cambio de fechas — ${taskTitle}`,
+    descripcion: `La tarea ${taskTitle} cambió sus fechas dentro del Gantt del proyecto.`,
+    motivo: null,
+    requiere_aprobacion: requiresApproval,
+    entidad_tipo: "tarea",
+    entidad_id: task?.id ?? null,
+    impacto_dias: impactDays,
+    impacto_costo: 0,
+    impacto_venta: 0,
+    antes_json: {
+      origen: "gantt_drag_drop",
+      tarea_id: task?.id ?? null,
+      tarea_titulo: taskTitle,
+      fecha_inicio_actual: currentStart,
+      fecha_fin_actual: currentEnd,
+      fecha_inicio: currentStart,
+      fecha_fin: currentEnd,
+    },
+    despues_json: {
+      tarea_id: task?.id ?? null,
+      tarea_titulo: taskTitle,
+      fecha_inicio_actual: nextStart ?? null,
+      fecha_fin_actual: nextEnd ?? null,
+      fecha_inicio: nextStart ?? null,
+      fecha_fin: nextEnd ?? null,
+    },
+  };
+}
+
 
 export default function PMProjectDetailPage() {
   const navigate = useNavigate();
@@ -247,6 +296,8 @@ export default function PMProjectDetailPage() {
   const [projectPlanning, setProjectPlanning] = useState(null);
   const [projectAlerts, setProjectAlerts] = useState([]);
   const [baselineComparison, setBaselineComparison] = useState(null);
+  const [baselineInfo, setBaselineInfo] = useState(null);
+  const [baselineInfoLoading, setBaselineInfoLoading] = useState(false);
   const [projectDependencies, setProjectDependencies] = useState([]);
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -264,6 +315,9 @@ export default function PMProjectDetailPage() {
     open: false,
     taskId: null,
     mode: "edit",
+    proposedStart: null,
+    proposedEnd: null,
+    source: "edit",
   });
   const [memberForm, setMemberForm] = useState(defaultMemberForm);
   const [commentBody, setCommentBody] = useState("");
@@ -435,6 +489,58 @@ export default function PMProjectDetailPage() {
     loadProjectBundle();
   }, [token, empresaId, id]);
 
+  useEffect(() => {
+    if (baselineComparison?.baseline?.id) {
+      setBaselineInfo({
+        id: baselineComparison.baseline.id,
+        nombre: baselineComparison.baseline.nombre ?? "Línea base principal",
+      });
+      return;
+    }
+    if (baselineComparison === null) {
+      setBaselineInfo(null);
+    }
+  }, [baselineComparison]);
+
+  async function ensureBaselineInfo({ force = false, silent = true } = {}) {
+    if (!token || !empresaId || !id) {
+      return null;
+    }
+    if (!force && baselineComparison?.baseline?.id) {
+      return {
+        id: baselineComparison.baseline.id,
+        nombre: baselineComparison.baseline.nombre ?? "Línea base principal",
+      };
+    }
+    if (!force && baselineInfo) {
+      return baselineInfo;
+    }
+
+    setBaselineInfoLoading(true);
+    try {
+      const baselineList = await listPmProjectBaselines({ projectId: id, token, empresaId });
+      const mainBaseline =
+        (baselineList ?? []).find((item) => item.es_principal && item.estatus === "activa")
+        ?? (baselineList ?? []).find((item) => item.estatus === "activa")
+        ?? null;
+      const nextInfo = mainBaseline
+        ? {
+          id: mainBaseline.id,
+          nombre: mainBaseline.nombre ?? "Línea base principal",
+        }
+        : null;
+      setBaselineInfo(nextInfo);
+      return nextInfo;
+    } catch (requestError) {
+      if (!silent) {
+        setError(requestError.message || "No se pudo verificar la línea base activa.");
+      }
+      return baselineInfo ?? null;
+    } finally {
+      setBaselineInfoLoading(false);
+    }
+  }
+
   const taskMap = useMemo(
     () =>
       tasks.reduce((accumulator, task) => {
@@ -544,6 +650,17 @@ export default function PMProjectDetailPage() {
     () => resolvedTasks.find((task) => task.id === rescheduleModalState.taskId) ?? null,
     [resolvedTasks, rescheduleModalState.taskId],
   );
+  const activeBaselineInfo = useMemo(
+    () =>
+      baselineComparison?.baseline?.id
+        ? {
+          id: baselineComparison.baseline.id,
+          nombre: baselineComparison.baseline.nombre ?? "Línea base principal",
+        }
+        : baselineInfo,
+    [baselineComparison, baselineInfo],
+  );
+  const hasActiveBaseline = Boolean(activeBaselineInfo?.id);
   const activeMembers = useMemo(() => members.filter((item) => item.activo), [members]);
   const activeTasks = useMemo(
     () => resolvedTasks.filter((task) => task.activo && !["completada", "cancelada"].includes(String(task.estatus || "").toLowerCase())),
@@ -665,7 +782,7 @@ export default function PMProjectDetailPage() {
     setWorkCalendarModalOpen(false);
   }
 
-  function openTaskDatesModal(taskId, mode = "edit") {
+  function openTaskDatesModal(taskId, mode = "edit", options = {}) {
     if (!taskId) {
       return;
     }
@@ -674,7 +791,11 @@ export default function PMProjectDetailPage() {
       open: true,
       taskId,
       mode,
+      proposedStart: options.proposedStart ?? null,
+      proposedEnd: options.proposedEnd ?? null,
+      source: options.source ?? mode,
     });
+    ensureBaselineInfo().catch(() => {});
   }
 
   function closeRescheduleModal() {
@@ -682,7 +803,18 @@ export default function PMProjectDetailPage() {
       open: false,
       taskId: null,
       mode: "edit",
+      proposedStart: null,
+      proposedEnd: null,
+      source: "edit",
     });
+  }
+
+  function handleGanttInteractionNotice(message) {
+    if (!message) {
+      return;
+    }
+    setSuccess("");
+    setError(message);
   }
 
   async function handleTaskSaved(savedTask, successMessage = "") {
@@ -726,7 +858,7 @@ export default function PMProjectDetailPage() {
     }
   }
 
-  async function handleTaskSchedulingSubmit({ taskId, fecha_inicio, fecha_fin, applyDependents, mode }) {
+  async function handleTaskSchedulingSubmit({ taskId, fecha_inicio, fecha_fin, applyDependents, mode, strategy }) {
     if (!taskId) {
       return;
     }
@@ -734,19 +866,58 @@ export default function PMProjectDetailPage() {
     if (isTaskActionPending(taskId, action)) {
       return;
     }
+    const task = resolvedTasks.find((item) => item.id === taskId);
+    if (!task) {
+      return;
+    }
     setTaskLoading(taskId, action, true);
     setError("");
     setSuccess("");
     try {
-      const response = mode === "suggestion"
-        ? await applyPmTaskSuggestedDates({
+      const activeBaseline = await ensureBaselineInfo();
+      const hasBaseline = Boolean(activeBaseline?.id);
+      let successMessage = "Fechas actualizadas.";
+
+      if (strategy === "register-and-submit") {
+        const changePayload = buildDateChangePayload(task, fecha_inicio, fecha_fin, true);
+        const createdChange = await createPmProjectChange({
           projectId: id,
-          taskId,
           token,
           empresaId,
-          payload: { apply_dependents: applyDependents },
-        })
-        : await updatePmTaskDates({
+          payload: changePayload,
+        });
+        await submitPmProjectChange({
+          changeId: createdChange.id,
+          token,
+          empresaId,
+          payload: {},
+        });
+        successMessage = "Cambio enviado a aprobación. Las fechas se aplicarán cuando sea aprobado.";
+        await refreshPmWorkPlanLight({ background: true });
+      } else if (strategy === "apply-and-register") {
+        const changePayload = buildDateChangePayload(task, fecha_inicio, fecha_fin, false);
+        const createdChange = await createPmProjectChange({
+          projectId: id,
+          token,
+          empresaId,
+          payload: changePayload,
+        });
+        const response = await applyPmProjectChange({
+          changeId: createdChange.id,
+          token,
+          empresaId,
+          payload: {
+            apply_dependents: applyDependents,
+            comentario: null,
+          },
+        });
+        await syncPlanningStateFromResponse(response.planning, response.message || "Cambio aplicado y registrado.");
+        successMessage = response.message || "Cambio aplicado y registrado.";
+      } else {
+        if (hasBaseline && strategy !== "apply-and-register") {
+          throw new Error("Este proyecto tiene línea base. Registra el cambio o envíalo a aprobación antes de aplicarlo.");
+        }
+        const response = await updatePmTaskDates({
           projectId: id,
           taskId,
           token,
@@ -757,7 +928,14 @@ export default function PMProjectDetailPage() {
             apply_dependents: applyDependents,
           },
         });
-      await syncPlanningStateFromResponse(response.planning, response.message || "Fechas actualizadas.");
+        await syncPlanningStateFromResponse(response.planning, response.message || "Fechas actualizadas.");
+        successMessage = response.message || "Fechas actualizadas.";
+      }
+
+      if (hasBaseline || strategy === "register-and-submit" || strategy === "apply-and-register") {
+        setBaselineReloadToken((current) => current + 1);
+      }
+      setSuccess(successMessage);
       closeRescheduleModal();
     } catch (requestError) {
       setError(requestError.message || "No se pudo actualizar la planeación de la tarea.");
@@ -1321,6 +1499,13 @@ export default function PMProjectDetailPage() {
           onDismissAlert={handleDismissAlert}
           onEditTaskDates={(taskId) => openTaskDatesModal(taskId, "edit")}
           onEditTask={openExistingTaskModal}
+          onGanttNotice={handleGanttInteractionNotice}
+          onPreviewReschedule={(taskId, draft) =>
+            openTaskDatesModal(taskId, "drag", {
+              proposedStart: draft?.proposedStart ?? null,
+              proposedEnd: draft?.proposedEnd ?? null,
+              source: draft?.source ?? "drag",
+            })}
           onRefresh={handleRefreshCurrentView}
           onRecalculatePlanning={handleRecalculatePlanning}
           onResolveAlert={handleResolveAlert}
@@ -1673,6 +1858,9 @@ export default function PMProjectDetailPage() {
       />
 
       <PMRescheduleImpactModal
+        allowDirectApply={!hasActiveBaseline}
+        baselineChecking={baselineInfoLoading && !hasActiveBaseline}
+        baselineInfo={activeBaselineInfo}
         empresaId={empresaId}
         initialEnd={selectedRescheduleTask?.fecha_vencimiento ?? null}
         initialStart={selectedRescheduleTask?.fecha_inicio ?? null}
@@ -1681,6 +1869,8 @@ export default function PMProjectDetailPage() {
         onSubmit={handleTaskSchedulingSubmit}
         open={rescheduleModalState.open}
         projectId={id}
+        proposedEnd={rescheduleModalState.proposedEnd}
+        proposedStart={rescheduleModalState.proposedStart}
         saving={
           selectedRescheduleTask
             ? isTaskActionPending(

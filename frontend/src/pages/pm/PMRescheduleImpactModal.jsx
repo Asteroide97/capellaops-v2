@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CalendarRange, Route } from "lucide-react";
+import { AlertTriangle, CalendarRange, GitBranch, Lock, Route } from "lucide-react";
 
 import { getPmTaskRescheduleImpact } from "../../api/client";
 import {
@@ -18,6 +18,9 @@ function toDateInput(value) {
 }
 
 export default function PMRescheduleImpactModal({
+  allowDirectApply = true,
+  baselineChecking = false,
+  baselineInfo = null,
   empresaId,
   initialEnd,
   initialStart,
@@ -26,6 +29,8 @@ export default function PMRescheduleImpactModal({
   onSubmit,
   open,
   projectId,
+  proposedEnd = null,
+  proposedStart = null,
   saving = false,
   suggestionEnd,
   suggestionStart,
@@ -37,9 +42,15 @@ export default function PMRescheduleImpactModal({
   const [impact, setImpact] = useState(null);
   const [impactLoading, setImpactLoading] = useState(false);
   const [error, setError] = useState("");
+  const [applyDependents, setApplyDependents] = useState(false);
 
-  const effectiveStart = mode === "suggestion" ? (suggestionStart || initialStart) : initialStart;
-  const effectiveEnd = mode === "suggestion" ? (suggestionEnd || initialEnd) : initialEnd;
+  const hasBaseline = Boolean(baselineInfo?.id);
+  const effectiveStart =
+    proposedStart ||
+    (mode === "suggestion" ? suggestionStart || initialStart : initialStart);
+  const effectiveEnd =
+    proposedEnd ||
+    (mode === "suggestion" ? suggestionEnd || initialEnd : initialEnd);
 
   useEffect(() => {
     if (!open) {
@@ -47,6 +58,7 @@ export default function PMRescheduleImpactModal({
     }
     setFechaInicio(toDateInput(effectiveStart));
     setFechaFin(toDateInput(effectiveEnd));
+    setApplyDependents(false);
     setImpact(null);
     setError("");
   }, [effectiveEnd, effectiveStart, open]);
@@ -59,6 +71,11 @@ export default function PMRescheduleImpactModal({
         setImpact(null);
         return;
       }
+      if (fechaFin < fechaInicio) {
+        setImpact(null);
+        return;
+      }
+
       setImpactLoading(true);
       setError("");
       try {
@@ -95,23 +112,21 @@ export default function PMRescheduleImpactModal({
 
   const affectedTasks = impact?.affected_tasks ?? [];
   const warnings = impact?.warnings ?? [];
-  const canSubmit = Boolean(fechaInicio && fechaFin && !saving);
   const hasDependentsImpact = (impact?.total_affected ?? 0) > 0;
-  const modalTitle = mode === "suggestion" ? "Aplicar fecha sugerida" : "Editar fechas de tarea";
-
+  const canSubmit = Boolean(fechaInicio && fechaFin && !saving && !baselineChecking);
   const currentRangeCopy = useMemo(() => {
     const startLabel = safeDisplayText(formatDate(initialStart), "—");
     const endLabel = safeDisplayText(formatDate(initialEnd), "—");
     return `${startLabel} → ${endLabel}`;
   }, [initialEnd, initialStart]);
-
   const nextRangeCopy = useMemo(() => {
     const startLabel = safeDisplayText(formatDate(fechaInicio), "—");
     const endLabel = safeDisplayText(formatDate(fechaFin), "—");
     return `${startLabel} → ${endLabel}`;
   }, [fechaFin, fechaInicio]);
+  const modalTitle = mode === "drag" ? "Confirmar cambio de fechas" : mode === "suggestion" ? "Aplicar fecha sugerida" : "Editar fechas de tarea";
 
-  async function handleApply(applyDependents) {
+  async function handleAction(strategy) {
     if (!canSubmit) {
       return;
     }
@@ -126,6 +141,7 @@ export default function PMRescheduleImpactModal({
       fecha_fin: fechaFin,
       applyDependents,
       mode,
+      strategy,
     });
   }
 
@@ -134,12 +150,24 @@ export default function PMRescheduleImpactModal({
       <ActionButton disabled={saving} onClick={onClose} type="button">
         Cancelar
       </ActionButton>
-      <ActionButton disabled={!canSubmit} onClick={() => handleApply(false)} type="button">
-        {saving ? "Guardando..." : "Aplicar solo esta tarea"}
-      </ActionButton>
-      {hasDependentsImpact ? (
-        <ActionButton disabled={!canSubmit} onClick={() => handleApply(true)} tone="primary" type="button">
-          {saving ? "Aplicando..." : "Aplicar tarea y dependientes"}
+      {allowDirectApply ? (
+        <ActionButton disabled={!canSubmit} onClick={() => handleAction("direct")} type="button">
+          {saving ? "Aplicando..." : "Aplicar cambio"}
+        </ActionButton>
+      ) : null}
+      {hasBaseline ? (
+        <>
+          <ActionButton disabled={!canSubmit} onClick={() => handleAction("apply-and-register")} type="button">
+            {saving ? "Aplicando..." : "Aplicar y registrar cambio"}
+          </ActionButton>
+          <ActionButton disabled={!canSubmit} onClick={() => handleAction("register-and-submit")} tone="primary" type="button">
+            {saving ? "Enviando..." : "Registrar y enviar a aprobación"}
+          </ActionButton>
+        </>
+      ) : null}
+      {!allowDirectApply && !hasBaseline ? (
+        <ActionButton disabled={!canSubmit} onClick={() => handleAction("direct")} tone="primary" type="button">
+          {saving ? "Aplicando..." : "Aplicar cambio"}
         </ActionButton>
       ) : null}
     </div>
@@ -150,7 +178,7 @@ export default function PMRescheduleImpactModal({
       footer={footer}
       onClose={onClose}
       open={open}
-      size="lg"
+      size="wide"
       subtitle="Confirma el rango de fechas y revisa el impacto sobre las tareas dependientes."
       title={modalTitle}
     >
@@ -161,13 +189,44 @@ export default function PMRescheduleImpactModal({
         </div>
       ) : null}
 
+      {baselineChecking ? (
+        <div className="inventory-form-note">
+          <strong>Validando línea base</strong>
+          <p className="table-note">Espera un momento para determinar si este cambio debe registrarse contra la línea base.</p>
+        </div>
+      ) : null}
+
+      {hasBaseline ? (
+        <div className="inventory-form-note inventory-form-note-warning">
+          <strong>Este cambio se comparará contra la línea base actual.</strong>
+          <p className="table-note">
+            Línea base activa: {safeDisplayText(baselineInfo?.nombre, "Línea base principal")}. No se aplicarán fechas silenciosamente.
+          </p>
+        </div>
+      ) : null}
+
+      {task?.es_critica ? (
+        <div className="inventory-form-note inventory-form-note-warning">
+          <strong>Esta tarea está en la ruta crítica.</strong>
+          <p className="table-note">Cambiar sus fechas puede afectar la fecha final del proyecto.</p>
+        </div>
+      ) : null}
+
+      {task?.dependency_state?.is_blocked ? (
+        <div className="inventory-form-note inventory-form-note-warning">
+          <strong>Esta tarea sigue bloqueada.</strong>
+          <p className="table-note">{safeDisplayText(task?.dependency_state?.detail, "Completa primero sus prerrequisitos.")}</p>
+        </div>
+      ) : null}
+
       <div className="pm-reschedule-stack">
         <div className="inventory-form-note">
           <strong>{normalizePmCopy(safeDisplayText(task?.titulo, "Tarea"))}</strong>
-          <p className="table-note">Actual: {currentRangeCopy}</p>
+          <p className="table-note">Fechas actuales: {currentRangeCopy}</p>
+          <p className="table-note">Fechas propuestas: {nextRangeCopy}</p>
           {suggestionStart || suggestionEnd ? (
             <p className="table-note">
-              Sugerido: {safeDisplayText(formatDate(suggestionStart), "—")} → {safeDisplayText(formatDate(suggestionEnd), "—")}
+              Sugerido por planeación: {safeDisplayText(formatDate(suggestionStart), "—")} → {safeDisplayText(formatDate(suggestionEnd), "—")}
             </p>
           ) : null}
         </div>
@@ -181,10 +240,14 @@ export default function PMRescheduleImpactModal({
           </Field>
         </div>
 
-        <div className="inventory-form-note">
-          <strong>Nuevas fechas</strong>
-          <p className="table-note">{nextRangeCopy}</p>
-        </div>
+        <label className="pm-impact-toggle">
+          <input
+            checked={applyDependents}
+            onChange={(event) => setApplyDependents(event.target.checked)}
+            type="checkbox"
+          />
+          <span>También reprogramar tareas dependientes</span>
+        </label>
 
         <div className="pm-impact-summary-card">
           <div>
@@ -195,7 +258,10 @@ export default function PMRescheduleImpactModal({
                 : "No hay tareas dependientes afectadas."}
             </p>
           </div>
-          {impactLoading ? <StatusBadge tone="info">Calculando...</StatusBadge> : null}
+          <div className="pm-inline-metadata">
+            <StatusBadge tone={getTaskStatusTone(task?.estatus)}>{getTaskStatusLabel(task?.estatus)}</StatusBadge>
+            {impactLoading ? <StatusBadge tone="info">Calculando...</StatusBadge> : null}
+          </div>
         </div>
 
         {warnings.length > 0 ? (
@@ -245,6 +311,15 @@ export default function PMRescheduleImpactModal({
             </div>
           )}
         </div>
+
+        {hasBaseline ? (
+          <div className="inventory-form-note">
+            <strong>Control de cambios</strong>
+            <p className="table-note">
+              Puedes aplicar este ajuste y registrarlo como cambio, o enviarlo a aprobación sin modificar la tarea todavía.
+            </p>
+          </div>
+        ) : null}
       </div>
     </ModalShell>
   );

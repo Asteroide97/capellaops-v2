@@ -1039,6 +1039,37 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Reportes ejecutivos
 - Visualización de línea base sobre el Gantt
 
+## PM Fase 9 - Drag & drop en Gantt
+
+- El Gantt del plan de trabajo ya soporta interacción directa en desktop para:
+  - mover tareas horizontalmente
+  - ajustar duración con resize básico desde el borde derecho
+- El drag no aplica cambios de inmediato:
+  - muestra preview local de fechas
+  - al soltar abre un modal de impacto
+  - desde ese modal se confirma cómo proceder
+- La integración con planeación reutiliza la lógica existente de:
+  - cálculo de impacto
+  - reprogramación opcional de dependientes
+  - alertas
+  - refresco ligero del plan de trabajo
+- La integración con línea base y control de cambios ahora permite:
+  - aplicar cambio directo cuando no existe línea base principal
+  - aplicar y registrar cambio cuando sí existe línea base
+  - registrar y enviar a aprobación sin modificar la tarea todavía
+- Restricciones operativas actuales:
+  - no se pueden mover tareas completadas desde el Gantt
+  - si existe línea base, el cambio no se aplica silenciosamente
+  - en móvil se mantiene `Editar fechas` como ruta principal
+
+### Pendientes de PM Fase 9
+
+- Drag & drop móvil avanzado
+- Múltiples escalas de zoom
+- Dependencias visuales con flechas
+- Línea base visual sobre el Gantt
+- Undo / redo
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.

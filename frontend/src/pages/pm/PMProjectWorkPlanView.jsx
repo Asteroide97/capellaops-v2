@@ -118,6 +118,8 @@ export default function PMProjectWorkPlanView({
   onDismissAlert,
   onEditTask,
   onEditTaskDates,
+  onGanttNotice,
+  onPreviewReschedule,
   onRefresh,
   onRecalculatePlanning,
   onResolveAlert,
@@ -275,6 +277,7 @@ export default function PMProjectWorkPlanView({
           <div className="inventory-form-note">
             <strong>{safeDisplayText(workCalendar?.nombre, "Calendario estándar")}</strong>
             <p className="table-note">{formatWorkCalendarSummary(workCalendar)}</p>
+            <p className="table-note">En desktop puedes arrastrar tareas en el Gantt. En móvil usa Editar fechas.</p>
           </div>
         </DataCard>
 
@@ -513,10 +516,13 @@ export default function PMProjectWorkPlanView({
         <PMProjectGanttLite
           onApplySuggestedDates={onApplySuggestedDates}
           onEditTaskDates={onEditTaskDates}
+          onGanttNotice={onGanttNotice}
+          onPreviewReschedule={onPreviewReschedule}
           onSelectTask={onSelectTask}
           selectedTaskId={selectedTaskId}
           taskActionLoading={taskActionLoading}
           tasks={tasks}
+          workCalendar={workCalendar}
         />
       </div>
 

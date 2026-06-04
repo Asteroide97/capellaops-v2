@@ -2092,6 +2092,11 @@ textarea {
   gap: 0.75rem;
 }
 
+.pm-gantt-help-copy {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
 .pm-gantt-row-title {
   display: grid;
   gap: 0.45rem;
@@ -2102,6 +2107,14 @@ textarea {
   align-items: center;
   gap: 0.35rem;
   color: #92400e;
+  font-size: 0.82rem;
+}
+
+.pm-gantt-drag-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--info);
   font-size: 0.82rem;
 }
 
@@ -2136,6 +2149,20 @@ textarea {
   color: white;
   background: #6b7280;
   box-shadow: var(--shadow-sm);
+}
+
+.pm-gantt-task {
+  z-index: 1;
+}
+
+.pm-gantt-task.is-dragging {
+  opacity: 0.88;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.16), var(--shadow-md);
+}
+
+.pm-gantt-task.is-not-editable {
+  cursor: not-allowed;
+  opacity: 0.9;
 }
 
 .pm-gantt-bar.success {
@@ -2188,6 +2215,39 @@ textarea {
   font-weight: 700;
 }
 
+.pm-gantt-task-drag-surface {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.pm-gantt-task-drag-surface:active {
+  cursor: grabbing;
+}
+
+.pm-gantt-task-drag-surface.is-not-editable {
+  cursor: not-allowed;
+}
+
+.pm-gantt-resize-handle-right {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 0.9rem;
+  z-index: 3;
+  cursor: ew-resize;
+  touch-action: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.36);
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .pm-gantt-no-dates {
   position: absolute;
   inset: 0;
@@ -2196,6 +2256,24 @@ textarea {
   justify-content: center;
   color: var(--text-secondary);
   font-size: 0.82rem;
+}
+
+body.pm-is-dragging,
+body.pm-is-dragging * {
+  user-select: none;
+}
+
+body.pm-is-dragging {
+  cursor: grabbing;
+}
+
+.pm-gantt-row.is-dragging {
+  border-color: rgba(37, 99, 235, 0.24);
+  background: rgba(239, 246, 255, 0.94);
+}
+
+.pm-gantt-track.is-dragging {
+  cursor: grabbing;
 }
 
 .pm-task-detail-stack {
