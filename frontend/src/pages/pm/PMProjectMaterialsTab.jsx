@@ -181,8 +181,8 @@ export default function PMProjectMaterialsTab({
     setPlanModalOpen(true);
   }
 
-  function closePlanModal() {
-    if (saving) {
+  function closePlanModal(force = false) {
+    if (saving && !force) {
       return;
     }
     setEditingPlan(null);
@@ -201,8 +201,8 @@ export default function PMProjectMaterialsTab({
     setRequisitionModalOpen(true);
   }
 
-  function closeRequisitionModal() {
-    if (saving) {
+  function closeRequisitionModal(force = false) {
+    if (saving && !force) {
       return;
     }
     setRequisitionModalOpen(false);
@@ -230,8 +230,8 @@ export default function PMProjectMaterialsTab({
         await addPmProjectMaterialPlan({ projectId, token, empresaId, payload });
         setSuccess("Material planeado agregado.");
       }
-      closePlanModal();
       await loadMaterialsTab();
+      closePlanModal(true);
     } catch (requestError) {
       setError(requestError.message || "No se pudo guardar el material planeado.");
     } finally {
@@ -287,8 +287,8 @@ export default function PMProjectMaterialsTab({
         },
       });
       setSuccess(`Requisición ${safeDisplayText(response.folio)} creada como borrador.`);
-      closeRequisitionModal();
       await loadMaterialsTab();
+      closeRequisitionModal(true);
     } catch (requestError) {
       setError(requestError.message || "No se pudo crear la requisición del proyecto.");
     } finally {
@@ -504,6 +504,12 @@ export default function PMProjectMaterialsTab({
         subtitle="Material planeado para controlar cantidades y costo estimado del proyecto."
         title={editingPlan ? "Editar material planeado" : "Agregar material planeado"}
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo guardar el material</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-project-material-plan-form" onSubmit={handleSavePlan}>
           <SectionTitle subtitle="Busca por nombre, SKU o código de barras." title="Material" />
           <SearchInput
@@ -590,6 +596,12 @@ export default function PMProjectMaterialsTab({
         subtitle={`Solicitud de materiales para ${safeDisplayText(project?.nombre, "el proyecto activo")}.`}
         title="Crear requisición desde proyecto"
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo crear la requisición</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-project-material-requisition-form" onSubmit={handleCreateRequisition}>
           <FormGrid>
             <Field label="Almacen destino">

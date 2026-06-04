@@ -168,8 +168,8 @@ export default function PMProjectsPage() {
     setModalOpen(true);
   }
 
-  function closeModal() {
-    if (saving) {
+  function closeModal(force = false) {
+    if (saving && !force) {
       return;
     }
     setModalOpen(false);
@@ -197,8 +197,8 @@ export default function PMProjectsPage() {
         await createPmProject({ token, empresaId, payload });
         setSuccess("Proyecto creado.");
       }
-      closeModal();
       await loadProjects(filters);
+      closeModal(true);
     } catch (requestError) {
       setError(requestError.message || "No se pudo guardar el proyecto.");
     } finally {
@@ -412,6 +412,12 @@ export default function PMProjectsPage() {
         subtitle="Base operativa para proyectos, tareas, miembros y comentarios."
         title={editingProject ? "Editar proyecto" : "Nuevo proyecto"}
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo guardar el proyecto</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-project-form" onSubmit={handleSaveProject}>
           <FormGrid>
             <Field label="Nombre">

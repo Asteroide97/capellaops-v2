@@ -107,8 +107,8 @@ export default function PMProjectPortalTab({ empresaId, project, projectId, toke
     loadPortalData();
   }, [token, empresaId, projectId]);
 
-  function closeCreateModal() {
-    if (submitting) {
+  function closeCreateModal(force = false) {
+    if (submitting && !force) {
       return;
     }
     setCreateModalOpen(false);
@@ -154,8 +154,8 @@ export default function PMProjectPortalTab({ empresaId, project, projectId, toke
       const link = response.portal_url || `${window.location.origin}${response.portal_path}`;
       setGeneratedLink(link);
       setSuccess("Acceso externo creado.");
-      closeCreateModal();
       await loadPortalData({ background: true });
+      closeCreateModal(true);
     } catch (requestError) {
       setError(getErrorMessage(requestError, "No se pudo crear el acceso externo."));
     } finally {
@@ -361,6 +361,12 @@ export default function PMProjectPortalTab({ empresaId, project, projectId, toke
         subtitle="Comparte una vista pública limitada del proyecto."
         title="Crear acceso externo"
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo crear el acceso externo</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-portal-invite-form" onSubmit={handleCreateInvite}>
           <FormGrid>
             <Field label="Nombre">

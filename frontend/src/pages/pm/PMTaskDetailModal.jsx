@@ -293,7 +293,7 @@ export default function PMTaskDetailModal({
 
   async function syncTaskDependencies(nextTaskId) {
     if (!nextTaskId) {
-      return;
+      return false;
     }
 
     const activeDependencies = (dependencyContext?.dependencies ?? []).filter((dependency) => dependency.activo !== false);
@@ -301,6 +301,10 @@ export default function PMTaskDetailModal({
     const existingIds = new Set(activeDependencies.map((dependency) => dependency.depende_de_tarea_id));
     const dependenciesToCreate = [...selectedIds].filter((dependencyTaskId) => !existingIds.has(dependencyTaskId));
     const dependenciesToRemove = activeDependencies.filter((dependency) => !selectedIds.has(dependency.depende_de_tarea_id));
+
+    if (dependenciesToCreate.length === 0 && dependenciesToRemove.length === 0) {
+      return false;
+    }
 
     for (const dependencyTaskId of dependenciesToCreate) {
       await createPmTaskDependency({
@@ -320,10 +324,7 @@ export default function PMTaskDetailModal({
     for (const dependency of dependenciesToRemove) {
       await deactivatePmTaskDependency({ dependencyId: dependency.id, token, empresaId });
     }
-
-    const dependencyResponse = await getPmTaskDependencies({ taskId: nextTaskId, token, empresaId });
-    setDependencyContext(dependencyResponse ?? emptyDependencyContext);
-    syncSelectedPrerequisites(dependencyResponse ?? emptyDependencyContext);
+    return true;
   }
 
   async function reloadTask(nextTaskId = currentTaskId) {
@@ -351,25 +352,39 @@ export default function PMTaskDetailModal({
         ? await updatePmTask({ taskId: currentTaskId, token, empresaId, payload })
         : await createPmTask({ projectId, token, empresaId, payload });
       const nextTaskId = response?.id ?? currentTaskId;
-      if (response?.id) {
-        setTask(response);
-        setForm(taskToForm(response));
-      }
       await syncTaskDependencies(nextTaskId);
-      const nextTask = await refreshTaskContext(nextTaskId);
       const hasSelectedPrerequisites = selectedPrerequisiteIds.length > 0;
-      setSuccess(
+      const successMessage =
         currentTaskId
           ? hasSelectedPrerequisites
             ? "Tarea y prerrequisitos actualizados."
             : "Tarea actualizada."
           : hasSelectedPrerequisites
             ? "Tarea creada con prerrequisitos."
-            : "Tarea creada.",
-      );
-      onSaved?.(nextTask ?? response);
+            : "Tarea creada.";
+      const savedTask = {
+        ...(task ?? {}),
+        ...response,
+        id: nextTaskId,
+        titulo: payload.titulo,
+        descripcion: payload.descripcion,
+        estatus: payload.estatus,
+        prioridad: payload.prioridad,
+        asignado_user_id: payload.asignado_user_id,
+        asignado_nombre_snapshot: payload.asignado_nombre_snapshot,
+        fecha_inicio: payload.fecha_inicio,
+        fecha_vencimiento: payload.fecha_vencimiento,
+        estimacion_horas: payload.estimacion_horas,
+        porcentaje_avance: payload.porcentaje_avance,
+        orden: payload.orden,
+        bloqueada: payload.bloqueada,
+      };
+      onClose?.();
+      Promise.resolve(onSaved?.(savedTask, successMessage)).catch((backgroundError) => {
+        console.error("PM task background refresh failed", backgroundError);
+      });
     } catch (requestError) {
-      setError(getErrorMessage(requestError, "No se pudo guardar la tarea."));
+      setError(getErrorMessage(requestError, "No se pudo guardar la tarea. Revisa los datos e intenta de nuevo."));
     } finally {
       setSaving(false);
     }

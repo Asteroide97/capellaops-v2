@@ -142,8 +142,8 @@ export default function PMProjectTimeCostsTab({
     setTimeModalOpen(true);
   }
 
-  function closeTimeModal() {
-    if (saving) {
+  function closeTimeModal(force = false) {
+    if (saving && !force) {
       return;
     }
     setEditingTimeEntry(null);
@@ -173,9 +173,9 @@ export default function PMProjectTimeCostsTab({
         setSuccess("Horas registradas.");
       }
 
-      closeTimeModal();
       await loadTimeCostsTab();
       await onChanged?.();
+      closeTimeModal(true);
     } catch (requestError) {
       setError(requestError.message || "No se pudo guardar el registro de horas.");
     } finally {
@@ -329,6 +329,12 @@ export default function PMProjectTimeCostsTab({
         subtitle="Las horas guardan snapshot de la tarifa aplicada. Cambios posteriores de tarifa no alteran el histórico."
         title={editingTimeEntry ? "Editar registro de horas" : "Registrar horas"}
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo guardar el registro de horas</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-time-entry-form" onSubmit={handleSaveTimeEntry}>
           <SectionTitle subtitle="Proyecto, tarea y usuario responsable." title="Contexto del registro" />
           <FormGrid>

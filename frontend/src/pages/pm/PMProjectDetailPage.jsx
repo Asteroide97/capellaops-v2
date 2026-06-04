@@ -680,11 +680,14 @@ export default function PMProjectDetailPage() {
     });
   }
 
-  async function handleTaskSaved(savedTask) {
+  async function handleTaskSaved(savedTask, successMessage = "") {
     if (savedTask?.id) {
       setSelectedTaskId(savedTask.id);
       setSelectedTaskModalId(savedTask.id);
       upsertLocalTask(savedTask);
+    }
+    if (successMessage) {
+      setSuccess(successMessage);
     }
     await refreshPmWorkPlanLight({ background: true });
   }

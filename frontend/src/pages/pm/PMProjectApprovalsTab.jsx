@@ -100,16 +100,16 @@ export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
     loadApprovals();
   }, [token, empresaId, projectId]);
 
-  function closeCreateModal() {
-    if (submitting) {
+  function closeCreateModal(force = false) {
+    if (submitting && !force) {
       return;
     }
     setCreateModalOpen(false);
     setApprovalForm(defaultApprovalForm);
   }
 
-  function closeResolveModal() {
-    if (submitting) {
+  function closeResolveModal(force = false) {
+    if (submitting && !force) {
       return;
     }
     setResolveModalOpen(false);
@@ -136,8 +136,8 @@ export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
         },
       });
       setSuccess("Aprobación solicitada.");
-      closeCreateModal();
       await loadApprovals({ background: true });
+      closeCreateModal(true);
     } catch (requestError) {
       setError(getErrorMessage(requestError, "No se pudo crear la aprobación."));
     } finally {
@@ -169,8 +169,8 @@ export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
             ? "Aprobación rechazada."
             : "Solicitud cancelada.",
       );
-      closeResolveModal();
       await loadApprovals({ background: true });
+      closeResolveModal(true);
     } catch (requestError) {
       setError(getErrorMessage(requestError, "No se pudo resolver la aprobación."));
     } finally {
@@ -318,6 +318,12 @@ export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
         subtitle="Relaciona la aprobación con presupuesto, documento o tarea si aplica."
         title="Solicitar aprobación"
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo solicitar la aprobación</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-approval-create-form" onSubmit={handleCreateApproval}>
           <FormGrid>
             <Field label="Tipo">
@@ -412,6 +418,12 @@ export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
               : "Cancelar solicitud"
         }
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo completar la acción</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-approval-resolve-form" onSubmit={handleResolveApproval}>
           <Field label="Comentario">
             <textarea

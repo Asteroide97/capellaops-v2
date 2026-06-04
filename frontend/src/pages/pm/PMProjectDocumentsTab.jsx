@@ -105,16 +105,16 @@ export default function PMProjectDocumentsTab({ empresaId, projectId, token }) {
     setUploadForm(defaultUploadForm);
   }
 
-  function closeUploadModal() {
-    if (submitting) {
+  function closeUploadModal(force = false) {
+    if (submitting && !force) {
       return;
     }
     setUploadModalOpen(false);
     resetUploadForm();
   }
 
-  function closeEditModal() {
-    if (submitting) {
+  function closeEditModal(force = false) {
+    if (submitting && !force) {
       return;
     }
     setEditModalOpen(false);
@@ -139,8 +139,8 @@ export default function PMProjectDocumentsTab({ empresaId, projectId, token }) {
       formData.append("visible_externo", String(uploadForm.visible_externo));
       await uploadPmProjectDocument({ projectId, token, empresaId, formData });
       setSuccess("Documento cargado.");
-      closeUploadModal();
       await loadDocuments({ background: true });
+      closeUploadModal(true);
     } catch (requestError) {
       setError(getErrorMessage(requestError, "No se pudo subir el documento."));
     } finally {
@@ -169,8 +169,8 @@ export default function PMProjectDocumentsTab({ empresaId, projectId, token }) {
         },
       });
       setSuccess("Documento actualizado.");
-      closeEditModal();
       await loadDocuments({ background: true });
+      closeEditModal(true);
     } catch (requestError) {
       setError(getErrorMessage(requestError, "No se pudo actualizar el documento."));
     } finally {
@@ -341,6 +341,12 @@ export default function PMProjectDocumentsTab({ empresaId, projectId, token }) {
         subtitle="Visible para cliente mostrará el archivo en el portal externo."
         title="Subir documento"
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo subir el documento</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-document-upload-form" onSubmit={handleUploadDocument}>
           <FormGrid>
             <Field label="Archivo" span={2}>
@@ -416,6 +422,12 @@ export default function PMProjectDocumentsTab({ empresaId, projectId, token }) {
         subtitle="Actualiza la clasificación y visibilidad del documento."
         title="Editar documento"
       >
+        {error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo actualizar el documento</strong>
+            <p className="table-note">{error}</p>
+          </div>
+        ) : null}
         <form className="inventory-modal-form" id="pm-document-edit-form" onSubmit={handleUpdateDocument}>
           <FormGrid>
             <Field label="Nombre" span={2}>
