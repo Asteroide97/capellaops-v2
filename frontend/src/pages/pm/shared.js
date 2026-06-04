@@ -64,6 +64,32 @@ export const pmExternalAccessModeOptions = [
   { value: "comentario", label: "Puede comentar" },
 ];
 
+export const pmBaselineStatusOptions = [
+  { value: "activa", label: "Activa" },
+  { value: "archivada", label: "Archivada" },
+  { value: "sustituida", label: "Sustituida" },
+  { value: "cancelada", label: "Cancelada" },
+];
+
+export const pmChangeTypeOptions = [
+  { value: "fecha", label: "Fecha" },
+  { value: "alcance", label: "Alcance" },
+  { value: "presupuesto", label: "Presupuesto" },
+  { value: "partida", label: "Partida" },
+  { value: "tarea_critica", label: "Tarea crítica" },
+  { value: "documento", label: "Documento" },
+  { value: "otro", label: "Otro" },
+];
+
+export const pmChangeStatusOptions = [
+  { value: "borrador", label: "Borrador" },
+  { value: "pendiente_aprobacion", label: "Pendiente de aprobación" },
+  { value: "aprobado", label: "Aprobado" },
+  { value: "rechazado", label: "Rechazado" },
+  { value: "aplicado", label: "Aplicado" },
+  { value: "cancelado", label: "Cancelado" },
+];
+
 export const weekdayOptions = [
   { key: "lunes", label: "Lunes" },
   { key: "martes", label: "Martes" },
@@ -75,24 +101,24 @@ export const weekdayOptions = [
 ];
 
 const mojibakeFixups = [
-  ["\u00C3\u00A1", "á"],
-  ["\u00C3\u00A9", "é"],
-  ["\u00C3\u00AD", "í"],
-  ["\u00C3\u00B3", "ó"],
-  ["\u00C3\u00BA", "ú"],
-  ["\u00C3\u0081", "Á"],
-  ["\u00C3\u0089", "É"],
-  ["\u00C3\u008D", "Í"],
-  ["\u00C3\u0093", "Ó"],
-  ["\u00C3\u009A", "Ú"],
-  ["\u00C3\u00B1", "ñ"],
-  ["\u00C3\u0091", "Ñ"],
-  ["\u00C2\u00B7", "·"],
-  ["\u00C2", ""],
-  ["\u00E2\u20AC\u201D", "—"],
-  ["\u00E2\u20AC\u201C", "–"],
-  ["\u00E2\u2020\u2019", "→"],
-  ["\u00E2\u20AC\u00A6", "…"],
+  ["Ã¡", "á"],
+  ["Ã©", "é"],
+  ["Ã­", "í"],
+  ["Ã³", "ó"],
+  ["Ãº", "ú"],
+  ["Ã", "Á"],
+  ["Ã‰", "É"],
+  ["Ã", "Í"],
+  ["Ã“", "Ó"],
+  ["Ãš", "Ú"],
+  ["Ã±", "ñ"],
+  ["Ã‘", "Ñ"],
+  ["Â·", "·"],
+  ["Â", ""],
+  ["â€”", "—"],
+  ["â€“", "–"],
+  ["â†’", "→"],
+  ["â€¦", "…"],
 ];
 
 const pmVisualCopyFixups = [
@@ -106,10 +132,10 @@ const pmVisualCopyFixups = [
   [/gestion/g, "gestión"],
   [/Variacion/g, "Variación"],
   [/variacion/g, "variación"],
-  [/atencion/g, "atención"],
   [/Atencion/g, "Atención"],
-  [/proximos/g, "próximos"],
+  [/atencion/g, "atención"],
   [/Proximos/g, "Próximos"],
+  [/proximos/g, "próximos"],
 ];
 
 export function normalizePmCopy(value) {
@@ -124,28 +150,44 @@ export function normalizePmCopy(value) {
   );
 }
 
+function getOptionLabel(options, value, fallback) {
+  return options.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? fallback);
+}
+
 export function getProjectStatusLabel(value) {
-  return projectStatusOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Borrador");
+  return getOptionLabel(projectStatusOptions, value, "Borrador");
 }
 
 export function getTaskStatusLabel(value) {
-  return taskStatusOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Pendiente");
+  return getOptionLabel(taskStatusOptions, value, "Pendiente");
 }
 
 export function getPriorityLabel(value) {
-  return priorityOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Media");
+  return getOptionLabel(priorityOptions, value, "Media");
 }
 
 export function getDocumentTypeLabel(value) {
-  return pmDocumentTypeOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Documento");
+  return getOptionLabel(pmDocumentTypeOptions, value, "Documento");
 }
 
 export function getApprovalTypeLabel(value) {
-  return pmApprovalTypeOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Otro");
+  return getOptionLabel(pmApprovalTypeOptions, value, "Otro");
 }
 
 export function getExternalAccessModeLabel(value) {
-  return pmExternalAccessModeOptions.find((item) => item.value === value)?.label ?? normalizePmCopy(value ?? "Solo lectura");
+  return getOptionLabel(pmExternalAccessModeOptions, value, "Solo lectura");
+}
+
+export function getBaselineStatusLabel(value) {
+  return getOptionLabel(pmBaselineStatusOptions, value, "Activa");
+}
+
+export function getChangeTypeLabel(value) {
+  return getOptionLabel(pmChangeTypeOptions, value, "Otro");
+}
+
+export function getChangeStatusLabel(value) {
+  return getOptionLabel(pmChangeStatusOptions, value, "Borrador");
 }
 
 export function getProjectStatusTone(value) {
@@ -196,6 +238,37 @@ export function getApprovalStatusTone(value) {
   return "neutral";
 }
 
+export function getBaselineStatusTone(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "activa") {
+    return "success";
+  }
+  if (normalized === "sustituida") {
+    return "warning";
+  }
+  if (normalized === "archivada") {
+    return "neutral";
+  }
+  if (normalized === "cancelada") {
+    return "danger";
+  }
+  return "neutral";
+}
+
+export function getChangeStatusTone(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "aprobado" || normalized === "aplicado") {
+    return "success";
+  }
+  if (normalized === "pendiente_aprobacion") {
+    return "warning";
+  }
+  if (normalized === "rechazado" || normalized === "cancelado") {
+    return "danger";
+  }
+  return "neutral";
+}
+
 export function getPriorityTone(value) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized === "alta") {
@@ -240,6 +313,18 @@ export function getAlertTypeLabel(value) {
   }
   if (normalized === "presupuesto_sobrepasado") {
     return "Presupuesto sobrepasado";
+  }
+  if (normalized === "proyecto_desviado_fecha") {
+    return "Proyecto desviado en fecha";
+  }
+  if (normalized === "proyecto_desviado_costo") {
+    return "Proyecto desviado en costo";
+  }
+  if (normalized === "cambio_pendiente_aprobacion") {
+    return "Cambio pendiente de aprobación";
+  }
+  if (normalized === "tarea_critica_desviada") {
+    return "Tarea crítica desviada";
   }
   if (normalized === "sin_tarifa") {
     return "Sin tarifa";

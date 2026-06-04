@@ -70,6 +70,8 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     portal_access_logs = relationship("PMPortalAccessLog", back_populates="proyecto", cascade="all, delete-orphan")
     alerts = relationship("PMAlerta", back_populates="proyecto", cascade="all, delete-orphan")
     work_calendars = relationship("PMCalendarioLaboral", back_populates="proyecto", cascade="all, delete-orphan")
+    baselines = relationship("PMProyectoLineaBase", back_populates="proyecto", cascade="all, delete-orphan")
+    changes = relationship("PMCambioProyecto", back_populates="proyecto", cascade="all, delete-orphan")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="proyecto", cascade="all, delete-orphan")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
     time_entries = relationship("PMTimeEntry", back_populates="proyecto", cascade="all, delete-orphan")
@@ -734,6 +736,7 @@ class PMAprobacion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
 
     proyecto = relationship("PMProyecto", back_populates="approvals")
+    related_changes = relationship("PMCambioProyecto", back_populates="approval")
 
 
 class PMInvitadoExterno(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -820,3 +823,113 @@ class PMAlerta(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     proyecto = relationship("PMProyecto", back_populates="alerts")
     tarea = relationship("PMTarea", back_populates="alerts")
+
+
+class PMProyectoLineaBase(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_proyecto_lineas_base"
+    __table_args__ = (
+        Index("ix_pm_lineas_base_empresa_id", "empresa_id"),
+        Index("ix_pm_lineas_base_proyecto_id", "proyecto_id"),
+        Index("ix_pm_lineas_base_estatus", "estatus"),
+        Index("ix_pm_lineas_base_principal", "es_principal"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    estatus: Mapped[str] = mapped_column(String(20), nullable=False, default="activa", server_default="activa")
+    es_principal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    fecha_inicio_base: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    fecha_fin_base: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    duracion_dias_base: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    presupuesto_base: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    costo_estimado_base: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    precio_venta_base: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    margen_base: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    porcentaje_avance_base: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    ruta_critica_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snapshot_json: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="baselines")
+    task_snapshots = relationship(
+        "PMProyectoLineaBaseTarea",
+        back_populates="linea_base",
+        cascade="all, delete-orphan",
+        order_by="PMProyectoLineaBaseTarea.orden_base.asc()",
+    )
+    changes = relationship("PMCambioProyecto", back_populates="linea_base")
+
+
+class PMProyectoLineaBaseTarea(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "pm_proyecto_linea_base_tareas"
+    __table_args__ = (
+        Index("ix_pm_linea_base_tareas_empresa_id", "empresa_id"),
+        Index("ix_pm_linea_base_tareas_linea_base_id", "linea_base_id"),
+        Index("ix_pm_linea_base_tareas_proyecto_id", "proyecto_id"),
+        Index("ix_pm_linea_base_tareas_tarea_id", "tarea_id"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    linea_base_id: Mapped[str] = mapped_column(ForeignKey("pm_proyecto_lineas_base.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id"), nullable=True, index=True)
+    tarea_titulo_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
+    tarea_codigo_snapshot: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    estatus_base: Mapped[str] = mapped_column(String(20), nullable=False, default="pendiente", server_default="pendiente")
+    prioridad_base: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    fecha_inicio_base: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    fecha_fin_base: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    duracion_dias_base: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    porcentaje_avance_base: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    estimacion_horas_base: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False, default=0, server_default="0")
+    es_critica_base: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    orden_base: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    activo_base: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    linea_base = relationship("PMProyectoLineaBase", back_populates="task_snapshots")
+    proyecto = relationship("PMProyecto")
+
+
+class PMCambioProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_cambios_proyecto"
+    __table_args__ = (
+        Index("ix_pm_cambios_empresa_id", "empresa_id"),
+        Index("ix_pm_cambios_proyecto_id", "proyecto_id"),
+        Index("ix_pm_cambios_linea_base_id", "linea_base_id"),
+        Index("ix_pm_cambios_tipo", "tipo_cambio"),
+        Index("ix_pm_cambios_estatus", "estatus"),
+        Index("ix_pm_cambios_aprobacion_id", "aprobacion_id"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    linea_base_id: Mapped[str | None] = mapped_column(ForeignKey("pm_proyecto_lineas_base.id"), nullable=True, index=True)
+    tipo_cambio: Mapped[str] = mapped_column(String(40), nullable=False, default="otro", server_default="otro")
+    titulo: Mapped[str] = mapped_column(String(180), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    motivo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    estatus: Mapped[str] = mapped_column(String(30), nullable=False, default="borrador", server_default="borrador")
+    requiere_aprobacion: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    aprobacion_id: Mapped[str | None] = mapped_column(ForeignKey("pm_aprobaciones.id"), nullable=True, index=True)
+    entidad_tipo: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    entidad_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    antes_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    despues_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    impacto_dias: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    impacto_costo: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    impacto_venta: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    solicitado_por: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    solicitado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    aprobado_por: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    aprobado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    aplicado_por: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    aplicado_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+
+    proyecto = relationship("PMProyecto", back_populates="changes")
+    linea_base = relationship("PMProyectoLineaBase", back_populates="changes")
+    approval = relationship("PMAprobacion", back_populates="related_changes")

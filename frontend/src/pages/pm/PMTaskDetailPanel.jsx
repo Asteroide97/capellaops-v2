@@ -67,6 +67,7 @@ function formatTaskTitleList(items = []) {
 }
 
 export default function PMTaskDetailPanel({
+  baselineTaskComparison,
   empresaId,
   materialConsumptions,
   materialPlans,
@@ -461,6 +462,40 @@ export default function PMTaskDetailPanel({
                 <strong>{formatNumber(task.estimacion_horas ?? 0)}</strong>
               </div>
             </div>
+
+            {baselineTaskComparison ? (
+              <div className="pm-task-baseline-panel">
+                <div className="pm-detail-block-header">
+                  <Route size={16} strokeWidth={1.9} />
+                  <strong>Línea base</strong>
+                </div>
+                <div className="pm-task-schedule-grid">
+                  <div>
+                    <span>Fecha base</span>
+                    <strong>
+                      {safeDisplayText(formatDate(baselineTaskComparison.fecha_inicio_base), "—")}
+                      {" -> "}
+                      {safeDisplayText(formatDate(baselineTaskComparison.fecha_fin_base), "—")}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Fecha actual</span>
+                    <strong>
+                      {safeDisplayText(formatDate(baselineTaskComparison.fecha_inicio_actual), "—")}
+                      {" -> "}
+                      {safeDisplayText(formatDate(baselineTaskComparison.fecha_fin_actual), "—")}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Desviación</span>
+                    <strong>
+                      {Number(baselineTaskComparison.desviacion_dias_fin ?? 0) > 0 ? "+" : ""}
+                      {formatNumber(baselineTaskComparison.desviacion_dias_fin ?? 0)} días
+                    </strong>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="inventory-form-note">
               <strong>Descripción</strong>

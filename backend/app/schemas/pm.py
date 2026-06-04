@@ -443,6 +443,190 @@ class PMDocumentoOut(BaseModel):
     updated_at: datetime
 
 
+class PMLineaBaseCreate(BaseModel):
+    nombre: str = Field(min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=4000)
+    es_principal: bool = True
+
+
+class PMLineaBaseTareaOut(BaseModel):
+    id: str
+    empresa_id: str
+    linea_base_id: str
+    proyecto_id: str
+    tarea_id: str | None = None
+    tarea_titulo_snapshot: str
+    tarea_codigo_snapshot: str | None = None
+    estatus_base: str
+    prioridad_base: str | None = None
+    fecha_inicio_base: date | None = None
+    fecha_fin_base: date | None = None
+    duracion_dias_base: int | None = None
+    porcentaje_avance_base: Decimal = Decimal("0")
+    estimacion_horas_base: Decimal = Decimal("0")
+    es_critica_base: bool = False
+    orden_base: int = 0
+    activo_base: bool = True
+    created_at: datetime
+
+
+class PMLineaBaseOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    nombre: str
+    descripcion: str | None = None
+    version: int = 1
+    estatus: str
+    es_principal: bool = False
+    fecha_inicio_base: date | None = None
+    fecha_fin_base: date | None = None
+    duracion_dias_base: int | None = None
+    presupuesto_base: Decimal = Decimal("0")
+    costo_estimado_base: Decimal = Decimal("0")
+    precio_venta_base: Decimal = Decimal("0")
+    margen_base: Decimal = Decimal("0")
+    porcentaje_avance_base: Decimal = Decimal("0")
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMLineaBaseDetailOut(PMLineaBaseOut):
+    ruta_critica_json: dict | list | str | None = None
+    snapshot_json: dict | list | str | None = None
+    tasks: list[PMLineaBaseTareaOut] = Field(default_factory=list)
+
+
+class PMBaselineTaskComparisonOut(BaseModel):
+    task_id: str | None = None
+    tarea_titulo: str
+    fecha_inicio_base: date | None = None
+    fecha_inicio_actual: date | None = None
+    fecha_fin_base: date | None = None
+    fecha_fin_actual: date | None = None
+    duracion_dias_base: int | None = None
+    duracion_dias_actual: int | None = None
+    desviacion_dias_fin: int = 0
+    estatus_base: str | None = None
+    estatus_actual: str | None = None
+    porcentaje_avance_base: Decimal = Decimal("0")
+    porcentaje_avance_actual: Decimal = Decimal("0")
+    es_critica_base: bool = False
+    es_critica_actual: bool = False
+    activo_base: bool = True
+    activo_actual: bool = True
+    added_after_baseline: bool = False
+    removed_after_baseline: bool = False
+    changed_fields: list[str] = Field(default_factory=list)
+    cambio_detectado: str = ""
+
+
+class PMBaselineDeviationOut(BaseModel):
+    baseline_id: str
+    baseline_name: str
+    fecha_inicio_base: date | None = None
+    fecha_inicio_actual: date | None = None
+    fecha_fin_base: date | None = None
+    fecha_fin_actual: date | None = None
+    duracion_dias_base: int | None = None
+    duracion_dias_actual: int | None = None
+    desviacion_fecha_fin_dias: int = 0
+    desviacion_duracion_dias: int = 0
+    presupuesto_base: Decimal = Decimal("0")
+    presupuesto_actual: Decimal = Decimal("0")
+    costo_real_actual: Decimal = Decimal("0")
+    desviacion_costo: Decimal = Decimal("0")
+    desviacion_presupuesto: Decimal = Decimal("0")
+    porcentaje_desviacion_costo: Decimal = Decimal("0")
+    total_tareas_base: int = 0
+    total_tareas_actual: int = 0
+    tareas_agregadas_count: int = 0
+    tareas_eliminadas_count: int = 0
+    tareas_desviadas_count: int = 0
+    tareas_criticas_desviadas_count: int = 0
+    cambios_pendientes_count: int = 0
+
+
+class PMBaselineVsActualOut(BaseModel):
+    baseline: PMLineaBaseOut
+    deviation: PMBaselineDeviationOut
+    task_changes: list[PMBaselineTaskComparisonOut] = Field(default_factory=list)
+
+
+class PMCambioProyectoCreate(BaseModel):
+    linea_base_id: str | None = None
+    tipo_cambio: str = Field(default="otro", min_length=3, max_length=40)
+    titulo: str = Field(min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=4000)
+    motivo: str | None = Field(default=None, max_length=4000)
+    requiere_aprobacion: bool = False
+    entidad_tipo: str | None = Field(default=None, max_length=40)
+    entidad_id: str | None = Field(default=None, max_length=36)
+    antes_json: dict | list | str | None = None
+    despues_json: dict | list | str | None = None
+    impacto_dias: int = 0
+    impacto_costo: Decimal = Field(default=Decimal("0"))
+    impacto_venta: Decimal = Field(default=Decimal("0"))
+
+
+class PMCambioProyectoUpdate(BaseModel):
+    linea_base_id: str | None = None
+    tipo_cambio: str | None = Field(default=None, min_length=3, max_length=40)
+    titulo: str | None = Field(default=None, min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=4000)
+    motivo: str | None = Field(default=None, max_length=4000)
+    requiere_aprobacion: bool | None = None
+    entidad_tipo: str | None = Field(default=None, max_length=40)
+    entidad_id: str | None = Field(default=None, max_length=36)
+    antes_json: dict | list | str | None = None
+    despues_json: dict | list | str | None = None
+    impacto_dias: int | None = None
+    impacto_costo: Decimal | None = None
+    impacto_venta: Decimal | None = None
+
+
+class PMCambioProyectoSubmitRequest(BaseModel):
+    comentario: str | None = Field(default=None, max_length=2000)
+
+
+class PMCambioProyectoApplyRequest(BaseModel):
+    apply_dependents: bool = False
+    comentario: str | None = Field(default=None, max_length=2000)
+
+
+class PMCambioProyectoOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    linea_base_id: str | None = None
+    tipo_cambio: str
+    titulo: str
+    descripcion: str | None = None
+    motivo: str | None = None
+    estatus: str
+    requiere_aprobacion: bool = False
+    aprobacion_id: str | None = None
+    aprobacion_estatus: str | None = None
+    aprobacion_titulo: str | None = None
+    entidad_tipo: str | None = None
+    entidad_id: str | None = None
+    antes_json: dict | list | str | None = None
+    despues_json: dict | list | str | None = None
+    impacto_dias: int = 0
+    impacto_costo: Decimal = Decimal("0")
+    impacto_venta: Decimal = Decimal("0")
+    solicitado_por: str | None = None
+    solicitado_at: datetime | None = None
+    aprobado_por: str | None = None
+    aprobado_at: datetime | None = None
+    aplicado_por: str | None = None
+    aplicado_at: datetime | None = None
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PMAprobacionCreate(BaseModel):
     tipo_aprobacion: str = Field(default="otro", min_length=3, max_length=40)
     titulo: str = Field(min_length=1, max_length=180)

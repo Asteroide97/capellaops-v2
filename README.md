@@ -985,6 +985,60 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Línea base de cronograma
 - Integración Google Calendar / Outlook Calendar
 
+## PM Fase 8 - Línea base, control de cambios y desviaciones
+
+- El Project Workspace ya soporta una vista de línea base para comparar el plan aprobado contra el estado actual del proyecto.
+- La línea base guarda una foto operativa del proyecto con:
+  - tareas
+  - fechas
+  - duración
+  - avance
+  - presupuesto y costo resumido
+  - ruta crítica disponible al momento de crearla
+- El comparativo ya muestra:
+  - fecha fin base vs actual
+  - desviación en días
+  - presupuesto base vs costo real actual
+  - tareas agregadas
+  - tareas eliminadas o desactivadas
+  - tareas desviadas
+  - tareas críticas desviadas
+- El control de cambios ya permite:
+  - registrar cambios en borrador
+  - enviarlos a aprobación
+  - aprobar o rechazar
+  - aplicar cambios de fecha sobre tareas cuando el cambio está aprobado o no requiere aprobación
+- El backend ahora expone:
+  - `GET /pm/projects/{project_id}/baselines`
+  - `POST /pm/projects/{project_id}/baselines`
+  - `GET /pm/baselines/{baseline_id}`
+  - `POST /pm/baselines/{baseline_id}/set-main`
+  - `POST /pm/baselines/{baseline_id}/archive`
+  - `GET /pm/projects/{project_id}/baseline-vs-actual`
+  - `GET /pm/projects/{project_id}/changes`
+  - `POST /pm/projects/{project_id}/changes`
+  - `GET /pm/changes/{change_id}`
+  - `PUT /pm/changes/{change_id}`
+  - `POST /pm/changes/{change_id}/submit`
+  - `POST /pm/changes/{change_id}/approve`
+  - `POST /pm/changes/{change_id}/reject`
+  - `POST /pm/changes/{change_id}/cancel`
+  - `POST /pm/changes/{change_id}/apply`
+- Las alertas PM ahora también consideran:
+  - proyecto desviado contra línea base
+  - costo real por encima de la línea base
+  - cambios pendientes de aprobación
+  - tareas críticas desviadas
+
+### Pendientes de PM Fase 8
+
+- Múltiples líneas base avanzadas con flujos más finos de sustitución
+- Integración con estados de pago
+- Firma electrónica
+- Auditoría avanzada de cambios
+- Reportes ejecutivos
+- Visualización de línea base sobre el Gantt
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.

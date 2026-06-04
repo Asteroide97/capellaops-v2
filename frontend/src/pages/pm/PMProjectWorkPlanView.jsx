@@ -105,6 +105,7 @@ function isTaskActionPending(taskActionLoading, taskId, action) {
 export default function PMProjectWorkPlanView({
   alerts = [],
   alertActionLoading = {},
+  baselineComparison = null,
   empresaId,
   materialConsumptions,
   materialPlans,
@@ -147,6 +148,13 @@ export default function PMProjectWorkPlanView({
   }, {});
 
   const outOfSequenceTasks = tasks.filter((task) => task?.schedule_suggestion?.fuera_de_secuencia);
+  const baselineTaskComparisonMap = (baselineComparison?.task_changes ?? []).reduce((accumulator, item) => {
+    if (item?.task_id) {
+      accumulator[item.task_id] = item;
+    }
+    return accumulator;
+  }, {});
+  const hasBaselineComparison = Boolean(baselineComparison?.baseline?.id);
 
   const headerActions = (
     <>
@@ -245,6 +253,15 @@ export default function PMProjectWorkPlanView({
         />
       </section>
 
+      {hasBaselineComparison ? (
+        <div className="inventory-form-note">
+          <strong>Comparado con línea base</strong>
+          <p className="table-note">
+            El plan actual se compara contra {safeDisplayText(baselineComparison?.baseline?.nombre, "la línea base principal")} para detectar desviaciones.
+          </p>
+        </div>
+      ) : null}
+
       <div className="inventory-content-grid inventory-content-grid-2">
         <DataCard
           actions={(
@@ -322,6 +339,7 @@ export default function PMProjectWorkPlanView({
 
             {tasks.map((task) => {
               const taskMetrics = taskTimeMetrics[task.id] ?? { horas: 0, costo: 0 };
+              const baselineTaskComparison = baselineTaskComparisonMap[task.id] ?? null;
               const selected = selectedTaskId === task.id;
               const dependencyState = taskDependencyContextMap?.[task.id] ?? task.dependency_state ?? null;
               const blocked = Boolean(dependencyState?.is_blocked ?? dependencyState?.blocked ?? task.is_blocked);
@@ -383,7 +401,17 @@ export default function PMProjectWorkPlanView({
                   <span>
                     <div className="pm-workplan-planning-stack">
                       <div className="pm-workplan-planning-badges">{planningDetail.badges}</div>
+                      {baselineTaskComparison?.has_change ? (
+                        <div className="pm-workplan-planning-badges">
+                          <StatusBadge tone="warning">Desviada</StatusBadge>
+                        </div>
+                      ) : null}
                       <div className="pm-workplan-planning-copy">{planningDetail.note}</div>
+                      {baselineTaskComparison?.has_change && Number(baselineTaskComparison?.desviacion_dias_fin ?? 0) !== 0 ? (
+                        <div className="pm-workplan-planning-copy">
+                          Fin actual {baselineTaskComparison.desviacion_dias_fin > 0 ? "+" : ""}{formatNumber(baselineTaskComparison.desviacion_dias_fin)} días vs línea base
+                        </div>
+                      ) : null}
                     </div>
                   </span>
 
@@ -503,6 +531,7 @@ export default function PMProjectWorkPlanView({
         onSelectTask={onSelectTask}
         projectId={projectId}
         taskActionLoading={taskActionLoading}
+        baselineTaskComparison={selectedTaskId ? baselineTaskComparisonMap?.[selectedTaskId] ?? null : null}
         taskDependencyContext={selectedTaskId ? taskDependencyContextMap?.[selectedTaskId] ?? null : null}
         taskId={selectedTaskId}
         taskSummary={tasks.find((task) => task.id === selectedTaskId) ?? null}

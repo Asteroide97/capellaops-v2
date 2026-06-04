@@ -8,6 +8,7 @@ import {
   Clock3,
   Eye,
   FileText,
+  Flag,
   FolderKanban,
   Gauge,
   Link2,
@@ -65,6 +66,7 @@ import PMProjectTimeCostsTab from "./PMProjectTimeCostsTab";
 import PMProjectWorkPlanView from "./PMProjectWorkPlanView";
 import PMProjectDocumentsTab from "./PMProjectDocumentsTab";
 import PMProjectApprovalsTab from "./PMProjectApprovalsTab";
+import PMProjectBaselineTab from "./PMProjectBaselineTab";
 import PMProjectPortalTab from "./PMProjectPortalTab";
 import PMRescheduleImpactModal from "./PMRescheduleImpactModal";
 import PMTaskDetailModal from "./PMTaskDetailModal";
@@ -88,6 +90,7 @@ const projectViews = [
   { key: "general", label: "Vista general", icon: Gauge },
   { key: "plan", label: "Plan de trabajo", icon: CheckSquare },
   { key: "kanban", label: "Kanban", icon: FolderKanban },
+  { key: "baseline", label: "Línea base", icon: Flag },
   { key: "presupuesto", label: "Presupuesto", icon: BadgeDollarSign },
   { key: "materiales", label: "Materiales", icon: PackageOpen },
   { key: "costos", label: "Tiempo y costos", icon: Clock3 },
@@ -243,6 +246,7 @@ export default function PMProjectDetailPage() {
   const [projectMaterials, setProjectMaterials] = useState(null);
   const [projectPlanning, setProjectPlanning] = useState(null);
   const [projectAlerts, setProjectAlerts] = useState([]);
+  const [baselineComparison, setBaselineComparison] = useState(null);
   const [projectDependencies, setProjectDependencies] = useState([]);
   const [members, setMembers] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -264,6 +268,7 @@ export default function PMProjectDetailPage() {
   const [memberForm, setMemberForm] = useState(defaultMemberForm);
   const [commentBody, setCommentBody] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [baselineReloadToken, setBaselineReloadToken] = useState(0);
 
   function setTaskLoading(taskId, action, isLoading) {
     const key = getTaskActionKey(taskId, action);
@@ -953,6 +958,10 @@ export default function PMProjectDetailPage() {
       refreshPmWorkPlanLight({ background: true });
       return;
     }
+    if (activeView === "baseline") {
+      setBaselineReloadToken((current) => current + 1);
+      return;
+    }
     loadProjectBundle({ background: true });
   }
 
@@ -1299,6 +1308,7 @@ export default function PMProjectDetailPage() {
         <PMProjectWorkPlanView
           alertActionLoading={alertActionLoading}
           alerts={projectAlerts}
+          baselineComparison={baselineComparison}
           empresaId={empresaId}
           materialConsumptions={projectMaterials?.consumptions ?? []}
           materialPlans={projectMaterials?.plans ?? []}
@@ -1328,6 +1338,19 @@ export default function PMProjectDetailPage() {
           timeEntries={projectTimeEntries}
           token={token}
           workCalendar={workCalendar}
+        />
+      ) : null}
+
+      {activeView === "baseline" ? (
+        <PMProjectBaselineTab
+          empresaId={empresaId}
+          onComparisonLoaded={setBaselineComparison}
+          onOpenApprovals={() => setActiveView("aprobaciones")}
+          onPlanningChanged={() => refreshPmWorkPlanLight({ background: true })}
+          projectId={id}
+          reloadToken={baselineReloadToken}
+          tasks={resolvedTasks}
+          token={token}
         />
       ) : null}
 

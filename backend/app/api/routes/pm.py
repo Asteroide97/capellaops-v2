@@ -13,10 +13,16 @@ from app.schemas.pm import (
     PMApplyScheduleOut,
     PMAlertOut,
     PMAlertResolveRequest,
-    PMBudgetVsActualOut,
     PMAprobacionCreate,
     PMAprobacionOut,
     PMAprobacionResolve,
+    PMBaselineVsActualOut,
+    PMBudgetVsActualOut,
+    PMCambioProyectoApplyRequest,
+    PMCambioProyectoCreate,
+    PMCambioProyectoOut,
+    PMCambioProyectoSubmitRequest,
+    PMCambioProyectoUpdate,
     PMChecklistItemCreate,
     PMChecklistItemOut,
     PMChecklistItemUpdate,
@@ -29,6 +35,9 @@ from app.schemas.pm import (
     PMInvitadoExternoCreate,
     PMInvitadoExternoCreatedOut,
     PMInvitadoExternoOut,
+    PMLineaBaseCreate,
+    PMLineaBaseDetailOut,
+    PMLineaBaseOut,
     PMPortalAccessLogOut,
     PMPortalCommentCreate,
     PMPortalCommentOut,
@@ -99,12 +108,17 @@ from app.services.pm import (
     add_budget_item_material,
     add_project_member,
     add_project_material_plan,
+    apply_project_change,
     approve_project_budget,
+    approve_project_change,
     cancel_project_budget,
+    cancel_project_change,
     cancel_project_approval,
     create_task_dependency,
     create_external_invite,
+    create_project_baseline,
     create_budget_item,
+    create_project_change,
     create_portal_comment,
     create_project_budget,
     create_project_approval,
@@ -136,16 +150,21 @@ from app.services.pm import (
     get_pm_context,
     get_pm_dashboard,
     get_portal_project,
+    get_project_baseline,
+    get_project_baseline_vs_actual,
     get_project_critical_path,
     get_project_planning,
     get_project_budget,
     get_project_budget_vs_actual,
+    get_project_change,
     get_project,
     get_project_costs,
     get_task,
     get_task_dependencies,
     list_project_approvals,
     list_project_alerts,
+    list_project_baselines,
+    list_project_changes,
     list_project_documents,
     list_project_external_invites,
     list_project_portal_access_logs,
@@ -160,6 +179,7 @@ from app.services.pm import (
     regenerate_external_invite,
     refresh_project_planning,
     refresh_project_total_costs,
+    reject_project_change,
     resolve_pm_alert,
     serialize_pm_config,
     approve_project_approval,
@@ -174,6 +194,7 @@ from app.services.pm import (
     update_budget_item_labor,
     update_budget_item_material,
     update_project_budget,
+    update_project_change,
     update_project_time_entry,
     update_checklist_item,
     update_project,
@@ -184,6 +205,9 @@ from app.services.pm import (
     update_task,
     update_project_work_calendar,
     update_user_hourly_rate,
+    set_project_baseline_as_main,
+    archive_project_baseline,
+    submit_project_change,
 )
 from app.schemas.procurement import RequisitionResponse
 from app.services.storage import StorageConfigurationError
@@ -1326,6 +1350,100 @@ def refresh_project_planning_endpoint(
     )
 
 
+@router.get("/projects/{project_id}/baselines", response_model=list[PMLineaBaseOut])
+def list_project_baselines_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMLineaBaseOut]:
+    return list_project_baselines(db, pm_context, project_id=project_id)
+
+
+@router.post("/projects/{project_id}/baselines", response_model=PMLineaBaseDetailOut, status_code=status.HTTP_201_CREATED)
+def create_project_baseline_endpoint(
+    project_id: str,
+    payload: PMLineaBaseCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMLineaBaseDetailOut:
+    return run_pm_write(
+        db,
+        "create_project_baseline",
+        lambda: create_project_baseline(
+            db,
+            pm_context,
+            project_id=project_id,
+            nombre=payload.nombre,
+            descripcion=payload.descripcion,
+            es_principal=payload.es_principal,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/baselines/{baseline_id}", response_model=PMLineaBaseDetailOut)
+def get_project_baseline_endpoint(
+    baseline_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMLineaBaseDetailOut:
+    return get_project_baseline(db, pm_context, baseline_id=baseline_id)
+
+
+@router.post("/baselines/{baseline_id}/set-main", response_model=PMLineaBaseOut)
+def set_project_baseline_as_main_endpoint(
+    baseline_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMLineaBaseOut:
+    return run_pm_write(
+        db,
+        "set_project_baseline_as_main",
+        lambda: set_project_baseline_as_main(
+            db,
+            pm_context,
+            baseline_id=baseline_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/baselines/{baseline_id}/archive", response_model=PMLineaBaseOut)
+def archive_project_baseline_endpoint(
+    baseline_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMLineaBaseOut:
+    return run_pm_write(
+        db,
+        "archive_project_baseline",
+        lambda: archive_project_baseline(
+            db,
+            pm_context,
+            baseline_id=baseline_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/baseline-vs-actual", response_model=PMBaselineVsActualOut)
+def get_project_baseline_vs_actual_endpoint(
+    project_id: str,
+    baseline_id: str | None = None,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMBaselineVsActualOut:
+    return get_project_baseline_vs_actual(
+        db,
+        pm_context,
+        project_id=project_id,
+        baseline_id=baseline_id,
+    )
+
+
 @router.get("/projects/{project_id}/tasks/{task_id}/reschedule-impact", response_model=PMRescheduleImpactOut)
 def get_task_reschedule_impact_endpoint(
     project_id: str,
@@ -1853,6 +1971,202 @@ def deactivate_project_document_endpoint(
             db,
             pm_context,
             document_id=document_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/changes", response_model=list[PMCambioProyectoOut])
+def list_project_changes_endpoint(
+    project_id: str,
+    estatus: str | None = None,
+    tipo_cambio: str | None = None,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMCambioProyectoOut]:
+    return list_project_changes(
+        db,
+        pm_context,
+        project_id=project_id,
+        estatus=estatus,
+        tipo_cambio=tipo_cambio,
+    )
+
+
+@router.post("/projects/{project_id}/changes", response_model=PMCambioProyectoOut, status_code=status.HTTP_201_CREATED)
+def create_project_change_endpoint(
+    project_id: str,
+    payload: PMCambioProyectoCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCambioProyectoOut:
+    return run_pm_write(
+        db,
+        "create_project_change",
+        lambda: create_project_change(
+            db,
+            pm_context,
+            project_id=project_id,
+            linea_base_id=payload.linea_base_id,
+            tipo_cambio=payload.tipo_cambio,
+            titulo=payload.titulo,
+            descripcion=payload.descripcion,
+            motivo=payload.motivo,
+            requiere_aprobacion=payload.requiere_aprobacion,
+            entidad_tipo=payload.entidad_tipo,
+            entidad_id=payload.entidad_id,
+            antes_json=payload.antes_json,
+            despues_json=payload.despues_json,
+            impacto_dias=payload.impacto_dias,
+            impacto_costo=payload.impacto_costo,
+            impacto_venta=payload.impacto_venta,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/changes/{change_id}", response_model=PMCambioProyectoOut)
+def get_project_change_endpoint(
+    change_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCambioProyectoOut:
+    return get_project_change(db, pm_context, change_id=change_id)
+
+
+@router.put("/changes/{change_id}", response_model=PMCambioProyectoOut)
+def update_project_change_endpoint(
+    change_id: str,
+    payload: PMCambioProyectoUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCambioProyectoOut:
+    return run_pm_write(
+        db,
+        "update_project_change",
+        lambda: update_project_change(
+            db,
+            pm_context,
+            change_id=change_id,
+            linea_base_id=payload.linea_base_id,
+            tipo_cambio=payload.tipo_cambio,
+            titulo=payload.titulo,
+            descripcion=payload.descripcion,
+            motivo=payload.motivo,
+            requiere_aprobacion=payload.requiere_aprobacion,
+            entidad_tipo=payload.entidad_tipo,
+            entidad_id=payload.entidad_id,
+            antes_json=payload.antes_json,
+            despues_json=payload.despues_json,
+            impacto_dias=payload.impacto_dias,
+            impacto_costo=payload.impacto_costo,
+            impacto_venta=payload.impacto_venta,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/changes/{change_id}/submit", response_model=PMCambioProyectoOut)
+def submit_project_change_endpoint(
+    change_id: str,
+    payload: PMCambioProyectoSubmitRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCambioProyectoOut:
+    return run_pm_write(
+        db,
+        "submit_project_change",
+        lambda: submit_project_change(
+            db,
+            pm_context,
+            change_id=change_id,
+            comment=payload.comentario,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/changes/{change_id}/approve", response_model=PMCambioProyectoOut)
+def approve_project_change_endpoint(
+    change_id: str,
+    payload: PMAprobacionResolve,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCambioProyectoOut:
+    return run_pm_write(
+        db,
+        "approve_project_change",
+        lambda: approve_project_change(
+            db,
+            pm_context,
+            change_id=change_id,
+            comment=payload.comentario_resolucion,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/changes/{change_id}/reject", response_model=PMCambioProyectoOut)
+def reject_project_change_endpoint(
+    change_id: str,
+    payload: PMAprobacionResolve,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCambioProyectoOut:
+    return run_pm_write(
+        db,
+        "reject_project_change",
+        lambda: reject_project_change(
+            db,
+            pm_context,
+            change_id=change_id,
+            comment=payload.comentario_resolucion,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/changes/{change_id}/cancel", response_model=PMCambioProyectoOut)
+def cancel_project_change_endpoint(
+    change_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCambioProyectoOut:
+    return run_pm_write(
+        db,
+        "cancel_project_change",
+        lambda: cancel_project_change(
+            db,
+            pm_context,
+            change_id=change_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/changes/{change_id}/apply", response_model=PMCambioProyectoOut)
+def apply_project_change_endpoint(
+    change_id: str,
+    payload: PMCambioProyectoApplyRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMCambioProyectoOut:
+    return run_pm_write(
+        db,
+        "apply_project_change",
+        lambda: apply_project_change(
+            db,
+            pm_context,
+            change_id=change_id,
+            apply_dependents=payload.apply_dependents,
+            comment=payload.comentario,
             ip_address=request.client.host if request.client else None,
         ),
     )

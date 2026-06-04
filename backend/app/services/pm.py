@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
+import json
 import math
 import secrets
 
@@ -17,6 +18,7 @@ from app.models.pm import (
     EmpresaPMConfig,
     PMAprobacion,
     PMAlerta,
+    PMCambioProyecto,
     PMCalendarioLaboral,
     PMChecklistItem,
     PMComentario,
@@ -28,6 +30,8 @@ from app.models.pm import (
     PMPresupuestoPartida,
     PMPresupuestoPartidaManoObra,
     PMPresupuestoPartidaMaterial,
+    PMProyectoLineaBase,
+    PMProyectoLineaBaseTarea,
     PMProyectoCostoResumen,
     PMProyectoMaterialConsumo,
     PMProyectoMaterialPlan,
@@ -42,10 +46,14 @@ from app.models.pm import (
 )
 from app.schemas.pm import (
     PMApplyScheduleOut,
-    PMBudgetVsActualOut,
     PMAprobacionOut,
     PMAlertOut,
     PMAlertResolveRequest,
+    PMBaselineDeviationOut,
+    PMBaselineTaskComparisonOut,
+    PMBaselineVsActualOut,
+    PMBudgetVsActualOut,
+    PMCambioProyectoOut,
     PMCommentOut,
     PMChecklistItemOut,
     PMConfigOut,
@@ -58,6 +66,9 @@ from app.schemas.pm import (
     PMCriticalPathTaskOut,
     PMCreateProjectRequisitionRequest,
     PMDependencyStateOut,
+    PMLineaBaseDetailOut,
+    PMLineaBaseOut,
+    PMLineaBaseTareaOut,
     PMProjectMembersListResponse,
     PMProjectBudgetBundleOut,
     PMProjectCostsOut,
@@ -142,11 +153,18 @@ PM_ALERT_TYPES = {
     "tarea_critica_atrasada",
     "tarea_fuera_de_secuencia",
     "presupuesto_sobrepasado",
+    "proyecto_desviado_fecha",
+    "proyecto_desviado_costo",
+    "cambio_pendiente_aprobacion",
+    "tarea_critica_desviada",
     "sin_tarifa",
     "otro",
 }
 PM_ALERT_SEVERITIES = {"info", "warning", "critical"}
 PM_ALERT_STATUS = {"abierta", "resuelta", "descartada"}
+PM_BASELINE_STATUS = {"activa", "archivada", "sustituida", "cancelada"}
+PM_CHANGE_TYPES = {"fecha", "alcance", "presupuesto", "partida", "tarea_critica", "documento", "otro"}
+PM_CHANGE_STATUS = {"borrador", "pendiente_aprobacion", "aprobado", "rechazado", "aplicado", "cancelado"}
 ZERO = Decimal("0")
 WORKDAY_FIELDS = {
     0: "lunes",
@@ -323,6 +341,54 @@ def normalize_external_access_mode(value: str | None) -> str:
     return normalized
 
 
+def normalize_baseline_status(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Estatus").lower()
+    if normalized not in PM_BASELINE_STATUS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estatus de linea base invalido.")
+    return normalized
+
+
+def normalize_change_type(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Tipo de cambio").lower()
+    if normalized not in PM_CHANGE_TYPES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de cambio invalido.")
+    return normalized
+
+
+def normalize_change_status(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Estatus").lower()
+    if normalized not in PM_CHANGE_STATUS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estatus de cambio invalido.")
+    return normalized
+
+
+def json_dumps_safe(value) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def json_loads_safe(value: str | None):
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def normalize_json_payload(value):
+    if value in (None, "", {}):
+        return None
+    if isinstance(value, str):
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            return cleaned
+    return value
+
+
 def validate_effective_dates(effective_from: date | None, effective_to: date | None) -> None:
     if effective_from and effective_to and effective_to < effective_from:
         raise HTTPException(
@@ -467,6 +533,14 @@ def ensure_pm_portal_manage_access(pm_context: PMContext) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo owner o admin pueden gestionar el portal externo PM.",
+        )
+
+
+def ensure_pm_baseline_manage_access(pm_context: PMContext) -> None:
+    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo owner o admin pueden gestionar linea base y cambios aplicados.",
         )
 
 
@@ -2513,6 +2587,52 @@ def generate_pm_alerts(
                 titulo="Proyecto sobre presupuesto",
                 descripcion="El costo real ya supera el presupuesto disponible para el proyecto.",
             )
+
+    main_baseline = get_project_main_baseline(db, empresa_id=empresa_id, project_id=project_id)
+    if main_baseline:
+        comparison = build_project_baseline_vs_actual(
+            db,
+            empresa_id=empresa_id,
+            project_id=project_id,
+            baseline=main_baseline,
+        )
+        if comparison.deviation.desviacion_fecha_fin_dias > 0:
+            register_alert(
+                dedupe_key=f"project:{project_id}:baseline:{main_baseline.id}:proyecto_desviado_fecha",
+                task_id=None,
+                tipo="proyecto_desviado_fecha",
+                severidad="warning",
+                titulo="Proyecto desviado contra la línea base",
+                descripcion=f"La fecha final actual supera la línea base por {comparison.deviation.desviacion_fecha_fin_dias} días.",
+            )
+        if decimal_or_zero(comparison.deviation.desviacion_costo) > ZERO:
+            register_alert(
+                dedupe_key=f"project:{project_id}:baseline:{main_baseline.id}:proyecto_desviado_costo",
+                task_id=None,
+                tipo="proyecto_desviado_costo",
+                severidad="critical",
+                titulo="Costo desviado contra la línea base",
+                descripcion="El costo real actual ya supera el costo base aprobado para el proyecto.",
+            )
+        if comparison.deviation.cambios_pendientes_count > 0:
+            register_alert(
+                dedupe_key=f"project:{project_id}:baseline:{main_baseline.id}:cambio_pendiente_aprobacion",
+                task_id=None,
+                tipo="cambio_pendiente_aprobacion",
+                severidad="warning",
+                titulo="Cambio pendiente de aprobación",
+                descripcion=f"Hay {comparison.deviation.cambios_pendientes_count} cambios pendientes de aprobación.",
+            )
+        for row in comparison.task_changes:
+            if row.es_critica_base and row.desviacion_dias_fin > 0 and row.task_id and not row.removed_after_baseline:
+                register_alert(
+                    dedupe_key=f"project:{project_id}:task:{row.task_id}:tarea_critica_desviada",
+                    task_id=row.task_id,
+                    tipo="tarea_critica_desviada",
+                    severidad="critical",
+                    titulo="Tarea crítica desviada",
+                    descripcion=f"{row.tarea_titulo} terminó {row.desviacion_dias_fin} días después de la línea base.",
+                )
 
     existing_active_alerts = db.scalars(
         select(PMAlerta).where(
@@ -7209,6 +7329,12 @@ def resolve_project_approval(
     approval.resuelto_por = pm_context.user.id
     approval.resuelto_en = utcnow()
     approval.comentario_resolucion = normalize_optional_text(comment)
+    sync_project_change_from_approval(
+        db,
+        approval=approval,
+        next_status=next_status,
+        user_id=pm_context.user.id,
+    )
     db.add(
         AuditLog(
             empresa_id=pm_context.empresa_id,
@@ -7276,6 +7402,1076 @@ def cancel_project_approval(
         comment=comment,
         ip_address=ip_address,
     )
+
+
+def calculate_span_days(start_date: date | None, end_date: date | None) -> int | None:
+    if not start_date or not end_date:
+        return None
+    if end_date < start_date:
+        return 1
+    return (end_date - start_date).days + 1
+
+
+def get_project_main_baseline(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> PMProyectoLineaBase | None:
+    baseline = db.scalar(
+        select(PMProyectoLineaBase)
+        .where(
+            PMProyectoLineaBase.empresa_id == empresa_id,
+            PMProyectoLineaBase.proyecto_id == project_id,
+            PMProyectoLineaBase.es_principal == True,
+            PMProyectoLineaBase.estatus != "cancelada",
+        )
+        .order_by(desc(PMProyectoLineaBase.updated_at), desc(PMProyectoLineaBase.created_at))
+    )
+    if baseline:
+        return baseline
+    return db.scalar(
+        select(PMProyectoLineaBase)
+        .where(
+            PMProyectoLineaBase.empresa_id == empresa_id,
+            PMProyectoLineaBase.proyecto_id == project_id,
+            PMProyectoLineaBase.estatus == "activa",
+        )
+        .order_by(desc(PMProyectoLineaBase.updated_at), desc(PMProyectoLineaBase.created_at))
+    )
+
+
+def get_baseline_for_company(db: Session, empresa_id: str, baseline_id: str) -> PMProyectoLineaBase:
+    baseline = db.scalar(
+        select(PMProyectoLineaBase).where(
+            PMProyectoLineaBase.empresa_id == empresa_id,
+            PMProyectoLineaBase.id == baseline_id,
+        )
+    )
+    if not baseline:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Linea base no encontrada.")
+    return baseline
+
+
+def get_change_for_company(db: Session, empresa_id: str, change_id: str) -> PMCambioProyecto:
+    change = db.scalar(
+        select(PMCambioProyecto).where(
+            PMCambioProyecto.empresa_id == empresa_id,
+            PMCambioProyecto.id == change_id,
+        )
+    )
+    if not change:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cambio de proyecto no encontrado.")
+    return change
+
+
+def serialize_baseline_task_snapshot(snapshot: PMProyectoLineaBaseTarea) -> PMLineaBaseTareaOut:
+    return PMLineaBaseTareaOut(
+        id=snapshot.id,
+        empresa_id=snapshot.empresa_id,
+        linea_base_id=snapshot.linea_base_id,
+        proyecto_id=snapshot.proyecto_id,
+        tarea_id=snapshot.tarea_id,
+        tarea_titulo_snapshot=snapshot.tarea_titulo_snapshot,
+        tarea_codigo_snapshot=snapshot.tarea_codigo_snapshot,
+        estatus_base=snapshot.estatus_base,
+        prioridad_base=snapshot.prioridad_base,
+        fecha_inicio_base=snapshot.fecha_inicio_base,
+        fecha_fin_base=snapshot.fecha_fin_base,
+        duracion_dias_base=snapshot.duracion_dias_base,
+        porcentaje_avance_base=decimal_or_zero(snapshot.porcentaje_avance_base),
+        estimacion_horas_base=decimal_or_zero(snapshot.estimacion_horas_base),
+        es_critica_base=snapshot.es_critica_base,
+        orden_base=snapshot.orden_base,
+        activo_base=snapshot.activo_base,
+        created_at=snapshot.created_at,
+    )
+
+
+def serialize_baseline(baseline: PMProyectoLineaBase) -> PMLineaBaseOut:
+    return PMLineaBaseOut(
+        id=baseline.id,
+        empresa_id=baseline.empresa_id,
+        proyecto_id=baseline.proyecto_id,
+        nombre=baseline.nombre,
+        descripcion=baseline.descripcion,
+        version=baseline.version,
+        estatus=baseline.estatus,
+        es_principal=baseline.es_principal,
+        fecha_inicio_base=baseline.fecha_inicio_base,
+        fecha_fin_base=baseline.fecha_fin_base,
+        duracion_dias_base=baseline.duracion_dias_base,
+        presupuesto_base=decimal_or_zero(baseline.presupuesto_base),
+        costo_estimado_base=decimal_or_zero(baseline.costo_estimado_base),
+        precio_venta_base=decimal_or_zero(baseline.precio_venta_base),
+        margen_base=decimal_or_zero(baseline.margen_base),
+        porcentaje_avance_base=decimal_or_zero(baseline.porcentaje_avance_base),
+        created_by=baseline.created_by,
+        created_at=baseline.created_at,
+        updated_at=baseline.updated_at,
+    )
+
+
+def serialize_baseline_detail(baseline: PMProyectoLineaBase) -> PMLineaBaseDetailOut:
+    return PMLineaBaseDetailOut(
+        **serialize_baseline(baseline).model_dump(),
+        ruta_critica_json=json_loads_safe(baseline.ruta_critica_json),
+        snapshot_json=json_loads_safe(baseline.snapshot_json),
+        tasks=[serialize_baseline_task_snapshot(item) for item in baseline.task_snapshots],
+    )
+
+
+def serialize_project_change(db: Session, change: PMCambioProyecto) -> PMCambioProyectoOut:
+    approval = None
+    if change.aprobacion_id:
+        approval = db.scalar(
+            select(PMAprobacion).where(
+                PMAprobacion.empresa_id == change.empresa_id,
+                PMAprobacion.id == change.aprobacion_id,
+            )
+        )
+    return PMCambioProyectoOut(
+        id=change.id,
+        empresa_id=change.empresa_id,
+        proyecto_id=change.proyecto_id,
+        linea_base_id=change.linea_base_id,
+        tipo_cambio=change.tipo_cambio,
+        titulo=change.titulo,
+        descripcion=change.descripcion,
+        motivo=change.motivo,
+        estatus=change.estatus,
+        requiere_aprobacion=change.requiere_aprobacion,
+        aprobacion_id=change.aprobacion_id,
+        aprobacion_estatus=approval.estatus if approval else None,
+        aprobacion_titulo=approval.titulo if approval else None,
+        entidad_tipo=change.entidad_tipo,
+        entidad_id=change.entidad_id,
+        antes_json=json_loads_safe(change.antes_json),
+        despues_json=json_loads_safe(change.despues_json),
+        impacto_dias=int(change.impacto_dias or 0),
+        impacto_costo=decimal_or_zero(change.impacto_costo),
+        impacto_venta=decimal_or_zero(change.impacto_venta),
+        solicitado_por=change.solicitado_por,
+        solicitado_at=change.solicitado_at,
+        aprobado_por=change.aprobado_por,
+        aprobado_at=change.aprobado_at,
+        aplicado_por=change.aplicado_por,
+        aplicado_at=change.aplicado_at,
+        created_by=change.created_by,
+        created_at=change.created_at,
+        updated_at=change.updated_at,
+    )
+
+
+def get_effective_project_dates(project: PMProyecto, tasks: list[PMTarea]) -> tuple[date | None, date | None]:
+    start_candidates = [item for item in [project.fecha_inicio, *[task.fecha_inicio for task in tasks if task.fecha_inicio]] if item]
+    finish_candidates = [
+        item
+        for item in [project.fecha_fin_planificada, *[task.fecha_vencimiento for task in tasks if task.fecha_vencimiento]]
+        if item
+    ]
+    return (
+        min(start_candidates) if start_candidates else None,
+        max(finish_candidates) if finish_candidates else None,
+    )
+
+
+def get_next_project_baseline_version(db: Session, *, empresa_id: str, project_id: str) -> int:
+    current_max = db.scalar(
+        select(func.max(PMProyectoLineaBase.version)).where(
+            PMProyectoLineaBase.empresa_id == empresa_id,
+            PMProyectoLineaBase.proyecto_id == project_id,
+        )
+    )
+    return int(current_max or 0) + 1
+
+
+def build_project_baseline_snapshot(
+    db: Session,
+    *,
+    project: PMProyecto,
+    tasks: list[PMTarea],
+    project_costs,
+    critical_path: PMCriticalPathOut,
+) -> dict:
+    critical_ids = set(critical_path.critical_task_ids)
+    return {
+        "project": {
+            "id": project.id,
+            "nombre": project.nombre,
+            "codigo": project.codigo,
+            "estatus": project.estatus,
+            "prioridad": project.prioridad,
+            "fecha_inicio": project.fecha_inicio.isoformat() if project.fecha_inicio else None,
+            "fecha_fin_planificada": project.fecha_fin_planificada.isoformat() if project.fecha_fin_planificada else None,
+            "porcentaje_avance": str(decimal_or_zero(project.porcentaje_avance)),
+            "presupuesto_estimado": str(decimal_or_zero(project.presupuesto_estimado)),
+        },
+        "costs": {
+            "presupuesto_estimado": str(decimal_or_zero(project_costs.presupuesto_estimado)),
+            "presupuesto_detallado_costo": str(decimal_or_zero(project_costs.presupuesto_detallado_costo)),
+            "presupuesto_detallado_venta": str(decimal_or_zero(project_costs.presupuesto_detallado_venta)),
+            "costo_total_real": str(decimal_or_zero(project_costs.costo_total_real)),
+            "margen_estimado": str(decimal_or_zero(project_costs.margen_estimado)),
+        },
+        "critical_path": critical_path.model_dump(mode="json"),
+        "tasks": [
+            {
+                "id": task.id,
+                "titulo": task.titulo,
+                "estatus": task.estatus,
+                "prioridad": task.prioridad,
+                "fecha_inicio": task.fecha_inicio.isoformat() if task.fecha_inicio else None,
+                "fecha_fin": task.fecha_vencimiento.isoformat() if task.fecha_vencimiento else None,
+                "duracion_dias": calculate_span_days(task.fecha_inicio, task.fecha_vencimiento),
+                "porcentaje_avance": str(decimal_or_zero(task.porcentaje_avance)),
+                "estimacion_horas": str(decimal_or_zero(task.estimacion_horas)),
+                "es_critica": task.id in critical_ids,
+                "orden": task.orden,
+                "activo": task.activo,
+            }
+            for task in tasks
+        ],
+    }
+
+
+def create_project_baseline(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    nombre: str,
+    descripcion: str | None,
+    es_principal: bool,
+    ip_address: str | None,
+) -> PMLineaBaseDetailOut:
+    ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_baseline_manage_access(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    dependencies = list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    project_costs = refresh_project_total_costs(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    critical_path = calculate_critical_path(
+        db,
+        project_id=project_id,
+        empresa_id=pm_context.empresa_id,
+        tasks=tasks,
+        dependencies=dependencies,
+    )
+    next_version = get_next_project_baseline_version(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    project_start, project_finish = get_effective_project_dates(project, tasks)
+    effective_budget = decimal_or_zero(project_costs.presupuesto_estimado or project.presupuesto_estimado)
+    detailed_cost = decimal_or_zero(project_costs.presupuesto_detallado_costo)
+    if detailed_cost <= 0:
+        detailed_cost = effective_budget
+    price_base = decimal_or_zero(project_costs.presupuesto_detallado_venta)
+    margin_base = decimal_or_zero(project_costs.margen_estimado)
+    snapshot = build_project_baseline_snapshot(
+        db,
+        project=project,
+        tasks=tasks,
+        project_costs=project_costs,
+        critical_path=critical_path,
+    )
+    baseline = PMProyectoLineaBase(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        nombre=normalize_required_text(nombre, "Nombre"),
+        descripcion=normalize_optional_text(descripcion),
+        version=next_version,
+        estatus="activa",
+        es_principal=bool(es_principal),
+        fecha_inicio_base=project_start,
+        fecha_fin_base=project_finish,
+        duracion_dias_base=calculate_span_days(project_start, project_finish),
+        presupuesto_base=effective_budget,
+        costo_estimado_base=detailed_cost,
+        precio_venta_base=price_base,
+        margen_base=margin_base,
+        porcentaje_avance_base=quantize_percentage(decimal_or_zero(project.porcentaje_avance)),
+        ruta_critica_json=json_dumps_safe(critical_path.model_dump(mode="json")),
+        snapshot_json=json_dumps_safe(snapshot),
+        created_by=pm_context.user.id,
+    )
+    db.add(baseline)
+    db.flush()
+
+    if baseline.es_principal:
+        previous_primaries = db.scalars(
+            select(PMProyectoLineaBase).where(
+                PMProyectoLineaBase.empresa_id == pm_context.empresa_id,
+                PMProyectoLineaBase.proyecto_id == project.id,
+                PMProyectoLineaBase.id != baseline.id,
+                PMProyectoLineaBase.es_principal == True,
+            )
+        ).all()
+        for previous in previous_primaries:
+            previous.es_principal = False
+            if previous.estatus == "activa":
+                previous.estatus = "sustituida"
+
+    critical_ids = set(critical_path.critical_task_ids)
+    for task in tasks:
+        db.add(
+            PMProyectoLineaBaseTarea(
+                empresa_id=pm_context.empresa_id,
+                linea_base_id=baseline.id,
+                proyecto_id=project.id,
+                tarea_id=task.id,
+                tarea_titulo_snapshot=task.titulo,
+                tarea_codigo_snapshot=None,
+                estatus_base=task.estatus,
+                prioridad_base=task.prioridad,
+                fecha_inicio_base=task.fecha_inicio,
+                fecha_fin_base=task.fecha_vencimiento,
+                duracion_dias_base=calculate_span_days(task.fecha_inicio, task.fecha_vencimiento),
+                porcentaje_avance_base=quantize_percentage(decimal_or_zero(task.porcentaje_avance)),
+                estimacion_horas_base=decimal_or_zero(task.estimacion_horas),
+                es_critica_base=task.id in critical_ids,
+                orden_base=int(task.orden or 0),
+                activo_base=bool(task.activo),
+                created_at=utcnow(),
+            )
+        )
+
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.baseline.create",
+            entity_name="pm_proyecto_linea_base",
+            entity_id=baseline.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "es_principal": baseline.es_principal, "version": baseline.version},
+        )
+    )
+    db.flush()
+    db.refresh(baseline)
+    return serialize_baseline_detail(baseline)
+
+
+def list_project_baselines(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> list[PMLineaBaseOut]:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    baselines = db.scalars(
+        select(PMProyectoLineaBase)
+        .where(
+            PMProyectoLineaBase.empresa_id == pm_context.empresa_id,
+            PMProyectoLineaBase.proyecto_id == project_id,
+        )
+        .order_by(desc(PMProyectoLineaBase.es_principal), desc(PMProyectoLineaBase.version), desc(PMProyectoLineaBase.created_at))
+    ).all()
+    return [serialize_baseline(item) for item in baselines]
+
+
+def get_project_baseline(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    baseline_id: str,
+) -> PMLineaBaseDetailOut:
+    baseline = get_baseline_for_company(db, pm_context.empresa_id, baseline_id)
+    return serialize_baseline_detail(baseline)
+
+
+def set_project_baseline_as_main(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    baseline_id: str,
+    ip_address: str | None,
+) -> PMLineaBaseOut:
+    ensure_pm_baseline_manage_access(pm_context)
+    baseline = get_baseline_for_company(db, pm_context.empresa_id, baseline_id)
+    if baseline.estatus in {"archivada", "cancelada"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo una linea base activa puede ser principal.")
+    previous_primaries = db.scalars(
+        select(PMProyectoLineaBase).where(
+            PMProyectoLineaBase.empresa_id == pm_context.empresa_id,
+            PMProyectoLineaBase.proyecto_id == baseline.proyecto_id,
+            PMProyectoLineaBase.id != baseline.id,
+            PMProyectoLineaBase.es_principal == True,
+        )
+    ).all()
+    for previous in previous_primaries:
+        previous.es_principal = False
+        if previous.estatus == "activa":
+            previous.estatus = "sustituida"
+    baseline.es_principal = True
+    baseline.estatus = "activa"
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.baseline.set_main",
+            entity_name="pm_proyecto_linea_base",
+            entity_id=baseline.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": baseline.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_baseline(baseline)
+
+
+def archive_project_baseline(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    baseline_id: str,
+    ip_address: str | None,
+) -> PMLineaBaseOut:
+    ensure_pm_baseline_manage_access(pm_context)
+    baseline = get_baseline_for_company(db, pm_context.empresa_id, baseline_id)
+    baseline.estatus = "archivada"
+    baseline.es_principal = False
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.baseline.archive",
+            entity_name="pm_proyecto_linea_base",
+            entity_id=baseline.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": baseline.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_baseline(baseline)
+
+
+def build_project_baseline_vs_actual(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    baseline: PMProyectoLineaBase,
+) -> PMBaselineVsActualOut:
+    project = get_project_for_company(db, empresa_id, project_id)
+    current_tasks = db.scalars(
+        select(PMTarea)
+        .where(
+            PMTarea.empresa_id == empresa_id,
+            PMTarea.proyecto_id == project_id,
+        )
+        .order_by(PMTarea.orden.asc(), PMTarea.created_at.asc())
+    ).all()
+    active_tasks = [task for task in current_tasks if task.activo]
+    dependencies = list_project_serialized_dependencies(db, empresa_id=empresa_id, project_id=project_id)
+    current_critical = calculate_critical_path(
+        db,
+        project_id=project_id,
+        empresa_id=empresa_id,
+        tasks=active_tasks,
+        dependencies=dependencies,
+    )
+    critical_ids = set(current_critical.critical_task_ids)
+    project_costs = refresh_project_total_costs(db, empresa_id=empresa_id, project_id=project_id)
+    effective_current_budget = decimal_or_zero(project_costs.presupuesto_detallado_costo)
+    if effective_current_budget <= 0:
+        effective_current_budget = decimal_or_zero(project_costs.presupuesto_estimado or project.presupuesto_estimado)
+
+    baseline_snapshots = db.scalars(
+        select(PMProyectoLineaBaseTarea)
+        .where(PMProyectoLineaBaseTarea.linea_base_id == baseline.id)
+        .order_by(PMProyectoLineaBaseTarea.orden_base.asc(), PMProyectoLineaBaseTarea.created_at.asc())
+    ).all()
+    current_task_map = {task.id: task for task in current_tasks}
+    baseline_task_ids = {snapshot.tarea_id for snapshot in baseline_snapshots if snapshot.tarea_id}
+
+    task_changes: list[PMBaselineTaskComparisonOut] = []
+    added_count = 0
+    removed_count = 0
+    deviated_count = 0
+    critical_deviated_count = 0
+
+    for snapshot in baseline_snapshots:
+        current_task = current_task_map.get(snapshot.tarea_id) if snapshot.tarea_id else None
+        changed_fields: list[str] = []
+        added_after_baseline = False
+        removed_after_baseline = current_task is None or current_task.activo is False
+        current_start = current_task.fecha_inicio if current_task else None
+        current_finish = current_task.fecha_vencimiento if current_task else None
+        current_duration = calculate_span_days(current_start, current_finish)
+        current_status = current_task.estatus if current_task else None
+        current_progress = decimal_or_zero(current_task.porcentaje_avance if current_task else ZERO)
+        current_is_critical = bool(current_task and current_task.id in critical_ids)
+        if removed_after_baseline:
+            changed_fields.append("tarea_desactivada")
+            removed_count += 1
+        if snapshot.fecha_inicio_base != current_start:
+            changed_fields.append("fecha_inicio")
+        if snapshot.fecha_fin_base != current_finish:
+            changed_fields.append("fecha_fin")
+        if snapshot.estatus_base != current_status:
+            changed_fields.append("estatus")
+        if decimal_or_zero(snapshot.porcentaje_avance_base) != current_progress:
+            changed_fields.append("avance")
+        if snapshot.es_critica_base != current_is_critical:
+            changed_fields.append("ruta_critica")
+
+        finish_deviation = 0
+        if snapshot.fecha_fin_base and current_finish:
+            finish_deviation = (current_finish - snapshot.fecha_fin_base).days
+        if changed_fields:
+            deviated_count += 1
+            if snapshot.es_critica_base and finish_deviation > 0:
+                critical_deviated_count += 1
+
+        task_changes.append(
+            PMBaselineTaskComparisonOut(
+                task_id=snapshot.tarea_id,
+                tarea_titulo=snapshot.tarea_titulo_snapshot,
+                fecha_inicio_base=snapshot.fecha_inicio_base,
+                fecha_inicio_actual=current_start,
+                fecha_fin_base=snapshot.fecha_fin_base,
+                fecha_fin_actual=current_finish,
+                duracion_dias_base=snapshot.duracion_dias_base,
+                duracion_dias_actual=current_duration,
+                desviacion_dias_fin=finish_deviation,
+                estatus_base=snapshot.estatus_base,
+                estatus_actual=current_status,
+                porcentaje_avance_base=decimal_or_zero(snapshot.porcentaje_avance_base),
+                porcentaje_avance_actual=current_progress,
+                es_critica_base=snapshot.es_critica_base,
+                es_critica_actual=current_is_critical,
+                activo_base=snapshot.activo_base,
+                activo_actual=bool(current_task.activo) if current_task else False,
+                added_after_baseline=added_after_baseline,
+                removed_after_baseline=removed_after_baseline,
+                changed_fields=changed_fields,
+                cambio_detectado="Sin cambios" if not changed_fields else ", ".join(changed_fields),
+            )
+        )
+
+    for current_task in current_tasks:
+        if not current_task.activo or current_task.id in baseline_task_ids:
+            continue
+        added_count += 1
+        deviated_count += 1
+        task_changes.append(
+            PMBaselineTaskComparisonOut(
+                task_id=current_task.id,
+                tarea_titulo=current_task.titulo,
+                fecha_inicio_base=None,
+                fecha_inicio_actual=current_task.fecha_inicio,
+                fecha_fin_base=None,
+                fecha_fin_actual=current_task.fecha_vencimiento,
+                duracion_dias_base=None,
+                duracion_dias_actual=calculate_span_days(current_task.fecha_inicio, current_task.fecha_vencimiento),
+                desviacion_dias_fin=0,
+                estatus_base=None,
+                estatus_actual=current_task.estatus,
+                porcentaje_avance_base=ZERO,
+                porcentaje_avance_actual=decimal_or_zero(current_task.porcentaje_avance),
+                es_critica_base=False,
+                es_critica_actual=current_task.id in critical_ids,
+                activo_base=False,
+                activo_actual=True,
+                added_after_baseline=True,
+                removed_after_baseline=False,
+                changed_fields=["tarea_agregada"],
+                cambio_detectado="Tarea agregada",
+            )
+        )
+
+    current_start, current_finish = get_effective_project_dates(project, active_tasks)
+    current_duration = calculate_span_days(current_start, current_finish)
+    finish_deviation_days = 0
+    if baseline.fecha_fin_base and current_finish:
+        finish_deviation_days = (current_finish - baseline.fecha_fin_base).days
+    duration_deviation_days = 0
+    if baseline.duracion_dias_base is not None and current_duration is not None:
+        duration_deviation_days = current_duration - baseline.duracion_dias_base
+
+    pending_changes_count = db.scalar(
+        select(func.count(PMCambioProyecto.id)).where(
+            PMCambioProyecto.empresa_id == empresa_id,
+            PMCambioProyecto.proyecto_id == project_id,
+            PMCambioProyecto.estatus == "pendiente_aprobacion",
+        )
+    ) or 0
+
+    deviation = PMBaselineDeviationOut(
+        baseline_id=baseline.id,
+        baseline_name=baseline.nombre,
+        fecha_inicio_base=baseline.fecha_inicio_base,
+        fecha_inicio_actual=current_start,
+        fecha_fin_base=baseline.fecha_fin_base,
+        fecha_fin_actual=current_finish,
+        duracion_dias_base=baseline.duracion_dias_base,
+        duracion_dias_actual=current_duration,
+        desviacion_fecha_fin_dias=finish_deviation_days,
+        desviacion_duracion_dias=duration_deviation_days,
+        presupuesto_base=decimal_or_zero(baseline.presupuesto_base),
+        presupuesto_actual=effective_current_budget,
+        costo_real_actual=decimal_or_zero(project_costs.costo_total_real),
+        desviacion_costo=decimal_or_zero(project_costs.costo_total_real) - decimal_or_zero(baseline.costo_estimado_base),
+        desviacion_presupuesto=effective_current_budget - decimal_or_zero(baseline.presupuesto_base),
+        porcentaje_desviacion_costo=(
+            quantize_percentage(
+                ((decimal_or_zero(project_costs.costo_total_real) - decimal_or_zero(baseline.costo_estimado_base))
+                / decimal_or_zero(baseline.costo_estimado_base))
+                * Decimal("100")
+            )
+            if decimal_or_zero(baseline.costo_estimado_base) > 0
+            else ZERO
+        ),
+        total_tareas_base=len(baseline_snapshots),
+        total_tareas_actual=len(active_tasks),
+        tareas_agregadas_count=added_count,
+        tareas_eliminadas_count=removed_count,
+        tareas_desviadas_count=deviated_count,
+        tareas_criticas_desviadas_count=critical_deviated_count,
+        cambios_pendientes_count=int(pending_changes_count),
+    )
+    return PMBaselineVsActualOut(
+        baseline=serialize_baseline(baseline),
+        deviation=deviation,
+        task_changes=task_changes,
+    )
+
+
+def get_project_baseline_vs_actual(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    baseline_id: str | None = None,
+) -> PMBaselineVsActualOut:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    baseline = (
+        get_baseline_for_company(db, pm_context.empresa_id, baseline_id)
+        if baseline_id
+        else get_project_main_baseline(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    )
+    if not baseline or baseline.proyecto_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El proyecto no tiene una linea base disponible.")
+    return build_project_baseline_vs_actual(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project_id,
+        baseline=baseline,
+    )
+
+
+def list_project_changes(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    estatus: str | None = None,
+    tipo_cambio: str | None = None,
+) -> list[PMCambioProyectoOut]:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    query = select(PMCambioProyecto).where(
+        PMCambioProyecto.empresa_id == pm_context.empresa_id,
+        PMCambioProyecto.proyecto_id == project_id,
+    )
+    if estatus:
+        query = query.where(PMCambioProyecto.estatus == normalize_change_status(estatus))
+    if tipo_cambio:
+        query = query.where(PMCambioProyecto.tipo_cambio == normalize_change_type(tipo_cambio))
+    changes = db.scalars(query.order_by(desc(PMCambioProyecto.created_at))).all()
+    return [serialize_project_change(db, item) for item in changes]
+
+
+def get_project_change(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    change_id: str,
+) -> PMCambioProyectoOut:
+    change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    return serialize_project_change(db, change)
+
+
+def create_project_change(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    linea_base_id: str | None,
+    tipo_cambio: str,
+    titulo: str,
+    descripcion: str | None,
+    motivo: str | None,
+    requiere_aprobacion: bool,
+    entidad_tipo: str | None,
+    entidad_id: str | None,
+    antes_json,
+    despues_json,
+    impacto_dias: int,
+    impacto_costo: Decimal | None,
+    impacto_venta: Decimal | None,
+    ip_address: str | None,
+) -> PMCambioProyectoOut:
+    ensure_pm_tasks_enabled(pm_context)
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    baseline = None
+    if linea_base_id:
+        baseline = get_baseline_for_company(db, pm_context.empresa_id, linea_base_id)
+        if baseline.proyecto_id != project.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La linea base no pertenece al proyecto indicado.")
+    change = PMCambioProyecto(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        linea_base_id=baseline.id if baseline else None,
+        tipo_cambio=normalize_change_type(tipo_cambio),
+        titulo=normalize_required_text(titulo, "Titulo"),
+        descripcion=normalize_optional_text(descripcion),
+        motivo=normalize_optional_text(motivo),
+        estatus="borrador",
+        requiere_aprobacion=bool(requiere_aprobacion),
+        entidad_tipo=normalize_optional_text(entidad_tipo),
+        entidad_id=normalize_optional_text(entidad_id),
+        antes_json=json_dumps_safe(normalize_json_payload(antes_json)) if normalize_json_payload(antes_json) is not None else None,
+        despues_json=json_dumps_safe(normalize_json_payload(despues_json)) if normalize_json_payload(despues_json) is not None else None,
+        impacto_dias=int(impacto_dias or 0),
+        impacto_costo=quantize_money(decimal_or_zero(impacto_costo)),
+        impacto_venta=quantize_money(decimal_or_zero(impacto_venta)),
+        created_by=pm_context.user.id,
+    )
+    db.add(change)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project_change.create",
+            entity_name="pm_cambio_proyecto",
+            entity_id=change.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id, "tipo_cambio": change.tipo_cambio},
+        )
+    )
+    return serialize_project_change(db, change)
+
+
+def update_project_change(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    change_id: str,
+    linea_base_id: str | None,
+    tipo_cambio: str | None,
+    titulo: str | None,
+    descripcion: str | None,
+    motivo: str | None,
+    requiere_aprobacion: bool | None,
+    entidad_tipo: str | None,
+    entidad_id: str | None,
+    antes_json,
+    despues_json,
+    impacto_dias: int | None,
+    impacto_costo: Decimal | None,
+    impacto_venta: Decimal | None,
+    ip_address: str | None,
+) -> PMCambioProyectoOut:
+    change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    if change.estatus in {"aplicado", "cancelado"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese cambio ya no se puede editar.")
+    if linea_base_id is not None:
+        baseline = get_baseline_for_company(db, pm_context.empresa_id, linea_base_id) if linea_base_id else None
+        if baseline and baseline.proyecto_id != change.proyecto_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La linea base no pertenece al proyecto indicado.")
+        change.linea_base_id = baseline.id if baseline else None
+    if tipo_cambio is not None:
+        change.tipo_cambio = normalize_change_type(tipo_cambio)
+    if titulo is not None:
+        change.titulo = normalize_required_text(titulo, "Titulo")
+    if descripcion is not None:
+        change.descripcion = normalize_optional_text(descripcion)
+    if motivo is not None:
+        change.motivo = normalize_optional_text(motivo)
+    if requiere_aprobacion is not None:
+        if change.aprobacion_id and change.estatus in {"pendiente_aprobacion", "aprobado"} and requiere_aprobacion is False:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No puedes quitar la aprobacion a un cambio ya enviado.")
+        change.requiere_aprobacion = bool(requiere_aprobacion)
+    if entidad_tipo is not None:
+        change.entidad_tipo = normalize_optional_text(entidad_tipo)
+    if entidad_id is not None:
+        change.entidad_id = normalize_optional_text(entidad_id)
+    if antes_json is not None:
+        normalized_before = normalize_json_payload(antes_json)
+        change.antes_json = json_dumps_safe(normalized_before) if normalized_before is not None else None
+    if despues_json is not None:
+        normalized_after = normalize_json_payload(despues_json)
+        change.despues_json = json_dumps_safe(normalized_after) if normalized_after is not None else None
+    if impacto_dias is not None:
+        change.impacto_dias = int(impacto_dias)
+    if impacto_costo is not None:
+        change.impacto_costo = quantize_money(decimal_or_zero(impacto_costo))
+    if impacto_venta is not None:
+        change.impacto_venta = quantize_money(decimal_or_zero(impacto_venta))
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project_change.update",
+            entity_name="pm_cambio_proyecto",
+            entity_id=change.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": change.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_project_change(db, change)
+
+
+def submit_project_change(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    change_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMCambioProyectoOut:
+    change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    if change.estatus not in {"borrador", "rechazado"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo los cambios en borrador o rechazados pueden enviarse.")
+    change.solicitado_por = pm_context.user.id
+    change.solicitado_at = utcnow()
+    if change.requiere_aprobacion:
+        approval_type = "aprobar_cambio_alcance" if change.tipo_cambio in {"alcance", "presupuesto", "partida"} else "otro"
+        approval = PMAprobacion(
+            empresa_id=pm_context.empresa_id,
+            proyecto_id=change.proyecto_id,
+            tipo_aprobacion=approval_type,
+            titulo=change.titulo,
+            descripcion=change.descripcion or change.motivo,
+            estatus="pendiente",
+            entidad_tipo="cambio_proyecto",
+            entidad_id=change.id,
+            solicitado_por=pm_context.user.id,
+            solicitado_en=utcnow(),
+            activo=True,
+        )
+        db.add(approval)
+        db.flush()
+        change.aprobacion_id = approval.id
+        change.estatus = "pendiente_aprobacion"
+    else:
+        change.estatus = "aprobado"
+        change.aprobado_por = pm_context.user.id
+        change.aprobado_at = utcnow()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project_change.submit",
+            entity_name="pm_cambio_proyecto",
+            entity_id=change.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": change.proyecto_id, "comment": normalize_optional_text(comment)},
+        )
+    )
+    db.flush()
+    return serialize_project_change(db, change)
+
+
+def sync_project_change_from_approval(
+    db: Session,
+    *,
+    approval: PMAprobacion,
+    next_status: str,
+    user_id: str | None,
+) -> None:
+    if approval.entidad_tipo != "cambio_proyecto" or not approval.entidad_id:
+        return
+    change = db.scalar(
+        select(PMCambioProyecto).where(
+            PMCambioProyecto.empresa_id == approval.empresa_id,
+            PMCambioProyecto.id == approval.entidad_id,
+        )
+    )
+    if not change:
+        return
+    change.aprobacion_id = approval.id
+    if next_status == "aprobada":
+        change.estatus = "aprobado"
+        change.aprobado_por = user_id
+        change.aprobado_at = approval.resuelto_en or utcnow()
+    elif next_status == "rechazada":
+        change.estatus = "rechazado"
+    elif next_status == "cancelada" and change.estatus == "pendiente_aprobacion":
+        change.estatus = "cancelado"
+
+
+def approve_project_change(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    change_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMCambioProyectoOut:
+    ensure_pm_baseline_manage_access(pm_context)
+    change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    if change.estatus not in {"borrador", "pendiente_aprobacion", "rechazado"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese cambio ya no puede aprobarse.")
+    change.estatus = "aprobado"
+    change.aprobado_por = pm_context.user.id
+    change.aprobado_at = utcnow()
+    if change.aprobacion_id:
+        approval = get_approval_for_company(db, pm_context.empresa_id, change.aprobacion_id)
+        if approval.estatus == "pendiente":
+            approval.estatus = "aprobada"
+            approval.resuelto_por = pm_context.user.id
+            approval.resuelto_en = change.aprobado_at
+            approval.comentario_resolucion = normalize_optional_text(comment)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project_change.approve",
+            entity_name="pm_cambio_proyecto",
+            entity_id=change.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": change.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_project_change(db, change)
+
+
+def reject_project_change(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    change_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMCambioProyectoOut:
+    ensure_pm_baseline_manage_access(pm_context)
+    change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    if change.estatus in {"aplicado", "cancelado"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese cambio ya no puede rechazarse.")
+    change.estatus = "rechazado"
+    if change.aprobacion_id:
+        approval = get_approval_for_company(db, pm_context.empresa_id, change.aprobacion_id)
+        if approval.estatus == "pendiente":
+            approval.estatus = "rechazada"
+            approval.resuelto_por = pm_context.user.id
+            approval.resuelto_en = utcnow()
+            approval.comentario_resolucion = normalize_optional_text(comment)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project_change.reject",
+            entity_name="pm_cambio_proyecto",
+            entity_id=change.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": change.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_project_change(db, change)
+
+
+def cancel_project_change(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    change_id: str,
+    ip_address: str | None,
+) -> PMCambioProyectoOut:
+    change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    if change.estatus == "aplicado":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Un cambio aplicado no puede cancelarse.")
+    change.estatus = "cancelado"
+    if change.aprobacion_id:
+        approval = get_approval_for_company(db, pm_context.empresa_id, change.aprobacion_id)
+        if approval.estatus == "pendiente":
+            approval.estatus = "cancelada"
+            approval.resuelto_por = pm_context.user.id
+            approval.resuelto_en = utcnow()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project_change.cancel",
+            entity_name="pm_cambio_proyecto",
+            entity_id=change.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": change.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_project_change(db, change)
+
+
+def parse_change_date_payload(change: PMCambioProyecto) -> tuple[str, date, date]:
+    raw_payload = json_loads_safe(change.despues_json)
+    if not isinstance(raw_payload, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cambio no contiene fechas aplicables.")
+    task_id = normalize_optional_text(raw_payload.get("tarea_id")) or normalize_optional_text(change.entidad_id)
+    start_value = raw_payload.get("fecha_inicio") or raw_payload.get("nueva_fecha_inicio")
+    finish_value = raw_payload.get("fecha_fin") or raw_payload.get("nueva_fecha_fin") or raw_payload.get("fecha_vencimiento")
+    if not task_id or not start_value or not finish_value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cambio de fecha requiere tarea, inicio y fin.")
+    try:
+        start_date = start_value if isinstance(start_value, date) else date.fromisoformat(str(start_value))
+        finish_date = finish_value if isinstance(finish_value, date) else date.fromisoformat(str(finish_value))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Las fechas del cambio no son validas.") from exc
+    return task_id, start_date, finish_date
+
+
+def apply_project_change(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    change_id: str,
+    apply_dependents: bool,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMCambioProyectoOut:
+    ensure_pm_baseline_manage_access(pm_context)
+    change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    if change.estatus in {"aplicado", "cancelado", "rechazado"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese cambio ya no puede aplicarse.")
+    if change.requiere_aprobacion and change.estatus != "aprobado":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El cambio requiere aprobacion antes de aplicarse.")
+
+    if change.tipo_cambio == "fecha":
+        task_id, start_date, finish_date = parse_change_date_payload(change)
+        update_task_dates_with_impact(
+            db,
+            pm_context,
+            project_id=change.proyecto_id,
+            task_id=task_id,
+            fecha_inicio=start_date,
+            fecha_fin=finish_date,
+            apply_dependents=apply_dependents,
+            ip_address=ip_address,
+        )
+
+    change.estatus = "aplicado"
+    change.aplicado_por = pm_context.user.id
+    change.aplicado_at = utcnow()
+    if comment:
+        note = normalize_optional_text(comment)
+        if note:
+            change.descripcion = f"{change.descripcion}\n\nAplicacion: {note}" if change.descripcion else f"Aplicacion: {note}"
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project_change.apply",
+            entity_name="pm_cambio_proyecto",
+            entity_id=change.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": change.proyecto_id, "apply_dependents": apply_dependents},
+        )
+    )
+    db.flush()
+    return serialize_project_change(db, change)
 
 
 def list_project_external_invites(

@@ -1689,6 +1689,76 @@ textarea {
   gap: 1rem;
 }
 
+.pm-baseline-stack,
+.pm-baseline-head,
+.pm-baseline-head-copy,
+.pm-baseline-list,
+.pm-baseline-detail-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.pm-baseline-head {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.pm-baseline-head-copy {
+  gap: 0.25rem;
+}
+
+.pm-baseline-head-copy span {
+  color: var(--text-secondary);
+}
+
+.pm-baseline-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.pm-baseline-list-item > div:first-child {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.pm-baseline-list-item span {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.pm-baseline-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.pm-baseline-step {
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--border);
+  border-radius: 0.9rem;
+  background: color-mix(in srgb, var(--surface) 92%, #eef5ff 8%);
+}
+
+.pm-baseline-step strong {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.pm-baseline-step span {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
 .pm-workplan-toolbar {
   position: sticky;
   top: 0;
@@ -1924,6 +1994,15 @@ textarea {
 
 .pm-workplan-suggestion-stack strong {
   font-size: 0.88rem;
+}
+
+.pm-task-baseline-panel {
+  display: grid;
+  gap: 0.85rem;
+  padding: 1rem;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 1rem;
+  background: rgba(239, 246, 255, 0.92);
 }
 
 .pm-workplan-fab {

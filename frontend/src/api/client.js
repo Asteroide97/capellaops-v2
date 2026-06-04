@@ -1231,6 +1231,141 @@ export function listPmProjectAlerts({ projectId, token, empresaId }) {
 }
 
 
+export function listPmProjectBaselines({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/baselines`, { token, empresaId });
+}
+
+
+export function createPmProjectBaseline({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/baselines`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmBaseline({ baselineId, token, empresaId }) {
+  return apiRequest(`/pm/baselines/${baselineId}`, { token, empresaId });
+}
+
+
+export function setPmBaselineAsMain({ baselineId, token, empresaId }) {
+  return apiRequest(`/pm/baselines/${baselineId}/set-main`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function archivePmBaseline({ baselineId, token, empresaId }) {
+  return apiRequest(`/pm/baselines/${baselineId}/archive`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmProjectBaselineVsActual({ projectId, token, empresaId, params = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "baseline_id", params?.baseline_id);
+  const suffix = query.toString();
+  return apiRequest(`/pm/projects/${projectId}/baseline-vs-actual${suffix ? `?${suffix}` : ""}`, {
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmProjectChanges({ projectId, token, empresaId, params = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "estatus", params?.estatus);
+  appendQueryValue(query, "tipo_cambio", params?.tipo_cambio);
+  const suffix = query.toString();
+  return apiRequest(`/pm/projects/${projectId}/changes${suffix ? `?${suffix}` : ""}`, {
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmProjectChange({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/changes`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmProjectChange({ changeId, token, empresaId }) {
+  return apiRequest(`/pm/changes/${changeId}`, { token, empresaId });
+}
+
+
+export function updatePmProjectChange({ changeId, token, empresaId, payload }) {
+  return apiRequest(`/pm/changes/${changeId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function submitPmProjectChange({ changeId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/changes/${changeId}/submit`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function approvePmProjectChange({ changeId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/changes/${changeId}/approve`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function rejectPmProjectChange({ changeId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/changes/${changeId}/reject`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelPmProjectChange({ changeId, token, empresaId }) {
+  return apiRequest(`/pm/changes/${changeId}/cancel`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function applyPmProjectChange({ changeId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/changes/${changeId}/apply`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function resolvePmAlert({ alertId, token, empresaId, payload = {} }) {
   return apiRequest(`/pm/alerts/${alertId}/resolve`, {
     method: "POST",
