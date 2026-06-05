@@ -1037,38 +1037,42 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Firma electrónica
 - Auditoría avanzada de cambios
 - Reportes ejecutivos
-- Visualización de línea base sobre el Gantt
+- Visualización de línea base sobre el cronograma
 
-## PM Fase 9 - Drag & drop en Gantt
+## PM Fase 9 - Cronograma visual con edición guiada de fechas
 
-- El Gantt del plan de trabajo ya soporta interacción directa en desktop para:
-  - mover tareas horizontalmente
-  - ajustar duración con resize básico desde el borde derecho
-- El drag no aplica cambios de inmediato:
-  - muestra preview local de fechas
-  - al soltar abre un modal de impacto
-  - desde ese modal se confirma cómo proceder
+- El plan de trabajo ahora usa un cronograma visual por tarjetas en lugar de barras horizontales tipo Gantt.
+- Cada tarea muestra:
+  - fechas actuales
+  - estatus y avance
+  - ruta crítica
+  - bloqueos y dependencias
+  - sugerencias de reprogramación
+- La reprogramación se hace con acciones guiadas:
+  - `Editar fechas`
+  - `Aplicar sugerencia`
+  - modal de impacto antes de aplicar cambios
 - La integración con planeación reutiliza la lógica existente de:
   - cálculo de impacto
   - reprogramación opcional de dependientes
   - alertas
   - refresco ligero del plan de trabajo
-- La integración con línea base y control de cambios ahora permite:
-  - aplicar cambio directo cuando no existe línea base principal
-  - aplicar y registrar cambio cuando sí existe línea base
+- La integración con línea base y control de cambios permite:
+  - aplicar y registrar cambio cuando existe línea base
   - registrar y enviar a aprobación sin modificar la tarea todavía
+  - mantener trazabilidad antes de aplicar fechas sensibles
 - Restricciones operativas actuales:
-  - no se pueden mover tareas completadas desde el Gantt
+  - no se usa drag & drop como flujo principal
+  - no se mueven tareas completadas desde el cronograma
   - si existe línea base, el cambio no se aplica silenciosamente
   - en móvil se mantiene `Editar fechas` como ruta principal
 
 ### Pendientes de PM Fase 9
 
-- Drag & drop móvil avanzado
-- Múltiples escalas de zoom
-- Dependencias visuales con flechas
-- Línea base visual sobre el Gantt
+- Flechas visuales de dependencias
+- Línea base visual sobre el cronograma
 - Undo / redo
+- Más niveles de agrupación y zoom temporal
 
 ## Inventario Fase 1.2
 

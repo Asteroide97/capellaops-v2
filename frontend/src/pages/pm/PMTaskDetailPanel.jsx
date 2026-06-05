@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   CalendarRange,
   CheckSquare,
+  ChevronUp,
   Clock3,
   Link2,
   Lock,
@@ -52,23 +53,10 @@ function isActionPending(taskActionLoading = {}, taskId, action) {
   return Boolean(taskActionLoading?.[`${taskId}:${action}`]);
 }
 
-function formatTaskTitleList(items = []) {
-  const titles = [...new Set(items.filter(Boolean))];
-  if (titles.length === 0) {
-    return "";
-  }
-  if (titles.length === 1) {
-    return titles[0];
-  }
-  if (titles.length === 2) {
-    return `${titles[0]} y ${titles[1]}`;
-  }
-  return `${titles[0]}, ${titles[1]} y ${titles.length - 2} más`;
-}
-
 export default function PMTaskDetailPanel({
   baselineTaskComparison,
   empresaId,
+  isExpanded = true,
   materialConsumptions,
   materialPlans,
   onApplySuggestedDates,
@@ -76,6 +64,7 @@ export default function PMTaskDetailPanel({
   onEditTask,
   onEditTaskDates,
   onSelectTask,
+  onToggleExpanded,
   projectId,
   taskActionLoading,
   taskDependencyContext,
@@ -182,7 +171,10 @@ export default function PMTaskDetailPanel({
   const hasDependencies = dependencyItems.length > 0;
   const isBlocked = Boolean(dependencies?.is_blocked ?? dependencies?.blocked ?? pendingBlockers.length > 0) || pendingBlockers.length > 0;
   const completedDependencyTitles = useMemo(
-    () => dependencyItems.map((dependency) => normalizePmCopy(safeDisplayText(dependency.resolved_title ?? dependency.depende_de_tarea_titulo))).filter(Boolean),
+    () =>
+      dependencyItems
+        .map((dependency) => normalizePmCopy(safeDisplayText(dependency.resolved_title ?? dependency.depende_de_tarea_titulo)))
+        .filter(Boolean),
     [dependencyItems],
   );
   const availablePrerequisiteOptions = useMemo(
@@ -290,7 +282,7 @@ export default function PMTaskDetailPanel({
 
   if (!taskId) {
     return (
-      <DataCard subtitle="Selecciona una fila para abrir el contexto operativo." title="Detalle de tarea">
+      <DataCard subtitle="Información completa de la tarea seleccionada." title="Detalle de tarea">
         <EmptyState
           compact
           note="Aquí verás descripción, checklist, comentarios, horas, materiales y prerrequisitos de la tarea seleccionada."
@@ -305,6 +297,16 @@ export default function PMTaskDetailPanel({
       <DataCard
         actions={(
           <div className="inventory-actions inventory-actions-wrap">
+            {onToggleExpanded ? (
+              <ActionButton
+                className="pm-task-detail-toggle"
+                icon={<ChevronUp size={16} strokeWidth={1.9} />}
+                onClick={onToggleExpanded}
+                type="button"
+              >
+                {isExpanded ? "Ocultar detalle" : "Mostrar detalle"}
+              </ActionButton>
+            ) : null}
             <ActionButton disabled={!taskId} onClick={() => onEditTask?.(taskId)} tone="primary" type="button">
               Editar tarea
             </ActionButton>
@@ -316,7 +318,7 @@ export default function PMTaskDetailPanel({
             </ActionButton>
           </div>
         )}
-        subtitle="Panel operativo de la tarea seleccionada."
+        subtitle="Información completa de la tarea seleccionada."
         title="Detalle de tarea"
       >
         {loading ? <div className="table-note">Cargando detalle de tarea...</div> : null}
@@ -474,7 +476,7 @@ export default function PMTaskDetailPanel({
                     <span>Fecha base</span>
                     <strong>
                       {safeDisplayText(formatDate(baselineTaskComparison.fecha_inicio_base), "—")}
-                      {" -> "}
+                      {" → "}
                       {safeDisplayText(formatDate(baselineTaskComparison.fecha_fin_base), "—")}
                     </strong>
                   </div>
@@ -482,7 +484,7 @@ export default function PMTaskDetailPanel({
                     <span>Fecha actual</span>
                     <strong>
                       {safeDisplayText(formatDate(baselineTaskComparison.fecha_inicio_actual), "—")}
-                      {" -> "}
+                      {" → "}
                       {safeDisplayText(formatDate(baselineTaskComparison.fecha_fin_actual), "—")}
                     </strong>
                   </div>

@@ -1792,13 +1792,145 @@ textarea {
 
 .pm-workplan-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.95fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: start;
 }
 
 .pm-workplan-card {
-  overflow-x: auto;
+  overflow-x: visible;
+}
+
+.pm-workplan-layout-vertical {
+  display: grid;
+  gap: 1rem;
+}
+
+.pm-workplan-layout-vertical > * {
+  min-width: 0;
+}
+
+.pm-workplan-gantt-wide {
+  overflow-x: visible;
+}
+
+.pm-project-timeline {
+  display: grid;
+  gap: 1rem;
+}
+
+.pm-project-timeline-group {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.pm-project-timeline-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.pm-project-timeline-group-head strong {
+  color: var(--text-primary);
+  font-size: 0.98rem;
+}
+
+.pm-project-timeline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.85rem;
+}
+
+.pm-project-timeline-card {
+  display: grid;
+  gap: 0.8rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.04);
+}
+
+.pm-project-timeline-card.is-selected {
+  border-color: rgba(20, 92, 67, 0.24);
+  background: var(--brand-soft);
+}
+
+.pm-project-timeline-card.is-completed {
+  border-color: rgba(34, 197, 94, 0.18);
+  background: rgba(240, 253, 244, 0.96);
+}
+
+.pm-project-timeline-card.is-blocked {
+  border-color: rgba(217, 119, 6, 0.24);
+  background: rgba(255, 251, 235, 0.96);
+}
+
+.pm-project-timeline-card.is-critical {
+  border-color: rgba(220, 38, 38, 0.18);
+  background: rgba(254, 242, 242, 0.96);
+}
+
+.pm-project-timeline-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pm-project-timeline-card-header strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 0.98rem;
+  line-height: 1.35;
+}
+
+.pm-project-timeline-dates {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
+.pm-project-timeline-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.pm-project-timeline-dependencies,
+.pm-project-timeline-suggestion {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.pm-project-timeline-suggestion {
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.95rem;
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  background: rgba(255, 251, 235, 0.94);
+}
+
+.pm-project-timeline-suggestion strong,
+.pm-project-timeline-suggestion span {
+  display: block;
+}
+
+.pm-project-timeline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
 }
 
 .pm-alerts-panel,
@@ -1918,6 +2050,17 @@ textarea {
     minmax(320px, 1.15fr);
 }
 
+.pm-workplan-row-compact,
+.pm-workplan-row-compact-head {
+  grid-template-columns:
+    minmax(250px, 1.65fr)
+    minmax(108px, 0.72fr)
+    minmax(96px, 0.68fr)
+    minmax(96px, 0.68fr)
+    minmax(240px, 1.35fr)
+    minmax(180px, 0.9fr);
+}
+
 .pm-workplan-row[role="button"] {
   cursor: pointer;
 }
@@ -1954,6 +2097,34 @@ textarea {
   min-width: 0;
 }
 
+.pm-task-table-compact {
+  overflow-x: visible;
+}
+
+.pm-task-table-cell {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.pm-task-table-cell.is-primary .inventory-cell-main {
+  font-size: 0.96rem;
+  line-height: 1.35;
+}
+
+.pm-task-row-secondary {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.pm-task-table-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
 .pm-workplan-dependency-copy {
   display: inline-flex;
   align-items: center;
@@ -1975,8 +2146,10 @@ textarea {
 }
 
 .pm-workplan-planning-badges {
-  grid-auto-flow: column;
-  justify-content: start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  justify-content: flex-start;
 }
 
 .pm-workplan-planning-copy,
@@ -2274,6 +2447,43 @@ body.pm-is-dragging {
 
 .pm-gantt-track.is-dragging {
   cursor: grabbing;
+}
+
+.pm-task-detail-shell {
+  display: grid;
+  gap: 1rem;
+}
+
+.pm-task-detail-collapsed {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pm-task-detail-collapsed-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.pm-task-detail-collapsed-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+
+.pm-task-detail-collapsed-summary > div {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.95rem;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+}
+
+.pm-task-detail-toggle {
+  white-space: nowrap;
 }
 
 .pm-task-detail-stack {
@@ -3248,6 +3458,55 @@ body.pm-is-dragging {
   }
 }
 
+@media (max-width: 1080px) {
+  .pm-workplan-row-compact,
+  .pm-workplan-row-compact-head {
+    grid-template-columns:
+      minmax(220px, 1.45fr)
+      minmax(104px, 0.72fr)
+      minmax(88px, 0.65fr)
+      minmax(88px, 0.65fr)
+      minmax(210px, 1.15fr)
+      minmax(170px, 0.9fr);
+  }
+}
+
+@media (max-width: 900px) {
+  .pm-task-table-compact .pm-workplan-row-head {
+    display: none;
+  }
+
+  .pm-project-timeline-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pm-project-timeline-card-header {
+    flex-direction: column;
+  }
+
+  .pm-task-table-compact .pm-workplan-row-compact {
+    grid-template-columns: 1fr;
+    gap: 0.85rem;
+  }
+
+  .pm-task-table-compact .pm-task-table-cell::before {
+    content: attr(data-label);
+    color: var(--text-secondary);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .pm-task-table-compact .pm-task-table-cell.is-primary::before {
+    display: none;
+  }
+
+  .pm-task-table-compact .pm-task-table-actions {
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 640px) {
   .auth-shell,
   .app-content,
@@ -3328,6 +3587,11 @@ body.pm-is-dragging {
 
   .pm-workplan-row,
   .pm-workplan-row-head {
-    min-width: 1180px;
+    min-width: 0;
+  }
+
+  .pm-project-timeline-actions {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

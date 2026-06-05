@@ -1,4 +1,4 @@
-# Matriz de Paridad Base44 vs CapellaOpsV2
+﻿# Matriz de Paridad Base44 vs CapellaOpsV2
 
 ## Introduccion
 
@@ -96,7 +96,7 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Inventario | Email / notificaciones de requisiciones | Pendiente | Media | Compras F2 | No existe motor persistente de notificaciones ni envio real de correos para requisiciones. | Seguimiento manual y tardio. |
 | Inventario | OC CRUD | Implementado | Alta | Compras F1 | La pantalla y el backend ya soportan borrador, detalle, consulta y edicion segura de OC en borrador. | Compras operables pero aun limitadas. |
 | Inventario | OC emision | Implementado | Alta | Compras F1 | La OC se puede emitir solo con renglones validos y cambia a `emitida` sin afectar inventario. | Flujo documental incompleto hacia proveedor. |
-| Inventario | OC recepcion parcial | Implementado | Alta | Compras F1 | Ya soporta recibir cantidades parciales por renglón, actualiza pendientes y evita sobre-recepcion. | Recepciones manuales o inconsistentes. |
+| Inventario | OC recepcion parcial | Implementado | Alta | Compras F1 | Ya soporta recibir cantidades parciales por renglón, actualiza pendientes y evita sobre-recepción. | Recepciones manuales o inconsistentes. |
 | Inventario | OC recepcion total | Implementado | Alta | Compras F1 | Ya cierra la orden como `recibida` cuando todo el documento fue recibido. | Cierre operativo incompleto. |
 | Inventario | OC -> Inventario | Implementado | Alta | Compras F1 | La recepcion crea entradas y aumenta existencias desde backend transaccional. | Stock no conectado al documento fuente. |
 | Inventario | OC -> Kardex / movimientos | Parcial | Alta | Compras F1 | La trazabilidad ya existe por `movimientos_inventario` con `purchase_order_receive`, pero aun no hay historial formal de recepciones separado. | Auditoria documental menos clara. |
@@ -153,13 +153,13 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | Acciones rapidas PM | Implementado | Media | PM UX performance | El plan de trabajo y Kanban ya responden con loading granular por boton y actualizacion optimista segura para cambios simples de estatus. | La operacion se siente lenta si cada click exige refrescos pesados. |
 | PM | Refresh granular PM | Implementado | Media | PM UX performance | Las acciones operativas de tareas ya refrescan solo proyecto, tareas y dependencias cuando basta con el estado del plan de trabajo. | Recargar todo el workspace eleva latencia y ruido de red. |
 | PM | Kanban simple | Parcial | Media | PM F1 | El detalle de proyecto ya muestra columnas simples por estatus, sin drag and drop ni reglas avanzadas. | Visualizacion operativa menos agil. |
-| PM | Gantt mejorado | Implementado | Media | PM F6 | El plan de trabajo ya muestra Gantt mejorado con bloqueo, criticidad, fuera de secuencia, dependencia textual y fechas sugeridas. | Sin drag and drop ni edicion directa sobre barras. |
-| PM | Gantt con dependencias visuales | Implementado | Media | PM F6 | El Gantt ya muestra dependencias visibles en texto y el estado operativo de bloqueo o prerrequisitos completados. | La secuencia sigue sin flechas complejas o recalculo visual interactivo. |
-| PM | Gantt editable básico | Implementado | Media | PM F7 | El Gantt ya permite abrir edición de fechas y aplicar sugerencias desde cada tarea, y ahora también mover barras con confirmación posterior en desktop. | La edición sigue apoyándose en modal para confirmar impacto y aplicar cambios. |
+| PM | Cronograma visual | Implementado | Media | PM F6 + UX actual | El plan de trabajo ya muestra un cronograma por tarjetas con bloqueo, criticidad, fuera de secuencia, dependencias y fechas sugeridas. | Falta una lectura temporal más avanzada con flechas y línea base superpuesta. |
+| PM | Cronograma con dependencias visibles | Implementado | Media | PM F6 | El cronograma ya muestra dependencias visibles en texto y el estado operativo de bloqueo o prerrequisitos completados. | La secuencia sigue sin flechas complejas o recalculo visual interactivo. |
+| PM | Edición guiada de fechas | Implementado | Media | PM F7 + UX actual | El usuario ya puede abrir edición de fechas y aplicar sugerencias desde cada tarea mediante acciones y modales guiados. | La edición sigue apoyándose en modal para confirmar impacto y aplicar cambios. |
 | PM | Dependencias | Implementado | Media | PM F4.5 | Ya existen dependencias `finish_to_start` entre tareas del mismo proyecto, con validacion backend y conteos en plan de trabajo. | Sin secuencia formal entre tareas. |
 | PM | Prerrequisitos bloqueantes | Implementado | Media | PM F4.5 | Una tarea bloqueada no puede avanzar a `en_progreso`, `en_revision` o `completada` mientras su prerrequisito siga pendiente. | Ejecucion fuera de secuencia si la validacion falla. |
 | PM | Prerrequisitos desde creacion de tarea | Implementado | Media | PM F4.5 UX | El modal de nueva tarea ya permite seleccionar prerrequisitos del mismo proyecto y guardarlos junto con la tarea. | Alta friccion si la dependencia solo pudiera agregarse despues. |
-| PM | Gantt simple integrado | Implementado | Media | PM F6 | Plan de trabajo ya integra tabla, Gantt mejorado, detalle, resumen de planeacion y alertas activas en una sola vista. | La experiencia sigue sin edicion temporal directa. |
+| PM | Cronograma integrado | Implementado | Media | PM F6 + UX actual | Plan de trabajo ya integra cronograma, tabla, detalle, resumen de planeación y alertas activas en una sola vista. | Falta una vista comparativa temporal más ejecutiva. |
 | PM | Kanban separado | Implementado | Baja | PM F4.5 UX | Kanban se mantiene como vista separada del plan de trabajo para evitar mezclar seguimiento visual con dependencias. | Menor claridad si ambas vistas se mezclan en un solo bloque. |
 | PM | Kanban con bloqueo por prerrequisitos | Implementado | Media | PM F4.5 UX | Cada card Kanban ya muestra si la tarea esta bloqueada, de que tarea depende y bloquea el avance directo mientras el prerrequisito siga pendiente. | Ejecucion fuera de secuencia si la vista rapida no comunica el bloqueo. |
 | PM | Dependencias avanzadas | Pendiente | Media | PM futura | No existen `start_to_start`, `finish_to_finish`, `start_to_finish` ni lag real sobre fechas. | Planeacion avanzada aun limitada. |
@@ -168,17 +168,17 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | Aplicar fechas sugeridas | Implementado | Media | PM F7 | El usuario ya puede aplicar la fecha sugerida a una tarea y recalcular planeacion y alertas. | No existe aplicacion masiva inteligente por reglas avanzadas. |
 | PM | Reprogramar dependientes | Implementado | Media | PM F7 | Al mover una tarea ya se puede ver impacto y confirmar si se reprograman sus dependientes. | No mueve tareas completadas automaticamente y no hay simulacion avanzada de escenarios. |
 | PM | Alertas PM | Implementado | Media | PM F6 | Ya existen alertas deduplicadas de tareas vencidas, bloqueadas, criticas atrasadas, fuera de secuencia y proyecto atrasado. | Requiere seguimiento manual hasta agregar notificaciones. |
-| PM | Drag and drop Gantt | Parcial | Media | PM F9 | El Gantt ya permite mover tareas horizontalmente en desktop y abrir confirmación de impacto antes de aplicar. | Falta soporte móvil avanzado, más escalas y dependencias visuales con flechas. |
-| PM | Resize Gantt | Parcial | Media | PM F9 | Ya existe resize básico desde el borde derecho para proponer una nueva fecha fin antes de confirmar. | Falta resize izquierdo y una edición temporal más rica. |
-| PM | Calendario laboral básico | Implementado | Media | PM F7 | Cada proyecto ya puede usar un calendario laboral configurable para sugerencias y reprogramacion. | No contempla feriados ni calendarios por persona o equipo. |
+| PM | Drag and drop Gantt | Descartado | Baja | PM F9 UX | El flujo principal ya no usa arrastre sobre barras; la reprogramación se hace con botones y modales guiados. | Menos riesgo de movimientos accidentales, pero sin edición gestual directa. |
+| PM | Resize Gantt | Descartado | Baja | PM F9 UX | El ajuste de duración ya no depende de handles visuales; se resuelve desde edición guiada de fechas. | La edición temporal no es gestual. |
+| PM | Calendario laboral básico | Implementado | Media | PM F7 | Cada proyecto ya puede usar un calendario laboral configurable para sugerencias y reprogramación. | No contempla feriados ni calendarios por persona o equipo. |
 | PM | Línea base PM | Implementado | Media | PM F8 | Ya existe línea base por proyecto con snapshot de tareas, fechas, avance, costos y ruta crítica disponible. | Sin referencia formal del plan aprobado. |
 | PM | Comparativo plan vs actual | Implementado | Media | PM F8 | El proyecto ya compara línea base contra estado actual para detectar desviaciones de fechas, costo y tareas. | Desviaciones invisibles o tardías. |
 | PM | Control de cambios | Parcial | Media | PM F8 | Ya existe registro, envío, aprobación y aplicación básica de cambios; la aplicación automática real se limita a cambios de fecha. | Gobierno parcial sobre cambios importantes. |
 | PM | Aprobación de cambios | Parcial | Media | PM F8 | Los cambios pueden crear y sincronizar una aprobación relacionada, pero el flujo fino de permisos y gobierno sigue básico. | Riesgo de aplicar cambios sin proceso formal suficiente. |
-| PM | Control de cambios desde Gantt | Implementado | Media | PM F9 | El drag del Gantt puede registrar un cambio de fecha y aplicarlo o enviarlo a aprobación según exista línea base activa. | La automatización se limita a cambios de fecha. |
-| PM | Aprobación desde Gantt | Implementado | Media | PM F9 | Un movimiento en Gantt puede convertirse en cambio y enviarse a aprobación sin modificar todavía la tarea. | El seguimiento fino de aprobadores sigue dependiendo del flujo básico actual. |
-| PM | Visualizar línea base en Gantt | Pendiente | Baja | PM futura | El comparativo existe en plan y detalle, pero el marcador visual de línea base sobre el Gantt sigue pendiente. | Menor lectura visual de desviaciones en cronograma. |
-| PM | Undo / redo en Gantt | Pendiente | Baja | PM futura | No existe historial interactivo de revertir o rehacer movimientos desde la línea de tiempo. | Correcciones rápidas siguen dependiendo de nuevas ediciones manuales. |
+| PM | Control de cambios desde cronograma | Implementado | Media | PM F9 UX | Desde el cronograma se puede abrir edición guiada de fechas y mantener el flujo de registro y aprobación de cambios. | La automatización se limita a cambios de fecha. |
+| PM | Aprobación desde cronograma | Implementado | Media | PM F9 UX | La edición guiada de fechas puede derivar en cambio formal y enviarse a aprobación sin modificar todavía la tarea. | El seguimiento fino de aprobadores sigue dependiendo del flujo básico actual. |
+| PM | Visualizar línea base en cronograma | Pendiente | Baja | PM futura | El comparativo existe en plan y detalle, pero el marcador visual de línea base sobre el cronograma sigue pendiente. | Menor lectura visual de desviaciones en cronograma. |
+| PM | Undo / redo en cronograma | Pendiente | Baja | PM futura | No existe historial interactivo para revertir o rehacer reprogramaciones desde la vista operativa. | Correcciones rápidas siguen dependiendo de nuevas ediciones manuales. |
 | PM | Feriados / calendarios avanzados | Pendiente | Media | PM futura | No existen feriados, excepciones ni calendarios por recurso. | La ruta critica y la secuencia siguen con una aproximacion laboral basica. |
 | PM | Materiales PM planeados | Implementado | Alta | PM F2 | Cada proyecto ya puede definir materiales planeados, cantidad, costo estimado y pendiente operativo. | Planeacion material fuera del proyecto. |
 | PM | Consumo real desde inventario | Implementado | Alta | PM F2 | Los surtidos de requisicion y las salidas manuales de inventario con `proyecto_id` ya generan consumo formal PM y actualizan costo real. | Proyecto sin costo real de materiales. |
@@ -224,3 +224,4 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 ## Regla de desarrollo futuro
 
 Cada nuevo prompt de desarrollo debe respetar esta matriz. Si una funcionalidad ya existia en Base44, CapellaOpsV2 debe incluirla, reemplazarla por una alternativa superior o documentar explicitamente por que se omite.
+

@@ -1,8 +1,9 @@
+import { useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarRange,
   CheckCheck,
-  CircleOff,
+  ChevronDown,
   Eye,
   Lock,
   Pencil,
@@ -59,7 +60,11 @@ function getPlanningDetail(task) {
   const badges = [];
 
   if (task?.es_critica) {
-    badges.push(<StatusBadge key="critical" tone="danger">En ruta crítica</StatusBadge>);
+    badges.push(
+      <StatusBadge key="critical" tone="danger">
+        En ruta crítica
+      </StatusBadge>,
+    );
   }
   if (dependencyState?.is_blocked) {
     badges.push(
@@ -78,7 +83,11 @@ function getPlanningDetail(task) {
     );
   }
   if (isTaskOverdue(task)) {
-    badges.push(<StatusBadge key="overdue" tone="danger">Vencida</StatusBadge>);
+    badges.push(
+      <StatusBadge key="overdue" tone="danger">
+        Vencida
+      </StatusBadge>,
+    );
   }
 
   let note = "Sin riesgos inmediatos.";
@@ -91,11 +100,6 @@ function getPlanningDetail(task) {
   }
 
   return { badges, note };
-}
-
-function getFirstBlockerTitle(task) {
-  const blockers = task?.dependency_state?.blockers ?? task?.blockers ?? [];
-  return blockers.length > 0 ? safeDisplayText(blockers[0]?.titulo, "otra tarea") : "";
 }
 
 function isTaskActionPending(taskActionLoading, taskId, action) {
@@ -113,18 +117,14 @@ export default function PMProjectWorkPlanView({
   onApplySuggestedDates,
   onConfigureCalendar,
   onCreateTask,
-  onDeactivateTask,
   onDependenciesChanged,
   onDismissAlert,
   onEditTask,
   onEditTaskDates,
-  onGanttNotice,
-  onPreviewReschedule,
   onRefresh,
   onRecalculatePlanning,
   onResolveAlert,
   onSelectTask,
-  onSetTaskStatus,
   planningCriticalPath,
   planningSummary,
   projectId,
@@ -138,6 +138,9 @@ export default function PMProjectWorkPlanView({
   token,
   workCalendar,
 }) {
+  const [isTaskDetailExpanded, setIsTaskDetailExpanded] = useState(false);
+  const detailSectionRef = useRef(null);
+
   const taskTimeMetrics = (timeEntries ?? []).reduce((accumulator, entry) => {
     if (!entry.tarea_id) {
       return accumulator;
@@ -157,6 +160,20 @@ export default function PMProjectWorkPlanView({
     return accumulator;
   }, {});
   const hasBaselineComparison = Boolean(baselineComparison?.baseline?.id);
+  const selectedTask = useMemo(
+    () => tasks.find((task) => task.id === selectedTaskId) ?? null,
+    [tasks, selectedTaskId],
+  );
+
+  function openTaskDetail(taskId) {
+    onSelectTask?.(taskId);
+    setIsTaskDetailExpanded(true);
+    if (typeof window !== "undefined") {
+      window.setTimeout(() => {
+        detailSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+    }
+  }
 
   const headerActions = (
     <>
@@ -195,7 +212,7 @@ export default function PMProjectWorkPlanView({
           <div className="inventory-actions inventory-actions-wrap">{headerActions}</div>
         </div>
 
-        <DataCard subtitle="La tabla y la línea de tiempo se activan cuando existe plan de trabajo." title="Plan de trabajo">
+        <DataCard subtitle="La tabla y el cronograma se activan cuando existe plan de trabajo." title="Plan de trabajo">
           <EmptyState
             action={(
               <ActionButton onClick={onCreateTask} tone="primary" type="button">
@@ -277,7 +294,7 @@ export default function PMProjectWorkPlanView({
           <div className="inventory-form-note">
             <strong>{safeDisplayText(workCalendar?.nombre, "Calendario estándar")}</strong>
             <p className="table-note">{formatWorkCalendarSummary(workCalendar)}</p>
-            <p className="table-note">En desktop puedes arrastrar tareas en el Gantt. En móvil usa Editar fechas.</p>
+            <p className="table-note">Usa Editar fechas o Aplicar sugerencia para reprogramar tareas con confirmación guiada.</p>
           </div>
         </DataCard>
 
@@ -322,21 +339,29 @@ export default function PMProjectWorkPlanView({
         onResolve={onResolveAlert}
       />
 
-      <div className="pm-workplan-layout">
+      <div className="pm-workplan-layout-vertical">
+        <PMProjectGanttLite
+          onApplySuggestedDates={onApplySuggestedDates}
+          onEditTaskDates={onEditTaskDates}
+          onSelectTask={onSelectTask}
+          onViewTaskDetail={openTaskDetail}
+          selectedTaskId={selectedTaskId}
+          taskActionLoading={taskActionLoading}
+          tasks={tasks}
+        />
+
         <DataCard
-          className="pm-workplan-card"
-          subtitle="Tabla operativa con bloqueo, sugerencias de fechas e impacto de reprogramación."
+          className="pm-workplan-card pm-task-table-compact"
+          subtitle="Resumen operativo del plan. Abre una tarea para ver detalle."
           title="Tabla de tareas"
         >
           <div className="pm-workplan-table">
-            <div className="pm-workplan-row pm-workplan-row-head pm-workplan-row-phase7-head">
+            <div className="pm-workplan-row pm-workplan-row-head pm-workplan-row-compact-head">
               <span>Tarea</span>
-              <span>Estatus</span>
+              <span>Estado</span>
               <span>Inicio</span>
               <span>Fin</span>
-              <span>Sugerido</span>
-              <span>Ruta crítica</span>
-              <span>Estado</span>
+              <span>Sugerido / alerta</span>
               <span>Acciones</span>
             </div>
 
@@ -346,20 +371,19 @@ export default function PMProjectWorkPlanView({
               const selected = selectedTaskId === task.id;
               const dependencyState = taskDependencyContextMap?.[task.id] ?? task.dependency_state ?? null;
               const blocked = Boolean(dependencyState?.is_blocked ?? dependencyState?.blocked ?? task.is_blocked);
-              const blockerTitle = getFirstBlockerTitle(task);
-              const completing = isTaskActionPending(taskActionLoading, task.id, "complete");
-              const starting = isTaskActionPending(taskActionLoading, task.id, "start");
-              const applyingSuggestion = isTaskActionPending(taskActionLoading, task.id, "apply-suggestion");
-              const editingDates = isTaskActionPending(taskActionLoading, task.id, "dates");
-              const deactivating = isTaskActionPending(taskActionLoading, task.id, "deactivate");
               const planningDetail = getPlanningDetail({ ...task, dependency_state: dependencyState });
+              const editingDates = isTaskActionPending(taskActionLoading, task.id, "dates");
               const suggestionCopy = task?.schedule_suggestion?.fecha_inicio_sugerida
                 ? `${safeDisplayText(formatDate(task.schedule_suggestion.fecha_inicio_sugerida), "—")} → ${safeDisplayText(formatDate(task.schedule_suggestion.fecha_fin_sugerida), "—")}`
                 : "—";
+              const deviationCopy =
+                baselineTaskComparison?.has_change && Number(baselineTaskComparison?.desviacion_dias_fin ?? 0) !== 0
+                  ? `Fin actual ${baselineTaskComparison.desviacion_dias_fin > 0 ? "+" : ""}${formatNumber(baselineTaskComparison.desviacion_dias_fin)} días vs línea base`
+                  : "";
 
               return (
                 <div
-                  className={`pm-workplan-row pm-workplan-row-phase7 ${selected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""} ${task.es_critica ? "is-critical" : ""} ${completing || starting || deactivating || applyingSuggestion || editingDates ? "pm-card-updating" : ""}`}
+                  className={`pm-workplan-row pm-workplan-row-compact ${selected ? "is-selected" : ""} ${blocked ? "is-blocked" : ""} ${task.es_critica ? "is-critical" : ""}`}
                   key={task.id}
                   onClick={() => onSelectTask?.(task.id)}
                   onKeyDown={(event) => {
@@ -371,60 +395,50 @@ export default function PMProjectWorkPlanView({
                   role="button"
                   tabIndex={0}
                 >
-                  <span>
+                  <div className="pm-task-table-cell is-primary" data-label="Tarea">
                     <div className="inventory-cell-main">{normalizePmCopy(safeDisplayText(task.titulo))}</div>
-                    <div className="inventory-cell-sub">
-                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}
-                      {" · "}
-                      {getDurationLabel(task)}
-                      {" · "}
-                      {formatNumber(taskMetrics.horas)} h reales
-                      {" · "}
-                      {formatMoney(taskMetrics.costo)}
+                    <div className="pm-task-row-secondary">
+                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} · {getDurationLabel(task)} · {formatNumber(taskMetrics.horas)} h reales · {formatMoney(taskMetrics.costo)}
                     </div>
-                  </span>
+                  </div>
 
-                  <span><StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge></span>
-                  <span>{safeDisplayText(formatDate(task.fecha_inicio), "—")}</span>
-                  <span>{safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</span>
+                  <div className="pm-task-table-cell" data-label="Estado">
+                    <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
+                  </div>
 
-                  <span>
-                    {task?.schedule_suggestion?.fuera_de_secuencia ? (
-                      <div className="pm-workplan-suggestion-stack">
-                        <strong>{suggestionCopy}</strong>
-                        <span>{safeDisplayText(task.schedule_suggestion.razon, "Fecha sugerida disponible.")}</span>
-                      </div>
-                    ) : (
-                      "—"
-                    )}
-                  </span>
+                  <div className="pm-task-table-cell" data-label="Inicio">
+                    {safeDisplayText(formatDate(task.fecha_inicio), "—")}
+                  </div>
 
-                  <span>{task.es_critica ? <StatusBadge tone="danger">En ruta crítica</StatusBadge> : "—"}</span>
+                  <div className="pm-task-table-cell" data-label="Fin">
+                    {safeDisplayText(formatDate(task.fecha_vencimiento), "—")}
+                  </div>
 
-                  <span>
+                  <div className="pm-task-table-cell" data-label="Sugerido / alerta">
                     <div className="pm-workplan-planning-stack">
-                      <div className="pm-workplan-planning-badges">{planningDetail.badges}</div>
-                      {baselineTaskComparison?.has_change ? (
-                        <div className="pm-workplan-planning-badges">
+                      <div className="pm-workplan-planning-badges">
+                        {planningDetail.badges}
+                        {baselineTaskComparison?.has_change ? (
                           <StatusBadge tone="warning">Desviada</StatusBadge>
-                        </div>
+                        ) : null}
+                      </div>
+                      <div className="pm-workplan-planning-copy">
+                        {task?.schedule_suggestion?.fuera_de_secuencia ? suggestionCopy : planningDetail.note}
+                      </div>
+                      {task?.schedule_suggestion?.fuera_de_secuencia && task.schedule_suggestion?.razon ? (
+                        <div className="pm-workplan-planning-copy">{safeDisplayText(task.schedule_suggestion.razon)}</div>
                       ) : null}
-                      <div className="pm-workplan-planning-copy">{planningDetail.note}</div>
-                      {baselineTaskComparison?.has_change && Number(baselineTaskComparison?.desviacion_dias_fin ?? 0) !== 0 ? (
-                        <div className="pm-workplan-planning-copy">
-                          Fin actual {baselineTaskComparison.desviacion_dias_fin > 0 ? "+" : ""}{formatNumber(baselineTaskComparison.desviacion_dias_fin)} días vs línea base
-                        </div>
-                      ) : null}
+                      {deviationCopy ? <div className="pm-workplan-planning-copy">{deviationCopy}</div> : null}
                     </div>
-                  </span>
+                  </div>
 
-                  <span>
-                    <div className="table-actions">
+                  <div className="pm-task-table-cell" data-label="Acciones">
+                    <div className="pm-task-table-actions">
                       <ActionButton
                         icon={<Eye size={14} strokeWidth={1.9} />}
                         onClick={(event) => {
                           event.stopPropagation();
-                          onSelectTask?.(task.id);
+                          openTaskDetail(task.id);
                         }}
                         size="sm"
                         type="button"
@@ -432,6 +446,8 @@ export default function PMProjectWorkPlanView({
                         Ver detalle
                       </ActionButton>
                       <ActionButton
+                        className={editingDates ? "pm-button-loading" : ""}
+                        disabled={editingDates}
                         icon={<Pencil size={14} strokeWidth={1.9} />}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -442,109 +458,92 @@ export default function PMProjectWorkPlanView({
                       >
                         {editingDates ? "Guardando..." : "Editar fechas"}
                       </ActionButton>
-                      {task?.schedule_suggestion?.fuera_de_secuencia ? (
-                        <ActionButton
-                          className={applyingSuggestion ? "pm-button-loading" : ""}
-                          disabled={applyingSuggestion}
-                          icon={<Sparkles size={14} strokeWidth={1.9} />}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onApplySuggestedDates?.(task.id);
-                          }}
-                          size="sm"
-                          tone="primary"
-                          type="button"
-                        >
-                          {applyingSuggestion ? "Aplicando..." : "Aplicar sugerencia"}
-                        </ActionButton>
-                      ) : null}
-                      {task.estatus === "pendiente" ? (
-                        <ActionButton
-                          className={blocked ? "is-soft-disabled" : ""}
-                          disabled={starting || completing || deactivating}
-                          icon={<Lock size={14} strokeWidth={1.9} />}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onSetTaskStatus?.(task, "en_progreso");
-                          }}
-                          size="sm"
-                          title={blocked && blockerTitle ? `Completa primero: ${blockerTitle}.` : undefined}
-                          type="button"
-                        >
-                          {starting ? "Actualizando..." : "Marcar en progreso"}
-                        </ActionButton>
-                      ) : null}
-                      {task.estatus !== "completada" && task.estatus !== "cancelada" ? (
-                        <ActionButton
-                          className={blocked ? "is-soft-disabled" : ""}
-                          disabled={starting || completing || deactivating}
-                          icon={<CheckCheck size={14} strokeWidth={1.9} />}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            onSetTaskStatus?.(task, "completada");
-                          }}
-                          size="sm"
-                          title={blocked && blockerTitle ? `Completa primero: ${blockerTitle}.` : undefined}
-                          tone={blocked ? "warning" : "primary"}
-                          type="button"
-                        >
-                          {completing ? "Completando..." : "Completar"}
-                        </ActionButton>
-                      ) : null}
-                      <ActionButton
-                        className={deactivating ? "pm-button-loading" : ""}
-                        disabled={completing || starting || deactivating}
-                        icon={<CircleOff size={14} strokeWidth={1.9} />}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDeactivateTask?.(task);
-                        }}
-                        size="sm"
-                        tone="danger"
-                        type="button"
-                      >
-                        {deactivating ? "Desactivando..." : "Desactivar"}
-                      </ActionButton>
                     </div>
-                  </span>
+                  </div>
                 </div>
               );
             })}
           </div>
         </DataCard>
 
-        <PMProjectGanttLite
-          onApplySuggestedDates={onApplySuggestedDates}
-          onEditTaskDates={onEditTaskDates}
-          onGanttNotice={onGanttNotice}
-          onPreviewReschedule={onPreviewReschedule}
-          onSelectTask={onSelectTask}
-          selectedTaskId={selectedTaskId}
-          taskActionLoading={taskActionLoading}
-          tasks={tasks}
-          workCalendar={workCalendar}
-        />
+        <div className="pm-task-detail-shell" ref={detailSectionRef}>
+          {!selectedTask ? (
+            <DataCard subtitle="Información completa de la tarea seleccionada." title="Detalle de tarea">
+              <EmptyState compact note="Selecciona una tarea para ver su detalle." title="Sin tarea seleccionada" />
+            </DataCard>
+          ) : !isTaskDetailExpanded ? (
+            <DataCard
+              actions={(
+                <div className="inventory-actions inventory-actions-wrap">
+                  <ActionButton
+                    className="pm-task-detail-toggle"
+                    icon={<ChevronDown size={16} strokeWidth={1.9} />}
+                    onClick={() => setIsTaskDetailExpanded(true)}
+                    type="button"
+                  >
+                    Mostrar detalle
+                  </ActionButton>
+                  <ActionButton onClick={() => onEditTask?.(selectedTask.id)} type="button">
+                    Editar tarea
+                  </ActionButton>
+                  <ActionButton onClick={() => onEditTaskDates?.(selectedTask.id)} type="button">
+                    Editar fechas
+                  </ActionButton>
+                </div>
+              )}
+              subtitle="Información completa de la tarea seleccionada."
+              title="Detalle de tarea"
+            >
+              <div className="pm-task-detail-collapsed">
+                <div className="pm-task-detail-collapsed-head">
+                  <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo, "Tarea seleccionada"))}</strong>
+                  <StatusBadge tone={getTaskStatusTone(selectedTask.estatus)}>{getTaskStatusLabel(selectedTask.estatus)}</StatusBadge>
+                </div>
+                <div className="pm-task-detail-collapsed-summary">
+                  <div>
+                    <span>Tarea seleccionada</span>
+                    <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo))}</strong>
+                  </div>
+                  <div>
+                    <span>Inicio</span>
+                    <strong>{safeDisplayText(formatDate(selectedTask.fecha_inicio), "—")}</strong>
+                  </div>
+                  <div>
+                    <span>Fin</span>
+                    <strong>{safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "—")}</strong>
+                  </div>
+                  <div>
+                    <span>Avance</span>
+                    <strong>{formatPercent(selectedTask.porcentaje_avance)}</strong>
+                  </div>
+                </div>
+              </div>
+            </DataCard>
+          ) : (
+            <PMTaskDetailPanel
+              baselineTaskComparison={selectedTaskId ? baselineTaskComparisonMap?.[selectedTaskId] ?? null : null}
+              empresaId={empresaId}
+              isExpanded
+              materialConsumptions={materialConsumptions}
+              materialPlans={materialPlans}
+              onApplySuggestedDates={onApplySuggestedDates}
+              onDependenciesChanged={onDependenciesChanged}
+              onEditTask={onEditTask}
+              onEditTaskDates={onEditTaskDates}
+              onSelectTask={onSelectTask}
+              onToggleExpanded={() => setIsTaskDetailExpanded(false)}
+              projectId={projectId}
+              taskActionLoading={taskActionLoading}
+              taskDependencyContext={selectedTaskId ? taskDependencyContextMap?.[selectedTaskId] ?? null : null}
+              taskId={selectedTaskId}
+              taskSummary={selectedTask}
+              tasks={tasks}
+              timeEntries={timeEntries}
+              token={token}
+            />
+          )}
+        </div>
       </div>
-
-      <PMTaskDetailPanel
-        empresaId={empresaId}
-        materialConsumptions={materialConsumptions}
-        materialPlans={materialPlans}
-        onApplySuggestedDates={onApplySuggestedDates}
-        onDependenciesChanged={onDependenciesChanged}
-        onEditTask={onEditTask}
-        onEditTaskDates={onEditTaskDates}
-        onSelectTask={onSelectTask}
-        projectId={projectId}
-        taskActionLoading={taskActionLoading}
-        baselineTaskComparison={selectedTaskId ? baselineTaskComparisonMap?.[selectedTaskId] ?? null : null}
-        taskDependencyContext={selectedTaskId ? taskDependencyContextMap?.[selectedTaskId] ?? null : null}
-        taskId={selectedTaskId}
-        taskSummary={tasks.find((task) => task.id === selectedTaskId) ?? null}
-        tasks={tasks}
-        timeEntries={timeEntries}
-        token={token}
-      />
 
       <ActionButton className="pm-workplan-fab" icon={<Plus size={18} strokeWidth={2} />} onClick={onCreateTask} tone="primary" type="button">
         + Tarea
