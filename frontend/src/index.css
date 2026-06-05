@@ -1810,6 +1810,46 @@ textarea {
   min-width: 0;
 }
 
+.pm-collapsible-section {
+  overflow: hidden;
+}
+
+.pm-collapsible-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.pm-collapsible-toggle {
+  white-space: nowrap;
+}
+
+.pm-collapsible-body {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.pm-collapsible-collapsed .pm-collapsible-body {
+  padding-top: 0.15rem;
+}
+
+.pm-section-count-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.42rem 0.72rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
 .pm-workplan-gantt-wide {
   overflow-x: visible;
 }
@@ -2484,6 +2524,14 @@ body.pm-is-dragging {
 
 .pm-task-detail-toggle {
   white-space: nowrap;
+}
+
+.pm-task-detail-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .pm-task-detail-stack {

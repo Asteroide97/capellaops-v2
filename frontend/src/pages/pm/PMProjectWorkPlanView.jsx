@@ -1,9 +1,10 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarRange,
   CheckCheck,
   ChevronDown,
+  ChevronUp,
   Eye,
   Lock,
   Pencil,
@@ -50,8 +51,7 @@ function getDurationLabel(task) {
   if (!startValue || !endValue) {
     return "Sin fechas";
   }
-  const duration = Math.abs(diffInDays(startValue, endValue)) + 1;
-  return `${formatNumber(duration)} d`;
+  return `${formatNumber(Math.abs(diffInDays(startValue, endValue)) + 1)} d`;
 }
 
 function getPlanningDetail(task) {
@@ -106,6 +106,91 @@ function isTaskActionPending(taskActionLoading, taskId, action) {
   return Boolean(taskActionLoading?.[`${taskId}:${action}`]);
 }
 
+function readStoredExpandedState(storageKey, fallback) {
+  if (typeof window === "undefined" || !storageKey) {
+    return fallback;
+  }
+  const stored = window.localStorage.getItem(storageKey);
+  if (stored === null) {
+    return fallback;
+  }
+  return stored === "1";
+}
+
+function useStoredExpandedState(storageKey, fallback) {
+  const [isOpen, setIsOpen] = useState(() => readStoredExpandedState(storageKey, fallback));
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !storageKey) {
+      return;
+    }
+    window.localStorage.setItem(storageKey, isOpen ? "1" : "0");
+  }, [isOpen, storageKey]);
+
+  return [isOpen, setIsOpen];
+}
+
+function formatCountLabel(count, singular, plural, emptyLabel) {
+  if (!count) {
+    return emptyLabel;
+  }
+  return `${formatNumber(count)} ${count === 1 ? singular : plural}`;
+}
+
+function CollapsibleSection({
+  children,
+  className = "",
+  collapsedContent = null,
+  countLabel = "",
+  defaultOpen = true,
+  isOpen: controlledOpen,
+  onToggle,
+  rightActions = null,
+  storageKey,
+  subtitle,
+  title,
+}) {
+  const [storedOpen, setStoredOpen] = useStoredExpandedState(storageKey, defaultOpen);
+  const isControlled = typeof controlledOpen === "boolean";
+  const isOpen = isControlled ? controlledOpen : storedOpen;
+
+  function handleToggle() {
+    if (isControlled) {
+      onToggle?.(!isOpen);
+      return;
+    }
+    setStoredOpen((current) => !current);
+  }
+
+  return (
+    <DataCard
+      className={`pm-collapsible-section ${isOpen ? "" : "pm-collapsible-collapsed"} ${className}`.trim()}
+      subtitle={subtitle}
+      title={title}
+      actions={(
+        <div className="pm-collapsible-actions">
+          {countLabel ? <span className="pm-section-count-badge">{countLabel}</span> : null}
+          {rightActions}
+          <ActionButton
+            className="pm-collapsible-toggle"
+            icon={isOpen ? <ChevronUp size={16} strokeWidth={1.9} /> : <ChevronDown size={16} strokeWidth={1.9} />}
+            onClick={handleToggle}
+            type="button"
+          >
+            {isOpen ? "Minimizar" : "Expandir"}
+          </ActionButton>
+        </div>
+      )}
+    >
+      {isOpen ? (
+        <div className="pm-collapsible-body">{children}</div>
+      ) : collapsedContent ? (
+        <div className="pm-collapsible-body">{collapsedContent}</div>
+      ) : null}
+    </DataCard>
+  );
+}
+
 export default function PMProjectWorkPlanView({
   alerts = [],
   alertActionLoading = {},
@@ -138,27 +223,40 @@ export default function PMProjectWorkPlanView({
   token,
   workCalendar,
 }) {
-  const [isTaskDetailExpanded, setIsTaskDetailExpanded] = useState(false);
   const detailSectionRef = useRef(null);
+  const [isDetailExpanded, setIsDetailExpanded] = useStoredExpandedState(`pm.workplan.detail.expanded.${projectId}`, false);
 
-  const taskTimeMetrics = (timeEntries ?? []).reduce((accumulator, entry) => {
-    if (!entry.tarea_id) {
-      return accumulator;
-    }
-    const current = accumulator[entry.tarea_id] ?? { horas: 0, costo: 0 };
-    current.horas += Number(entry.horas || 0);
-    current.costo += Number(entry.costo_total_snapshot || 0);
-    accumulator[entry.tarea_id] = current;
-    return accumulator;
-  }, {});
+  const taskTimeMetrics = useMemo(
+    () =>
+      (timeEntries ?? []).reduce((accumulator, entry) => {
+        if (!entry.tarea_id) {
+          return accumulator;
+        }
+        const current = accumulator[entry.tarea_id] ?? { horas: 0, costo: 0 };
+        current.horas += Number(entry.horas || 0);
+        current.costo += Number(entry.costo_total_snapshot || 0);
+        accumulator[entry.tarea_id] = current;
+        return accumulator;
+      }, {}),
+    [timeEntries],
+  );
 
-  const outOfSequenceTasks = tasks.filter((task) => task?.schedule_suggestion?.fuera_de_secuencia);
-  const baselineTaskComparisonMap = (baselineComparison?.task_changes ?? []).reduce((accumulator, item) => {
-    if (item?.task_id) {
-      accumulator[item.task_id] = item;
-    }
-    return accumulator;
-  }, {});
+  const outOfSequenceTasks = useMemo(
+    () => tasks.filter((task) => task?.schedule_suggestion?.fuera_de_secuencia),
+    [tasks],
+  );
+
+  const baselineTaskComparisonMap = useMemo(
+    () =>
+      (baselineComparison?.task_changes ?? []).reduce((accumulator, item) => {
+        if (item?.task_id) {
+          accumulator[item.task_id] = item;
+        }
+        return accumulator;
+      }, {}),
+    [baselineComparison],
+  );
+
   const hasBaselineComparison = Boolean(baselineComparison?.baseline?.id);
   const selectedTask = useMemo(
     () => tasks.find((task) => task.id === selectedTaskId) ?? null,
@@ -167,7 +265,7 @@ export default function PMProjectWorkPlanView({
 
   function openTaskDetail(taskId) {
     onSelectTask?.(taskId);
-    setIsTaskDetailExpanded(true);
+    setIsDetailExpanded(true);
     if (typeof window !== "undefined") {
       window.setTimeout(() => {
         detailSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -230,6 +328,38 @@ export default function PMProjectWorkPlanView({
       </section>
     );
   }
+
+  const alertsCountLabel = alerts.length > 0 ? formatCountLabel(alerts.length, "alerta", "alertas", "Sin alertas") : "Sin alertas";
+  const tasksCountLabel = formatCountLabel(tasks.length, "tarea", "tareas", "Sin tareas");
+
+  const detailCollapsedContent = !selectedTask ? (
+    <EmptyState compact note="Selecciona una tarea para ver su detalle." title="Sin tarea seleccionada" />
+  ) : (
+    <div className="pm-task-detail-collapsed">
+      <div className="pm-task-detail-collapsed-head">
+        <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo, "Tarea seleccionada"))}</strong>
+        <StatusBadge tone={getTaskStatusTone(selectedTask.estatus)}>{getTaskStatusLabel(selectedTask.estatus)}</StatusBadge>
+      </div>
+      <div className="pm-task-detail-collapsed-summary">
+        <div>
+          <span>Tarea seleccionada</span>
+          <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo))}</strong>
+        </div>
+        <div>
+          <span>Inicio</span>
+          <strong>{safeDisplayText(formatDate(selectedTask.fecha_inicio), "—")}</strong>
+        </div>
+        <div>
+          <span>Fin</span>
+          <strong>{safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "—")}</strong>
+        </div>
+        <div>
+          <span>Avance</span>
+          <strong>{formatPercent(selectedTask.porcentaje_avance)}</strong>
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <section className="pm-workplan-stack">
@@ -331,28 +461,49 @@ export default function PMProjectWorkPlanView({
         </DataCard>
       ) : null}
 
-      <PMProjectAlertsPanel
-        actionLoading={alertActionLoading}
-        alerts={alerts}
-        compact
-        onDismiss={onDismissAlert}
-        onResolve={onResolveAlert}
-      />
-
       <div className="pm-workplan-layout-vertical">
-        <PMProjectGanttLite
-          onApplySuggestedDates={onApplySuggestedDates}
-          onEditTaskDates={onEditTaskDates}
-          onSelectTask={onSelectTask}
-          onViewTaskDetail={openTaskDetail}
-          selectedTaskId={selectedTaskId}
-          taskActionLoading={taskActionLoading}
-          tasks={tasks}
-        />
+        <CollapsibleSection
+          countLabel={alertsCountLabel}
+          defaultOpen={alerts.length > 0}
+          storageKey={`pm.workplan.alerts.expanded.${projectId}`}
+          subtitle="Señales operativas del proyecto deduplicadas por tipo y tarea."
+          title="Alertas activas"
+        >
+          <PMProjectAlertsPanel
+            actionLoading={alertActionLoading}
+            alerts={alerts}
+            compact
+            embedded
+            onDismiss={onDismissAlert}
+            onResolve={onResolveAlert}
+          />
+        </CollapsibleSection>
 
-        <DataCard
-          className="pm-workplan-card pm-task-table-compact"
-          subtitle="Resumen operativo del plan. Abre una tarea para ver detalle."
+        <CollapsibleSection
+          countLabel={tasksCountLabel}
+          defaultOpen
+          storageKey={`pm.workplan.timeline.expanded.${projectId}`}
+          subtitle="Consulta fechas, dependencias, ruta crítica y sugerencias de reprogramación."
+          title="Cronograma del proyecto"
+        >
+          <PMProjectGanttLite
+            embedded
+            onApplySuggestedDates={onApplySuggestedDates}
+            onEditTaskDates={onEditTaskDates}
+            onSelectTask={onSelectTask}
+            onViewTaskDetail={openTaskDetail}
+            selectedTaskId={selectedTaskId}
+            taskActionLoading={taskActionLoading}
+            tasks={tasks}
+          />
+        </CollapsibleSection>
+
+        <CollapsibleSection
+          className="pm-task-table-compact"
+          countLabel={tasksCountLabel}
+          defaultOpen
+          storageKey={`pm.workplan.table.expanded.${projectId}`}
+          subtitle="Resumen operativo del plan. Abre una tarea para ver su detalle."
           title="Tabla de tareas"
         >
           <div className="pm-workplan-table">
@@ -418,9 +569,7 @@ export default function PMProjectWorkPlanView({
                     <div className="pm-workplan-planning-stack">
                       <div className="pm-workplan-planning-badges">
                         {planningDetail.badges}
-                        {baselineTaskComparison?.has_change ? (
-                          <StatusBadge tone="warning">Desviada</StatusBadge>
-                        ) : null}
+                        {baselineTaskComparison?.has_change ? <StatusBadge tone="warning">Desviada</StatusBadge> : null}
                       </div>
                       <div className="pm-workplan-planning-copy">
                         {task?.schedule_suggestion?.fuera_de_secuencia ? suggestionCopy : planningDetail.note}
@@ -464,84 +613,56 @@ export default function PMProjectWorkPlanView({
               );
             })}
           </div>
-        </DataCard>
+        </CollapsibleSection>
 
         <div className="pm-task-detail-shell" ref={detailSectionRef}>
-          {!selectedTask ? (
-            <DataCard subtitle="Información completa de la tarea seleccionada." title="Detalle de tarea">
+          <CollapsibleSection
+            collapsedContent={detailCollapsedContent}
+            countLabel={selectedTask ? normalizePmCopy(safeDisplayText(selectedTask.titulo)) : "Sin tarea"}
+            defaultOpen={false}
+            isOpen={isDetailExpanded}
+            onToggle={setIsDetailExpanded}
+            rightActions={selectedTask ? (
+              <>
+                <ActionButton onClick={() => onEditTask?.(selectedTask.id)} size="sm" type="button">
+                  Editar tarea
+                </ActionButton>
+                <ActionButton onClick={() => onEditTaskDates?.(selectedTask.id)} size="sm" type="button">
+                  Editar fechas
+                </ActionButton>
+              </>
+            ) : null}
+            storageKey={`pm.workplan.detail.expanded.${projectId}`}
+            subtitle="Información completa de la tarea seleccionada."
+            title="Detalle de tarea"
+          >
+            {!selectedTask ? (
               <EmptyState compact note="Selecciona una tarea para ver su detalle." title="Sin tarea seleccionada" />
-            </DataCard>
-          ) : !isTaskDetailExpanded ? (
-            <DataCard
-              actions={(
-                <div className="inventory-actions inventory-actions-wrap">
-                  <ActionButton
-                    className="pm-task-detail-toggle"
-                    icon={<ChevronDown size={16} strokeWidth={1.9} />}
-                    onClick={() => setIsTaskDetailExpanded(true)}
-                    type="button"
-                  >
-                    Mostrar detalle
-                  </ActionButton>
-                  <ActionButton onClick={() => onEditTask?.(selectedTask.id)} type="button">
-                    Editar tarea
-                  </ActionButton>
-                  <ActionButton onClick={() => onEditTaskDates?.(selectedTask.id)} type="button">
-                    Editar fechas
-                  </ActionButton>
-                </div>
-              )}
-              subtitle="Información completa de la tarea seleccionada."
-              title="Detalle de tarea"
-            >
-              <div className="pm-task-detail-collapsed">
-                <div className="pm-task-detail-collapsed-head">
-                  <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo, "Tarea seleccionada"))}</strong>
-                  <StatusBadge tone={getTaskStatusTone(selectedTask.estatus)}>{getTaskStatusLabel(selectedTask.estatus)}</StatusBadge>
-                </div>
-                <div className="pm-task-detail-collapsed-summary">
-                  <div>
-                    <span>Tarea seleccionada</span>
-                    <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo))}</strong>
-                  </div>
-                  <div>
-                    <span>Inicio</span>
-                    <strong>{safeDisplayText(formatDate(selectedTask.fecha_inicio), "—")}</strong>
-                  </div>
-                  <div>
-                    <span>Fin</span>
-                    <strong>{safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "—")}</strong>
-                  </div>
-                  <div>
-                    <span>Avance</span>
-                    <strong>{formatPercent(selectedTask.porcentaje_avance)}</strong>
-                  </div>
-                </div>
-              </div>
-            </DataCard>
-          ) : (
-            <PMTaskDetailPanel
-              baselineTaskComparison={selectedTaskId ? baselineTaskComparisonMap?.[selectedTaskId] ?? null : null}
-              empresaId={empresaId}
-              isExpanded
-              materialConsumptions={materialConsumptions}
-              materialPlans={materialPlans}
-              onApplySuggestedDates={onApplySuggestedDates}
-              onDependenciesChanged={onDependenciesChanged}
-              onEditTask={onEditTask}
-              onEditTaskDates={onEditTaskDates}
-              onSelectTask={onSelectTask}
-              onToggleExpanded={() => setIsTaskDetailExpanded(false)}
-              projectId={projectId}
-              taskActionLoading={taskActionLoading}
-              taskDependencyContext={selectedTaskId ? taskDependencyContextMap?.[selectedTaskId] ?? null : null}
-              taskId={selectedTaskId}
-              taskSummary={selectedTask}
-              tasks={tasks}
-              timeEntries={timeEntries}
-              token={token}
-            />
-          )}
+            ) : (
+              <PMTaskDetailPanel
+                baselineTaskComparison={selectedTaskId ? baselineTaskComparisonMap?.[selectedTaskId] ?? null : null}
+                embedded
+                empresaId={empresaId}
+                isExpanded={isDetailExpanded}
+                materialConsumptions={materialConsumptions}
+                materialPlans={materialPlans}
+                onApplySuggestedDates={onApplySuggestedDates}
+                onDependenciesChanged={onDependenciesChanged}
+                onEditTask={onEditTask}
+                onEditTaskDates={onEditTaskDates}
+                onSelectTask={onSelectTask}
+                onToggleExpanded={() => setIsDetailExpanded(false)}
+                projectId={projectId}
+                taskActionLoading={taskActionLoading}
+                taskDependencyContext={selectedTaskId ? taskDependencyContextMap?.[selectedTaskId] ?? null : null}
+                taskId={selectedTaskId}
+                taskSummary={selectedTask}
+                tasks={tasks}
+                timeEntries={timeEntries}
+                token={token}
+              />
+            )}
+          </CollapsibleSection>
         </div>
       </div>
 

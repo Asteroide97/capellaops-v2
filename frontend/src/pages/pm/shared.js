@@ -101,24 +101,24 @@ export const weekdayOptions = [
 ];
 
 const mojibakeFixups = [
-  ["Ã¡", "á"],
-  ["Ã©", "é"],
-  ["Ã­", "í"],
-  ["Ã³", "ó"],
-  ["Ãº", "ú"],
-  ["Ã", "Á"],
-  ["Ã‰", "É"],
-  ["Ã", "Í"],
-  ["Ã“", "Ó"],
-  ["Ãš", "Ú"],
-  ["Ã±", "ñ"],
-  ["Ã‘", "Ñ"],
-  ["Â·", "·"],
-  ["Â", ""],
-  ["â€”", "—"],
-  ["â€“", "–"],
-  ["â†’", "→"],
-  ["â€¦", "…"],
+  ["\u00c3\u00a1", "á"],
+  ["\u00c3\u00a9", "é"],
+  ["\u00c3\u00ad", "í"],
+  ["\u00c3\u00b3", "ó"],
+  ["\u00c3\u00ba", "ú"],
+  ["\u00c3\u0081", "Á"],
+  ["\u00c3\u0089", "É"],
+  ["\u00c3\u008d", "Í"],
+  ["\u00c3\u0093", "Ó"],
+  ["\u00c3\u009a", "Ú"],
+  ["\u00c3\u00b1", "ñ"],
+  ["\u00c3\u0091", "Ñ"],
+  ["\u00c2\u00b7", "·"],
+  ["\u00c2", ""],
+  ["\u00e2\u20ac\u201d", "—"],
+  ["\u00e2\u20ac\u201c", "–"],
+  ["\u00e2\u2020\u2019", "→"],
+  ["\u00e2\u20ac\u00a6", "…"],
 ];
 
 const pmVisualCopyFixups = [
@@ -394,12 +394,12 @@ export function formatWorkCalendarSummary(calendar) {
     return "Este proyecto usa calendario de lunes a domingo.";
   }
   if (
-    activeDays.length === 5
-    && activeDays[0] === "lunes"
-    && activeDays[1] === "martes"
-    && activeDays[2] === "miércoles"
-    && activeDays[3] === "jueves"
-    && activeDays[4] === "viernes"
+    activeDays.length === 5 &&
+    activeDays[0] === "lunes" &&
+    activeDays[1] === "martes" &&
+    activeDays[2] === "miércoles" &&
+    activeDays[3] === "jueves" &&
+    activeDays[4] === "viernes"
   ) {
     return "Este proyecto usa calendario lunes a viernes.";
   }

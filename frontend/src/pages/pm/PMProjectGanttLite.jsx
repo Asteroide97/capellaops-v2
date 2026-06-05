@@ -59,10 +59,12 @@ function getTaskSortValue(task) {
 
 function getDependencySummary(task) {
   const dependencyState = task?.dependency_state ?? {};
-  const blockerTitles = dependencyState?.blockers?.map((item) => normalizePmCopy(safeDisplayText(item?.titulo))).filter(Boolean) ?? [];
-  const dependencyTitles = dependencyState?.dependencies
-    ?.map((item) => normalizePmCopy(safeDisplayText(item?.resolved_title ?? item?.depende_de_tarea_titulo)))
-    .filter(Boolean) ?? [];
+  const blockerTitles =
+    dependencyState?.blockers?.map((item) => normalizePmCopy(safeDisplayText(item?.titulo))).filter(Boolean) ?? [];
+  const dependencyTitles =
+    dependencyState?.dependencies
+      ?.map((item) => normalizePmCopy(safeDisplayText(item?.resolved_title ?? item?.depende_de_tarea_titulo)))
+      .filter(Boolean) ?? [];
 
   if (blockerTitles.length > 0) {
     return `Depende de: ${blockerTitles.join(", ")}`;
@@ -86,23 +88,11 @@ function getStatusGroupKey(task) {
   return "pending";
 }
 
-function getStatusGroups(tasks) {
+function buildGroups(tasks) {
   const groups = {
-    active: {
-      key: "active",
-      title: "En progreso",
-      items: [],
-    },
-    pending: {
-      key: "pending",
-      title: "Pendientes",
-      items: [],
-    },
-    completed: {
-      key: "completed",
-      title: "Completadas",
-      items: [],
-    },
+    active: { key: "active", title: "En progreso", items: [] },
+    pending: { key: "pending", title: "Pendientes", items: [] },
+    completed: { key: "completed", title: "Completadas", items: [] },
   };
 
   tasks.forEach((task) => {
@@ -112,7 +102,7 @@ function getStatusGroups(tasks) {
   return Object.values(groups).filter((group) => group.items.length > 0);
 }
 
-export default function PMProjectGanttLite({
+function TimelineBody({
   onApplySuggestedDates,
   onEditTaskDates,
   onSelectTask,
@@ -133,18 +123,156 @@ export default function PMProjectGanttLite({
     [tasks],
   );
 
-  const groupedTasks = useMemo(() => getStatusGroups(sortedTasks), [sortedTasks]);
+  const groups = useMemo(() => buildGroups(sortedTasks), [sortedTasks]);
 
   if (tasks.length === 0) {
-    return (
-      <DataCard
-        className="pm-workplan-gantt-wide"
-        subtitle="Aquí verás tareas, fechas, dependencias y sugerencias de reprogramación."
-        title="Cronograma del proyecto"
-      >
-        <EmptyState compact note="Crea la primera tarea para ver el cronograma del proyecto." title="Sin tareas" />
-      </DataCard>
-    );
+    return <EmptyState compact note="Crea la primera tarea para ver el cronograma del proyecto." title="Sin tareas" />;
+  }
+
+  return (
+    <div className="pm-project-timeline">
+      {groups.map((group) => (
+        <section className="pm-project-timeline-group" key={group.key}>
+          <div className="pm-project-timeline-group-head">
+            <strong>{group.title}</strong>
+            <span>{group.items.length} tarea{group.items.length === 1 ? "" : "s"}</span>
+          </div>
+
+          <div className="pm-project-timeline-grid">
+            {group.items.map((task) => {
+              const dependencyState = task?.dependency_state ?? {};
+              const outOfSequence = Boolean(task?.schedule_suggestion?.fuera_de_secuencia);
+              const blocked = Boolean(dependencyState?.is_blocked ?? dependencyState?.blocked);
+              const completed = String(task?.estatus ?? "").toLowerCase() === "completada";
+              const selected = selectedTaskId === task.id;
+              const editingDates = Boolean(taskActionLoading?.[`${task.id}:dates`]);
+              const applyingSuggestion = Boolean(taskActionLoading?.[`${task.id}:apply-suggestion`]);
+              const timelineTone = completed
+                ? "is-completed"
+                : blocked
+                  ? "is-blocked"
+                  : task?.es_critica
+                    ? "is-critical"
+                    : "is-default";
+
+              return (
+                <article
+                  className={`pm-project-timeline-card ${timelineTone} ${selected ? "is-selected" : ""}`}
+                  key={task.id}
+                >
+                  <div className="pm-project-timeline-card-header">
+                    <div>
+                      <strong>{normalizePmCopy(safeDisplayText(task.titulo))}</strong>
+                      <div className="pm-project-timeline-dates">
+                        <CalendarRange size={14} strokeWidth={1.9} />
+                        <span>{getTaskDateRange(task)}</span>
+                      </div>
+                    </div>
+                    <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
+                  </div>
+
+                  <div className="pm-project-timeline-badges">
+                    <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
+                    <StatusBadge tone="neutral">{formatPercent(task.porcentaje_avance)}%</StatusBadge>
+                    {task?.es_critica ? (
+                      <StatusBadge tone="danger">
+                        <Route size={12} strokeWidth={1.9} />
+                        En ruta crítica
+                      </StatusBadge>
+                    ) : null}
+                    {blocked ? (
+                      <StatusBadge tone="warning">
+                        <Lock size={12} strokeWidth={1.9} />
+                        Bloqueada
+                      </StatusBadge>
+                    ) : null}
+                    {outOfSequence ? (
+                      <StatusBadge tone="warning">
+                        <AlertTriangle size={12} strokeWidth={1.9} />
+                        Fuera de secuencia
+                      </StatusBadge>
+                    ) : null}
+                    {!blocked && (dependencyState?.dependencies?.length ?? 0) > 0 ? (
+                      <StatusBadge tone="success">Prerrequisitos completados</StatusBadge>
+                    ) : null}
+                  </div>
+
+                  <div className="pm-project-timeline-dependencies">
+                    <Link2 size={14} strokeWidth={1.9} />
+                    <span>{getDependencySummary(task)}</span>
+                  </div>
+
+                  {outOfSequence ? (
+                    <div className="pm-project-timeline-suggestion">
+                      <Sparkles size={14} strokeWidth={1.9} />
+                      <div>
+                        <strong>
+                          Sugerido: {safeDisplayText(formatDate(task?.schedule_suggestion?.fecha_inicio_sugerida), "—")} →{" "}
+                          {safeDisplayText(formatDate(task?.schedule_suggestion?.fecha_fin_sugerida), "—")}
+                        </strong>
+                        {task?.schedule_suggestion?.razon ? (
+                          <span>{safeDisplayText(task.schedule_suggestion.razon)}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="pm-project-timeline-actions">
+                    <ActionButton
+                      icon={<Eye size={14} strokeWidth={1.9} />}
+                      onClick={() => {
+                        if (onViewTaskDetail) {
+                          onViewTaskDetail(task.id);
+                          return;
+                        }
+                        onSelectTask?.(task.id);
+                      }}
+                      size="sm"
+                      type="button"
+                    >
+                      Ver detalle
+                    </ActionButton>
+                    {!completed ? (
+                      <ActionButton
+                        className={editingDates ? "pm-button-loading" : ""}
+                        disabled={editingDates || applyingSuggestion}
+                        icon={<Pencil size={14} strokeWidth={1.9} />}
+                        onClick={() => onEditTaskDates?.(task.id)}
+                        size="sm"
+                        type="button"
+                      >
+                        {editingDates ? "Guardando..." : "Editar fechas"}
+                      </ActionButton>
+                    ) : null}
+                    {outOfSequence ? (
+                      <ActionButton
+                        className={applyingSuggestion ? "pm-button-loading" : ""}
+                        disabled={editingDates || applyingSuggestion}
+                        icon={<Sparkles size={14} strokeWidth={1.9} />}
+                        onClick={() => onApplySuggestedDates?.(task.id)}
+                        size="sm"
+                        tone="primary"
+                        type="button"
+                      >
+                        {applyingSuggestion ? "Aplicando..." : "Aplicar sugerencia"}
+                      </ActionButton>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+export default function PMProjectGanttLite(props) {
+  const { embedded = false } = props;
+
+  if (embedded) {
+    return <TimelineBody {...props} />;
   }
 
   return (
@@ -153,141 +281,7 @@ export default function PMProjectGanttLite({
       subtitle="Consulta fechas, dependencias, ruta crítica, bloqueos y sugerencias de reprogramación."
       title="Cronograma del proyecto"
     >
-      <div className="pm-project-timeline">
-        {groupedTasks.map((group) => (
-          <section className="pm-project-timeline-group" key={group.key}>
-            <div className="pm-project-timeline-group-head">
-              <strong>{group.title}</strong>
-              <span>{group.items.length} tarea{group.items.length === 1 ? "" : "s"}</span>
-            </div>
-
-            <div className="pm-project-timeline-grid">
-              {group.items.map((task) => {
-                const dependencyState = task?.dependency_state ?? {};
-                const outOfSequence = Boolean(task?.schedule_suggestion?.fuera_de_secuencia);
-                const blocked = Boolean(dependencyState?.is_blocked ?? dependencyState?.blocked);
-                const completed = String(task?.estatus ?? "").toLowerCase() === "completada";
-                const selected = selectedTaskId === task.id;
-                const editingDates = Boolean(taskActionLoading?.[`${task.id}:dates`]);
-                const applyingSuggestion = Boolean(taskActionLoading?.[`${task.id}:apply-suggestion`]);
-                const timelineTone = completed
-                  ? "is-completed"
-                  : blocked
-                    ? "is-blocked"
-                    : task?.es_critica
-                      ? "is-critical"
-                      : "is-default";
-
-                return (
-                  <article
-                    className={`pm-project-timeline-card ${timelineTone} ${selected ? "is-selected" : ""}`}
-                    key={task.id}
-                  >
-                    <div className="pm-project-timeline-card-header">
-                      <div>
-                        <strong>{normalizePmCopy(safeDisplayText(task.titulo))}</strong>
-                        <div className="pm-project-timeline-dates">
-                          <CalendarRange size={14} strokeWidth={1.9} />
-                          <span>{getTaskDateRange(task)}</span>
-                        </div>
-                      </div>
-                      <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
-                    </div>
-
-                    <div className="pm-project-timeline-badges">
-                      <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
-                      <StatusBadge tone="neutral">{formatPercent(task.porcentaje_avance)}%</StatusBadge>
-                      {task?.es_critica ? (
-                        <StatusBadge tone="danger">
-                          <Route size={12} strokeWidth={1.9} />
-                          En ruta crítica
-                        </StatusBadge>
-                      ) : null}
-                      {blocked ? (
-                        <StatusBadge tone="warning">
-                          <Lock size={12} strokeWidth={1.9} />
-                          Bloqueada
-                        </StatusBadge>
-                      ) : null}
-                      {outOfSequence ? (
-                        <StatusBadge tone="warning">
-                          <AlertTriangle size={12} strokeWidth={1.9} />
-                          Fuera de secuencia
-                        </StatusBadge>
-                      ) : null}
-                      {!blocked && (dependencyState?.dependencies?.length ?? 0) > 0 ? (
-                        <StatusBadge tone="success">Prerrequisitos completados</StatusBadge>
-                      ) : null}
-                    </div>
-
-                    <div className="pm-project-timeline-dependencies">
-                      <Link2 size={14} strokeWidth={1.9} />
-                      <span>{getDependencySummary(task)}</span>
-                    </div>
-
-                    {outOfSequence ? (
-                      <div className="pm-project-timeline-suggestion">
-                        <Sparkles size={14} strokeWidth={1.9} />
-                        <div>
-                          <strong>
-                            Sugerido: {safeDisplayText(formatDate(task?.schedule_suggestion?.fecha_inicio_sugerida), "—")} →{" "}
-                            {safeDisplayText(formatDate(task?.schedule_suggestion?.fecha_fin_sugerida), "—")}
-                          </strong>
-                          {task?.schedule_suggestion?.razon ? (
-                            <span>{safeDisplayText(task.schedule_suggestion.razon)}</span>
-                          ) : null}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="pm-project-timeline-actions">
-                      <ActionButton
-                        icon={<Eye size={14} strokeWidth={1.9} />}
-                        onClick={() => {
-                          if (onViewTaskDetail) {
-                            onViewTaskDetail(task.id);
-                            return;
-                          }
-                          onSelectTask?.(task.id);
-                        }}
-                        size="sm"
-                        type="button"
-                      >
-                        Ver detalle
-                      </ActionButton>
-                      {!completed ? (
-                        <ActionButton
-                          className={editingDates ? "pm-button-loading" : ""}
-                          disabled={editingDates || applyingSuggestion}
-                          icon={<Pencil size={14} strokeWidth={1.9} />}
-                          onClick={() => onEditTaskDates?.(task.id)}
-                          size="sm"
-                          type="button"
-                        >
-                          {editingDates ? "Guardando..." : "Editar fechas"}
-                        </ActionButton>
-                      ) : null}
-                      {outOfSequence ? (
-                        <ActionButton
-                          className={applyingSuggestion ? "pm-button-loading" : ""}
-                          disabled={editingDates || applyingSuggestion}
-                          icon={<Sparkles size={14} strokeWidth={1.9} />}
-                          onClick={() => onApplySuggestedDates?.(task.id)}
-                          size="sm"
-                          tone="primary"
-                          type="button"
-                        >
-                          {applyingSuggestion ? "Aplicando..." : "Aplicar sugerencia"}
-                        </ActionButton>
-                      ) : null}
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-          </section>
-        ))}
-      </div>
+      <TimelineBody {...props} />
     </DataCard>
   );
 }
