@@ -1116,6 +1116,35 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Enlace con estados de pago externos
 - Reportes comerciales ejecutivos por proyecto
 
+## PM Fase 11 - Reportes ejecutivos PM
+
+- Ya existe una vista ejecutiva PM MVP para revisar portafolio, salud, costo, estimaciones y cobranza desde un solo reporte.
+- El reporte ejecutivo incluye:
+  - KPIs globales de proyectos activos, atrasados, en riesgo, alertas críticas, cambios pendientes y estimaciones pendientes
+  - resumen financiero PM con presupuesto total, costo real, total estimado, total aprobado, total cobrado y pendiente por cobrar
+  - tabla ejecutiva por proyecto con salud del proyecto, avance, fecha fin planificada, desviación en días, presupuesto, costo real, estimado, cobrado y alertas
+  - reporte de riesgos con atraso, desviación de fecha, sobrecosto, cambios pendientes, estimaciones pendientes y ruta crítica
+- La salud del proyecto se resume como:
+  - `En orden`
+  - `Atención`
+  - `Crítico`
+- Los filtros MVP permiten acotar por:
+  - estatus
+  - prioridad
+  - responsable
+  - rango de fecha fin
+  - salud
+  - solo proyectos con alertas
+  - solo proyectos con pendiente por cobrar
+
+### Pendientes de PM Fase 11
+
+- Export PDF
+- Export Excel
+- Gráficas avanzadas
+- Optimización agregada para muchos proyectos
+- Permisos finos por rol
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.

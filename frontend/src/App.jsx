@@ -14,6 +14,7 @@ import PosPage from "./pages/PosPage";
 import RegisterPage from "./pages/RegisterPage";
 import SuperadminPage from "./pages/SuperadminPage";
 import PMDashboardPage from "./pages/pm/PMDashboardPage";
+import PMExecutiveReportPage from "./pages/pm/PMExecutiveReportPage";
 import PMProjectDetailPage from "./pages/pm/PMProjectDetailPage";
 import PMPublicPortalPage from "./pages/pm/PMPublicPortalPage";
 import PMProjectsPage from "./pages/pm/PMProjectsPage";
@@ -183,6 +184,14 @@ export default function App() {
             element={
               <ModuleRoute moduleName="pm">
                 <PMProjectsPage />
+              </ModuleRoute>
+            }
+          />
+          <Route
+            path="/pm/reports/executive"
+            element={
+              <ModuleRoute moduleName="pm">
+                <PMExecutiveReportPage />
               </ModuleRoute>
             }
           />

@@ -111,6 +111,12 @@ export const weekdayOptions = [
   { key: "domingo", label: "Domingo" },
 ];
 
+export const pmExecutiveHealthOptions = [
+  { value: "verde", label: "En orden" },
+  { value: "amarillo", label: "Atención" },
+  { value: "rojo", label: "Crítico" },
+];
+
 const mojibakeFixups = [
   ["\u00c3\u00a1", "á"],
   ["\u00c3\u00a9", "é"],
@@ -133,6 +139,8 @@ const mojibakeFixups = [
 ];
 
 const pmVisualCopyFixups = [
+  [/Construction/g, "Construcción"],
+  [/construction/g, "construcción"],
   [/Construccion/g, "Construcción"],
   [/construccion/g, "construcción"],
   [/Operacion/g, "Operación"],
@@ -362,6 +370,21 @@ export function getAlertTypeLabel(value) {
     return "Sin tarifa";
   }
   return normalizePmCopy(value ?? "Alerta");
+}
+
+export function getExecutiveHealthLabel(value) {
+  return getOptionLabel(pmExecutiveHealthOptions, value, "En orden");
+}
+
+export function getExecutiveHealthTone(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "rojo") {
+    return "danger";
+  }
+  if (normalized === "amarillo") {
+    return "warning";
+  }
+  return "success";
 }
 
 export function formatPercent(value) {

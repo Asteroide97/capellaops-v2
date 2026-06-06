@@ -1043,6 +1043,101 @@ class PMDashboardOut(BaseModel):
     top_usuarios_por_costo: list[PMDashboardUserMetricItem] = Field(default_factory=list)
 
 
+class PMExecutiveReportKpisOut(BaseModel):
+    proyectos_activos: int = 0
+    proyectos_atrasados: int = 0
+    proyectos_en_riesgo: int = 0
+    alertas_criticas_abiertas: int = 0
+    cambios_pendientes_aprobacion: int = 0
+    estimaciones_pendientes_aprobacion: int = 0
+    presupuesto_total_aprobado: Decimal = Decimal("0")
+    costo_real_total: Decimal = Decimal("0")
+    total_estimado: Decimal = Decimal("0")
+    total_aprobado: Decimal = Decimal("0")
+    total_cobrado: Decimal = Decimal("0")
+    pendiente_por_cobrar: Decimal = Decimal("0")
+    margen_estimado_global: Decimal = Decimal("0")
+
+
+class PMExecutiveProjectRowOut(BaseModel):
+    project_id: str
+    nombre: str
+    codigo: str | None = None
+    estatus: str
+    prioridad: str | None = None
+    responsable_id: str | None = None
+    responsable_nombre: str | None = None
+    porcentaje_avance: Decimal = Decimal("0")
+    fecha_inicio: date | None = None
+    fecha_fin_planificada: date | None = None
+    fecha_fin_actual: date | None = None
+    desviacion_dias: int = 0
+    presupuesto: Decimal = Decimal("0")
+    costo_real: Decimal = Decimal("0")
+    variacion_costo: Decimal = Decimal("0")
+    total_estimado: Decimal = Decimal("0")
+    total_aprobado: Decimal = Decimal("0")
+    total_cobrado: Decimal = Decimal("0")
+    pendiente_cobrar: Decimal = Decimal("0")
+    alertas_abiertas: int = 0
+    alertas_criticas: int = 0
+    cambios_pendientes: int = 0
+    estimaciones_pendientes: int = 0
+    health: str = "verde"
+    health_label: str = "En orden"
+    health_reasons: list[str] = Field(default_factory=list)
+
+
+class PMExecutiveRiskOut(BaseModel):
+    project_id: str
+    proyecto_nombre: str
+    tipo_riesgo: str
+    severidad: str
+    descripcion: str
+    accion_sugerida: str | None = None
+
+
+class PMExecutiveFinancialSummaryOut(BaseModel):
+    presupuesto_total: Decimal = Decimal("0")
+    costo_real_total: Decimal = Decimal("0")
+    variacion_costo: Decimal = Decimal("0")
+    total_estimado: Decimal = Decimal("0")
+    total_aprobado: Decimal = Decimal("0")
+    total_cobrado: Decimal = Decimal("0")
+    pendiente_por_cobrar: Decimal = Decimal("0")
+    porcentaje_cobrado_sobre_estimado: Decimal = Decimal("0")
+    margen_estimado_global: Decimal = Decimal("0")
+
+
+class PMExecutiveAlertsSummaryOut(BaseModel):
+    abiertas: int = 0
+    criticas: int = 0
+    warning: int = 0
+    info: int = 0
+
+
+class PMExecutiveFiltersAppliedOut(BaseModel):
+    estatus: str | None = None
+    prioridad: str | None = None
+    responsable_id: str | None = None
+    fecha_desde: date | None = None
+    fecha_hasta: date | None = None
+    salud: str | None = None
+    con_alertas: bool | None = None
+    con_pendiente_cobro: bool | None = None
+    limit: int = 50
+    offset: int = 0
+
+
+class PMExecutiveReportOut(BaseModel):
+    kpis: PMExecutiveReportKpisOut
+    projects: list[PMExecutiveProjectRowOut] = Field(default_factory=list)
+    risks: list[PMExecutiveRiskOut] = Field(default_factory=list)
+    financial_summary: PMExecutiveFinancialSummaryOut
+    alerts_summary: PMExecutiveAlertsSummaryOut
+    filters_applied: PMExecutiveFiltersAppliedOut
+
+
 class PMCriticalPathTaskOut(BaseModel):
     task_id: str
     titulo: str

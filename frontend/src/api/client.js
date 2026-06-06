@@ -700,6 +700,23 @@ export function getPmDashboard({ token, empresaId }) {
 }
 
 
+export function getPmExecutiveReport({ token, empresaId, params = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "estatus", params?.estatus);
+  appendQueryValue(query, "prioridad", params?.prioridad);
+  appendQueryValue(query, "responsable_id", params?.responsable_id);
+  appendQueryValue(query, "fecha_desde", params?.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", params?.fecha_hasta);
+  appendQueryValue(query, "salud", params?.salud);
+  appendQueryValue(query, "con_alertas", params?.con_alertas);
+  appendQueryValue(query, "con_pendiente_cobro", params?.con_pendiente_cobro);
+  appendQueryValue(query, "limit", params?.limit ?? 50);
+  appendQueryValue(query, "offset", params?.offset ?? 0);
+  const suffix = query.toString();
+  return apiRequest(`/pm/reports/executive${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
 export function listPmProjects({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);

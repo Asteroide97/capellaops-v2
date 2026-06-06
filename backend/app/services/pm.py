@@ -64,6 +64,13 @@ from app.schemas.pm import (
     PMDashboardKpis,
     PMDashboardOut,
     PMDashboardUserMetricItem,
+    PMExecutiveAlertsSummaryOut,
+    PMExecutiveFinancialSummaryOut,
+    PMExecutiveFiltersAppliedOut,
+    PMExecutiveProjectRowOut,
+    PMExecutiveReportKpisOut,
+    PMExecutiveReportOut,
+    PMExecutiveRiskOut,
     PMCriticalPathOut,
     PMCriticalPathTaskOut,
     PMCreateProjectRequisitionRequest,
@@ -6904,6 +6911,587 @@ def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
             )
             for user_id, email, name, hours_total, cost_total in top_users_by_cost_rows
         ],
+    )
+
+
+def normalize_executive_health(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    if normalized not in {"verde", "amarillo", "rojo"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La salud indicada no es valida.")
+    return normalized
+
+
+def calculate_expected_progress_gap(project: PMProyecto, *, today: date) -> Decimal:
+    if not project.fecha_inicio or not project.fecha_fin_planificada:
+        return ZERO
+    if project.fecha_fin_planificada < project.fecha_inicio:
+        return ZERO
+    if today <= project.fecha_inicio:
+        return ZERO
+    total_days = max(1, (project.fecha_fin_planificada - project.fecha_inicio).days + 1)
+    elapsed_days = min(total_days, max(0, (today - project.fecha_inicio).days + 1))
+    expected_progress = (Decimal(elapsed_days) / Decimal(total_days)) * Decimal("100")
+    return quantize_percentage(max(ZERO, expected_progress - decimal_or_zero(project.porcentaje_avance)))
+
+
+def calculate_project_health(
+    *,
+    project: PMProyecto,
+    today: date,
+    desviacion_dias: int,
+    presupuesto: Decimal,
+    costo_real: Decimal,
+    alertas_abiertas: int,
+    alertas_criticas: int,
+    alertas_warning: int,
+    cambios_pendientes: int,
+    estimaciones_pendientes: int,
+    tareas_criticas_atrasadas: int,
+    tareas_criticas_desviadas: int,
+) -> tuple[str, str, list[str]]:
+    reasons: list[str] = []
+    project_status = str(project.estatus or "").lower()
+    delayed_project = (
+        project_status in {"borrador", "activo", "en_pausa"}
+        and project.fecha_fin_planificada is not None
+        and project.fecha_fin_planificada < today
+    )
+    over_budget = presupuesto > ZERO and costo_real > presupuesto
+    progress_gap = calculate_expected_progress_gap(project, today=today)
+
+    red_conditions = False
+    yellow_conditions = False
+
+    if delayed_project:
+        red_conditions = True
+        reasons.append("Proyecto atrasado contra la fecha planificada.")
+    if alertas_criticas > 0:
+        red_conditions = True
+        reasons.append("Tiene alertas críticas abiertas.")
+    if tareas_criticas_atrasadas > 0:
+        red_conditions = True
+        reasons.append("Tiene tareas críticas atrasadas.")
+    if tareas_criticas_desviadas > 0:
+        red_conditions = True
+        reasons.append("Tiene tareas críticas desviadas.")
+    if over_budget:
+        red_conditions = True
+        reasons.append("El costo real supera el presupuesto.")
+    if desviacion_dias > 15:
+        red_conditions = True
+        reasons.append("La desviación de fechas supera 15 días.")
+
+    if alertas_warning > 0:
+        yellow_conditions = True
+        reasons.append("Tiene alertas operativas en seguimiento.")
+    if cambios_pendientes > 0:
+        yellow_conditions = True
+        reasons.append("Tiene cambios pendientes de aprobación.")
+    if estimaciones_pendientes > 0:
+        yellow_conditions = True
+        reasons.append("Tiene estimaciones pendientes de aprobación.")
+    if 0 < desviacion_dias <= 15:
+        yellow_conditions = True
+        reasons.append("Tiene desviación moderada contra la línea base.")
+    if progress_gap > Decimal("20"):
+        yellow_conditions = True
+        reasons.append("El avance va por debajo de lo esperado para la fecha.")
+    if alertas_abiertas > 0 and not red_conditions:
+        yellow_conditions = True
+        reasons.append("Tiene alertas abiertas.")
+
+    unique_reasons = list(dict.fromkeys(reasons))
+    if red_conditions:
+        return ("rojo", "Crítico", unique_reasons)
+    if yellow_conditions:
+        return ("amarillo", "Atención", unique_reasons)
+    return ("verde", "En orden", [])
+
+
+def build_empty_executive_report(
+    *,
+    estatus: str | None,
+    prioridad: str | None,
+    responsable_id: str | None,
+    fecha_desde: date | None,
+    fecha_hasta: date | None,
+    salud: str | None,
+    con_alertas: bool | None,
+    con_pendiente_cobro: bool | None,
+    limit: int,
+    offset: int,
+) -> PMExecutiveReportOut:
+    return PMExecutiveReportOut(
+        kpis=PMExecutiveReportKpisOut(),
+        projects=[],
+        risks=[],
+        financial_summary=PMExecutiveFinancialSummaryOut(),
+        alerts_summary=PMExecutiveAlertsSummaryOut(),
+        filters_applied=PMExecutiveFiltersAppliedOut(
+            estatus=estatus,
+            prioridad=prioridad,
+            responsable_id=responsable_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            salud=salud,
+            con_alertas=con_alertas,
+            con_pendiente_cobro=con_pendiente_cobro,
+            limit=limit,
+            offset=offset,
+        ),
+    )
+
+
+def get_pm_executive_report(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estatus: str | None = None,
+    prioridad: str | None = None,
+    responsable_id: str | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
+    salud: str | None = None,
+    con_alertas: bool | None = None,
+    con_pendiente_cobro: bool | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> PMExecutiveReportOut:
+    normalized_status = normalize_project_status(estatus) if estatus else None
+    normalized_priority = normalize_priority(prioridad) if prioridad else None
+    normalized_health = normalize_executive_health(salud)
+    if fecha_desde and fecha_hasta and fecha_hasta < fecha_desde:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La fecha final no puede ser anterior a la inicial.")
+
+    project_query = select(PMProyecto).where(
+        PMProyecto.empresa_id == pm_context.empresa_id,
+        PMProyecto.activo == True,
+    )
+    if normalized_status:
+        project_query = project_query.where(PMProyecto.estatus == normalized_status)
+    if normalized_priority:
+        project_query = project_query.where(PMProyecto.prioridad == normalized_priority)
+    if responsable_id:
+        project_query = project_query.where(PMProyecto.responsable_user_id == responsable_id)
+    if fecha_desde:
+        project_query = project_query.where(
+            PMProyecto.fecha_fin_planificada.is_not(None),
+            PMProyecto.fecha_fin_planificada >= fecha_desde,
+        )
+    if fecha_hasta:
+        project_query = project_query.where(
+            PMProyecto.fecha_fin_planificada.is_not(None),
+            PMProyecto.fecha_fin_planificada <= fecha_hasta,
+        )
+
+    projects = db.scalars(
+        project_query.order_by(PMProyecto.fecha_fin_planificada.asc(), PMProyecto.created_at.desc())
+    ).all()
+    if not projects:
+        return build_empty_executive_report(
+            estatus=normalized_status,
+            prioridad=normalized_priority,
+            responsable_id=responsable_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            salud=normalized_health,
+            con_alertas=con_alertas,
+            con_pendiente_cobro=con_pendiente_cobro,
+            limit=limit,
+            offset=offset,
+        )
+
+    project_ids = [project.id for project in projects]
+    today = today_utc()
+
+    cost_rows = db.scalars(
+        select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+            PMProyectoCostoResumen.proyecto_id.in_(project_ids),
+        )
+    ).all()
+    cost_map = {item.proyecto_id: item for item in cost_rows}
+
+    alert_rows = db.scalars(
+        select(PMAlerta).where(
+            PMAlerta.empresa_id == pm_context.empresa_id,
+            PMAlerta.proyecto_id.in_(project_ids),
+            PMAlerta.activa == True,
+            PMAlerta.estatus == "abierta",
+        )
+    ).all()
+    alert_stats_map: dict[str, dict[str, int]] = {}
+    for alert in alert_rows:
+        stats = alert_stats_map.setdefault(
+            alert.proyecto_id,
+            {
+                "abiertas": 0,
+                "criticas": 0,
+                "warning": 0,
+                "info": 0,
+                "tarea_critica_atrasada": 0,
+                "tarea_critica_desviada": 0,
+            },
+        )
+        stats["abiertas"] += 1
+        severity = str(alert.severidad or "info").lower()
+        if severity == "critical":
+            stats["criticas"] += 1
+        elif severity == "warning":
+            stats["warning"] += 1
+        else:
+            stats["info"] += 1
+        if alert.tipo in {"tarea_critica_atrasada", "tarea_critica_desviada"}:
+            stats[alert.tipo] += 1
+
+    change_rows = db.scalars(
+        select(PMCambioProyecto).where(
+            PMCambioProyecto.empresa_id == pm_context.empresa_id,
+            PMCambioProyecto.proyecto_id.in_(project_ids),
+            PMCambioProyecto.estatus == "pendiente_aprobacion",
+        )
+    ).all()
+    changes_pending_map: dict[str, int] = {}
+    for change in change_rows:
+        changes_pending_map[change.proyecto_id] = changes_pending_map.get(change.proyecto_id, 0) + 1
+
+    estimation_rows = db.scalars(
+        select(PMEstimacion).where(
+            PMEstimacion.empresa_id == pm_context.empresa_id,
+            PMEstimacion.proyecto_id.in_(project_ids),
+            PMEstimacion.activo == True,
+        )
+    ).all()
+    estimation_map: dict[str, dict[str, Decimal | int]] = {}
+    for estimation in estimation_rows:
+        stats = estimation_map.setdefault(
+            estimation.proyecto_id,
+            {
+                "total_estimado": ZERO,
+                "total_aprobado": ZERO,
+                "total_cobrado": ZERO,
+                "estimaciones_pendientes": 0,
+            },
+        )
+        estimation_status = str(estimation.estatus or "").lower()
+        is_live = estimation_status not in {"cancelada", "rechazada"}
+        if is_live:
+            stats["total_estimado"] = decimal_or_zero(stats["total_estimado"]) + decimal_or_zero(estimation.monto_neto)
+            stats["total_cobrado"] = decimal_or_zero(stats["total_cobrado"]) + decimal_or_zero(estimation.monto_cobrado)
+        if estimation_status in {"aprobada", "enviada_cliente", "cobrada"}:
+            approved_amount = decimal_or_zero(estimation.monto_aprobado)
+            if approved_amount <= ZERO:
+                approved_amount = decimal_or_zero(estimation.monto_neto)
+            stats["total_aprobado"] = decimal_or_zero(stats["total_aprobado"]) + approved_amount
+        if estimation_status == "enviada_aprobacion":
+            stats["estimaciones_pendientes"] = int(stats["estimaciones_pendientes"] or 0) + 1
+
+    baseline_rows = db.scalars(
+        select(PMProyectoLineaBase)
+        .where(
+            PMProyectoLineaBase.empresa_id == pm_context.empresa_id,
+            PMProyectoLineaBase.proyecto_id.in_(project_ids),
+            PMProyectoLineaBase.estatus != "cancelada",
+        )
+        .order_by(
+            PMProyectoLineaBase.proyecto_id.asc(),
+            desc(PMProyectoLineaBase.es_principal),
+            desc(PMProyectoLineaBase.updated_at),
+            desc(PMProyectoLineaBase.created_at),
+        )
+    ).all()
+    baseline_map: dict[str, PMProyectoLineaBase] = {}
+    for baseline in baseline_rows:
+        if baseline.proyecto_id not in baseline_map and (baseline.es_principal or baseline.estatus == "activa"):
+            baseline_map[baseline.proyecto_id] = baseline
+
+    task_date_rows = db.execute(
+        select(
+            PMTarea.proyecto_id,
+            func.min(PMTarea.fecha_inicio),
+            func.max(PMTarea.fecha_vencimiento),
+        )
+        .where(
+            PMTarea.empresa_id == pm_context.empresa_id,
+            PMTarea.proyecto_id.in_(project_ids),
+            PMTarea.activo == True,
+        )
+        .group_by(PMTarea.proyecto_id)
+    ).all()
+    task_dates_map = {
+        project_id: {"fecha_inicio": task_start, "fecha_fin": task_finish}
+        for project_id, task_start, task_finish in task_date_rows
+    }
+
+    project_rows: list[PMExecutiveProjectRowOut] = []
+    risks: list[PMExecutiveRiskOut] = []
+    health_rank = {"verde": 0, "amarillo": 1, "rojo": 2}
+
+    for project in projects:
+        summary = cost_map.get(project.id)
+        presupuesto = decimal_or_zero(summary.presupuesto_detallado_venta if summary else ZERO)
+        if presupuesto <= ZERO:
+            presupuesto = decimal_or_zero(summary.presupuesto_estimado if summary else ZERO)
+        if presupuesto <= ZERO:
+            presupuesto = decimal_or_zero(project.presupuesto_estimado)
+        presupuesto = quantize_money(presupuesto)
+        costo_real = quantize_money(decimal_or_zero(summary.costo_total_real if summary else ZERO))
+        variacion_costo = quantize_money(costo_real - presupuesto)
+
+        estimation_stats = estimation_map.get(project.id, {})
+        total_estimado = quantize_money(decimal_or_zero(estimation_stats.get("total_estimado")))
+        total_aprobado = quantize_money(decimal_or_zero(estimation_stats.get("total_aprobado")))
+        total_cobrado = quantize_money(decimal_or_zero(estimation_stats.get("total_cobrado")))
+        pendiente_cobrar = quantize_money(max(ZERO, total_aprobado - total_cobrado))
+        estimaciones_pendientes = int(estimation_stats.get("estimaciones_pendientes") or 0)
+
+        alert_stats = alert_stats_map.get(project.id, {})
+        alertas_abiertas = int(alert_stats.get("abiertas") or 0)
+        alertas_criticas = int(alert_stats.get("criticas") or 0)
+        alertas_warning = int(alert_stats.get("warning") or 0)
+        cambios_pendientes = int(changes_pending_map.get(project.id) or 0)
+        tareas_criticas_atrasadas = int(alert_stats.get("tarea_critica_atrasada") or 0)
+        tareas_criticas_desviadas = int(alert_stats.get("tarea_critica_desviada") or 0)
+
+        task_dates = task_dates_map.get(project.id, {})
+        fecha_fin_actual = project.fecha_fin_real or task_dates.get("fecha_fin") or project.fecha_fin_planificada
+        desviacion_dias = 0
+        baseline = baseline_map.get(project.id)
+        if baseline:
+            try:
+                baseline_vs_actual = build_project_baseline_vs_actual(
+                    db,
+                    empresa_id=pm_context.empresa_id,
+                    project_id=project.id,
+                    baseline=baseline,
+                )
+                desviacion_dias = int(baseline_vs_actual.deviation.desviacion_fecha_fin_dias or 0)
+                fecha_fin_actual = baseline_vs_actual.deviation.fecha_fin_actual or fecha_fin_actual
+                tareas_criticas_desviadas = max(
+                    tareas_criticas_desviadas,
+                    int(baseline_vs_actual.deviation.tareas_criticas_desviadas_count or 0),
+                )
+            except HTTPException:
+                desviacion_dias = 0
+        elif fecha_fin_actual and project.fecha_fin_planificada and fecha_fin_actual > project.fecha_fin_planificada:
+            desviacion_dias = max(0, (fecha_fin_actual - project.fecha_fin_planificada).days)
+
+        health, health_label, health_reasons = calculate_project_health(
+            project=project,
+            today=today,
+            desviacion_dias=desviacion_dias,
+            presupuesto=presupuesto,
+            costo_real=costo_real,
+            alertas_abiertas=alertas_abiertas,
+            alertas_criticas=alertas_criticas,
+            alertas_warning=alertas_warning,
+            cambios_pendientes=cambios_pendientes,
+            estimaciones_pendientes=estimaciones_pendientes,
+            tareas_criticas_atrasadas=tareas_criticas_atrasadas,
+            tareas_criticas_desviadas=tareas_criticas_desviadas,
+        )
+
+        project_rows.append(
+            PMExecutiveProjectRowOut(
+                project_id=project.id,
+                nombre=project.nombre,
+                codigo=project.codigo,
+                estatus=project.estatus,
+                prioridad=project.prioridad,
+                responsable_id=project.responsable_user_id,
+                responsable_nombre=project.responsable_nombre_snapshot,
+                porcentaje_avance=decimal_or_zero(project.porcentaje_avance),
+                fecha_inicio=project.fecha_inicio,
+                fecha_fin_planificada=project.fecha_fin_planificada,
+                fecha_fin_actual=fecha_fin_actual,
+                desviacion_dias=desviacion_dias,
+                presupuesto=presupuesto,
+                costo_real=costo_real,
+                variacion_costo=variacion_costo,
+                total_estimado=total_estimado,
+                total_aprobado=total_aprobado,
+                total_cobrado=total_cobrado,
+                pendiente_cobrar=pendiente_cobrar,
+                alertas_abiertas=alertas_abiertas,
+                alertas_criticas=alertas_criticas,
+                cambios_pendientes=cambios_pendientes,
+                estimaciones_pendientes=estimaciones_pendientes,
+                health=health,
+                health_label=health_label,
+                health_reasons=health_reasons,
+            )
+        )
+
+        project_status = str(project.estatus or "").lower()
+        if project.fecha_fin_planificada and project.fecha_fin_planificada < today and project_status in {"borrador", "activo", "en_pausa"}:
+            risks.append(
+                PMExecutiveRiskOut(
+                    project_id=project.id,
+                    proyecto_nombre=project.nombre,
+                    tipo_riesgo="atraso",
+                    severidad="critical",
+                    descripcion="El proyecto ya rebasó su fecha fin planificada.",
+                    accion_sugerida="Revisar ruta crítica, prioridades y plan de reprogramación.",
+                )
+            )
+        if desviacion_dias > 0:
+            risks.append(
+                PMExecutiveRiskOut(
+                    project_id=project.id,
+                    proyecto_nombre=project.nombre,
+                    tipo_riesgo="desviacion_fecha",
+                    severidad="critical" if desviacion_dias > 15 else "warning",
+                    descripcion=f"El proyecto presenta una desviación de {desviacion_dias} días contra la línea base o el plan actual.",
+                    accion_sugerida="Validar fechas, dependencias y cambios pendientes antes de reprogramar.",
+                )
+            )
+        if presupuesto > ZERO and costo_real > presupuesto:
+            risks.append(
+                PMExecutiveRiskOut(
+                    project_id=project.id,
+                    proyecto_nombre=project.nombre,
+                    tipo_riesgo="sobrecosto",
+                    severidad="critical",
+                    descripcion="El costo real ya supera el presupuesto del proyecto.",
+                    accion_sugerida="Revisar costos directos, cambios abiertos y margen estimado.",
+                )
+            )
+        if alertas_criticas > 0 or tareas_criticas_atrasadas > 0 or tareas_criticas_desviadas > 0:
+            risks.append(
+                PMExecutiveRiskOut(
+                    project_id=project.id,
+                    proyecto_nombre=project.nombre,
+                    tipo_riesgo="ruta_critica",
+                    severidad="critical" if (tareas_criticas_atrasadas > 0 or tareas_criticas_desviadas > 0) else "warning",
+                    descripcion="El proyecto tiene alertas o tareas críticas que requieren seguimiento inmediato.",
+                    accion_sugerida="Atender primero tareas críticas atrasadas o desviadas.",
+                )
+            )
+        if cambios_pendientes > 0:
+            risks.append(
+                PMExecutiveRiskOut(
+                    project_id=project.id,
+                    proyecto_nombre=project.nombre,
+                    tipo_riesgo="cambios_pendientes",
+                    severidad="warning",
+                    descripcion="Hay cambios pendientes de aprobación que pueden afectar alcance, fechas o costo.",
+                    accion_sugerida="Resolver aprobaciones pendientes para evitar desalineación operativa.",
+                )
+            )
+        if estimaciones_pendientes > 0:
+            risks.append(
+                PMExecutiveRiskOut(
+                    project_id=project.id,
+                    proyecto_nombre=project.nombre,
+                    tipo_riesgo="estimaciones_pendientes",
+                    severidad="warning",
+                    descripcion="Hay estimaciones pendientes de aprobación o seguimiento financiero.",
+                    accion_sugerida="Revisar estimaciones y liberar el flujo de cobro correspondiente.",
+                )
+            )
+
+    filtered_rows = [
+        item
+        for item in project_rows
+        if (not normalized_health or item.health == normalized_health)
+        and (con_alertas is not True or item.alertas_abiertas > 0)
+        and (con_pendiente_cobro is not True or quantize_money(decimal_or_zero(item.pendiente_cobrar)) > ZERO)
+    ]
+    filtered_rows.sort(
+        key=lambda item: (
+            health_rank.get(item.health, 0),
+            item.alertas_criticas,
+            item.desviacion_dias,
+            float(decimal_or_zero(item.variacion_costo)),
+            float(decimal_or_zero(item.pendiente_cobrar)),
+        ),
+        reverse=True,
+    )
+
+    filtered_project_ids = {item.project_id for item in filtered_rows}
+    filtered_risks = [item for item in risks if item.project_id in filtered_project_ids]
+    filtered_risks.sort(
+        key=lambda item: (
+            2 if item.severidad == "critical" else 1 if item.severidad == "warning" else 0,
+            item.proyecto_nombre.lower(),
+            item.tipo_riesgo,
+        ),
+        reverse=True,
+    )
+
+    presupuesto_total = quantize_money(sum(decimal_or_zero(item.presupuesto) for item in filtered_rows) if filtered_rows else ZERO)
+    costo_real_total = quantize_money(sum(decimal_or_zero(item.costo_real) for item in filtered_rows) if filtered_rows else ZERO)
+    total_estimado = quantize_money(sum(decimal_or_zero(item.total_estimado) for item in filtered_rows) if filtered_rows else ZERO)
+    total_aprobado = quantize_money(sum(decimal_or_zero(item.total_aprobado) for item in filtered_rows) if filtered_rows else ZERO)
+    total_cobrado = quantize_money(sum(decimal_or_zero(item.total_cobrado) for item in filtered_rows) if filtered_rows else ZERO)
+    pendiente_por_cobrar = quantize_money(sum(decimal_or_zero(item.pendiente_cobrar) for item in filtered_rows) if filtered_rows else ZERO)
+    variacion_total_costo = quantize_money(costo_real_total - presupuesto_total)
+    margen_estimado_global = quantize_money(presupuesto_total - costo_real_total)
+    porcentaje_cobrado_sobre_estimado = (
+        quantize_percentage((total_cobrado / total_estimado) * Decimal("100"))
+        if total_estimado > ZERO
+        else ZERO
+    )
+    alerts_summary = PMExecutiveAlertsSummaryOut(
+        abiertas=sum(item.alertas_abiertas for item in filtered_rows),
+        criticas=sum(item.alertas_criticas for item in filtered_rows),
+        warning=sum(int(alert_stats_map.get(item.project_id, {}).get("warning") or 0) for item in filtered_rows),
+        info=sum(int(alert_stats_map.get(item.project_id, {}).get("info") or 0) for item in filtered_rows),
+    )
+
+    paginated_rows = filtered_rows[offset : offset + limit]
+    return PMExecutiveReportOut(
+        kpis=PMExecutiveReportKpisOut(
+            proyectos_activos=sum(1 for item in filtered_rows if str(item.estatus or "").lower() == "activo"),
+            proyectos_atrasados=sum(
+                1
+                for item in filtered_rows
+                if item.fecha_fin_planificada
+                and item.fecha_fin_planificada < today
+                and str(item.estatus or "").lower() in {"borrador", "activo", "en_pausa"}
+            ),
+            proyectos_en_riesgo=sum(1 for item in filtered_rows if item.health != "verde"),
+            alertas_criticas_abiertas=alerts_summary.criticas,
+            cambios_pendientes_aprobacion=sum(item.cambios_pendientes for item in filtered_rows),
+            estimaciones_pendientes_aprobacion=sum(item.estimaciones_pendientes for item in filtered_rows),
+            presupuesto_total_aprobado=presupuesto_total,
+            costo_real_total=costo_real_total,
+            total_estimado=total_estimado,
+            total_aprobado=total_aprobado,
+            total_cobrado=total_cobrado,
+            pendiente_por_cobrar=pendiente_por_cobrar,
+            margen_estimado_global=margen_estimado_global,
+        ),
+        projects=paginated_rows,
+        risks=filtered_risks,
+        financial_summary=PMExecutiveFinancialSummaryOut(
+            presupuesto_total=presupuesto_total,
+            costo_real_total=costo_real_total,
+            variacion_costo=variacion_total_costo,
+            total_estimado=total_estimado,
+            total_aprobado=total_aprobado,
+            total_cobrado=total_cobrado,
+            pendiente_por_cobrar=pendiente_por_cobrar,
+            porcentaje_cobrado_sobre_estimado=porcentaje_cobrado_sobre_estimado,
+            margen_estimado_global=margen_estimado_global,
+        ),
+        alerts_summary=alerts_summary,
+        filters_applied=PMExecutiveFiltersAppliedOut(
+            estatus=normalized_status,
+            prioridad=normalized_priority,
+            responsable_id=responsable_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            salud=normalized_health,
+            con_alertas=con_alertas,
+            con_pendiente_cobro=con_pendiente_cobro,
+            limit=limit,
+            offset=offset,
+        ),
     )
 
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  BarChart3,
   BellRing,
   Calendar,
   CheckSquare,
@@ -96,6 +97,13 @@ export default function PMDashboardPage() {
         subtitle="Dashboard operativo para proyectos, tareas y seguimiento básico."
         actions={(
           <div className="inventory-actions">
+            <ActionButton
+              icon={<BarChart3 size={16} strokeWidth={1.9} />}
+              onClick={() => navigate("/pm/reports/executive")}
+              type="button"
+            >
+              Reporte ejecutivo
+            </ActionButton>
             <ActionButton onClick={() => navigate("/pm/rates")} type="button">
               Tarifas PM
             </ActionButton>

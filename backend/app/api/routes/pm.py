@@ -32,6 +32,7 @@ from app.schemas.pm import (
     PMDashboardOut,
     PMDocumentoOut,
     PMDocumentoUpdate,
+    PMExecutiveReportOut,
     PMEstimationCandidateOut,
     PMEstimacionCobroRequest,
     PMEstimacionCreate,
@@ -165,6 +166,7 @@ from app.services.pm import (
     dismiss_pm_alert,
     get_pm_context,
     get_pm_dashboard,
+    get_pm_executive_report,
     get_portal_project,
     get_project_baseline,
     get_project_baseline_vs_actual,
@@ -294,6 +296,37 @@ def pm_dashboard(
     db: Session = Depends(get_db),
 ) -> PMDashboardOut:
     return get_pm_dashboard(db, pm_context)
+
+
+@router.get("/reports/executive", response_model=PMExecutiveReportOut)
+def pm_executive_report(
+    estatus: str | None = None,
+    prioridad: str | None = None,
+    responsable_id: str | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
+    salud: str | None = None,
+    con_alertas: bool | None = None,
+    con_pendiente_cobro: bool | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMExecutiveReportOut:
+    return get_pm_executive_report(
+        db,
+        pm_context,
+        estatus=estatus,
+        prioridad=prioridad,
+        responsable_id=responsable_id,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        salud=salud,
+        con_alertas=con_alertas,
+        con_pendiente_cobro=con_pendiente_cobro,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/projects", response_model=PMProyectoListResponse)
