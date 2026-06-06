@@ -30,6 +30,7 @@ import {
   DEFAULT_PAGE_SIZE,
 } from "../inventory/shared";
 import {
+  canManagePmRole,
   formatPercent,
   getPriorityLabel,
   getPriorityTone,
@@ -112,7 +113,8 @@ function toProjectPayload(form) {
 
 export default function PMProjectsPage() {
   const navigate = useNavigate();
-  const { empresaId, token } = useAuth();
+  const { empresaId, token, membership, user } = useAuth();
+  const canManagePmUi = canManagePmRole(membership?.role, Boolean(user?.is_superadmin));
   const [filters, setFilters] = useState(defaultFilters);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -244,9 +246,11 @@ export default function PMProjectsPage() {
             <ActionButton onClick={() => navigate("/pm")} type="button">
               Dashboard PM
             </ActionButton>
-            <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateModal} tone="primary" type="button">
-              Nuevo proyecto
-            </ActionButton>
+            {canManagePmUi ? (
+              <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateModal} tone="primary" type="button">
+                Nuevo proyecto
+              </ActionButton>
+            ) : null}
           </div>
         }
       />
@@ -368,11 +372,12 @@ export default function PMProjectsPage() {
                         <ActionButton onClick={() => navigate(`/pm/projects/${project.id}`)} size="sm" tone="primary" type="button">
                           Abrir
                         </ActionButton>
-                        <ActionButton onClick={() => openEditModal(project)} size="sm" type="button">
+                        <ActionButton disabled={!canManagePmUi} onClick={() => openEditModal(project)} size="sm" type="button">
                           Editar
                         </ActionButton>
                         <ActionButton
                           icon={<Flag size={14} strokeWidth={1.9} />}
+                          disabled={!canManagePmUi}
                           onClick={() => handleDeactivateProject(project)}
                           size="sm"
                           tone="danger"

@@ -79,11 +79,15 @@ import PMWorkCalendarModal from "./PMWorkCalendarModal";
 import PMProjectEstimationsTab from "./PMProjectEstimationsTab";
 import {
   formatPercent,
+  canApprovePmRole,
+  canEditPmProjectRole,
+  canManagePmRole,
   formatWorkCalendarSummary,
   getPriorityLabel,
   getPriorityTone,
   getProjectStatusLabel,
   getProjectStatusTone,
+  isPmProjectEditable,
   getTaskStatusLabel,
   getTaskStatusTone,
   isTaskOverdue,
@@ -287,7 +291,7 @@ export default function PMProjectDetailPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { id } = useParams();
-  const { empresaId, token } = useAuth();
+  const { empresaId, token, membership, user } = useAuth();
   const requestedView = projectViews.some((view) => view.key === location.state?.pmView)
     ? location.state?.pmView
     : "plan";
@@ -707,6 +711,14 @@ export default function PMProjectDetailPage() {
     () => sortByDateDesc(projectMaterials?.consumptions ?? [], "created_at").slice(0, 5),
     [projectMaterials],
   );
+  const membershipRole = String(membership?.role ?? "").toLowerCase();
+  const isSuperadmin = Boolean(user?.is_superadmin);
+  const canManagePmUi = canManagePmRole(membershipRole, isSuperadmin);
+  const canApprovePmUi = canApprovePmRole(membershipRole, isSuperadmin);
+  const canEditProjectUi = canEditPmProjectRole(membershipRole, isSuperadmin);
+  const projectEditable = isPmProjectEditable(project);
+  const canManageActiveProjectUi = canManagePmUi && projectEditable;
+  const canEditActiveProjectUi = canEditProjectUi && projectEditable;
 
   const alertItems = useMemo(() => {
     const items = [];
@@ -1238,9 +1250,11 @@ export default function PMProjectDetailPage() {
             <ActionButton icon={<ArrowLeft size={16} strokeWidth={1.9} />} onClick={() => navigate("/pm/projects")} type="button">
               Volver a proyectos
             </ActionButton>
-            <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openNewTaskModal} tone="primary" type="button">
-              Nueva tarea
-            </ActionButton>
+            {canEditActiveProjectUi ? (
+              <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openNewTaskModal} tone="primary" type="button">
+                Nueva tarea
+              </ActionButton>
+            ) : null}
             <ActionButton icon={<RefreshCw size={16} strokeWidth={1.9} />} onClick={handleRefreshCurrentView} type="button">
               {refreshing ? "Actualizando..." : "Actualizar"}
             </ActionButton>
@@ -1411,9 +1425,11 @@ export default function PMProjectDetailPage() {
 
           <DataCard
             actions={
-              <ActionButton onClick={() => setMemberModalOpen(true)} tone="primary" type="button">
-                Agregar miembro
-              </ActionButton>
+              canManageActiveProjectUi ? (
+                <ActionButton onClick={() => setMemberModalOpen(true)} tone="primary" type="button">
+                  Agregar miembro
+                </ActionButton>
+              ) : null
             }
             subtitle="Usuarios vinculados al proyecto activo."
             title="Equipo del proyecto"
@@ -1429,7 +1445,7 @@ export default function PMProjectDetailPage() {
                       <strong>{safeDisplayText(member.nombre_snapshot, "Sin nombre")}</strong>
                       <span>{safeDisplayText(member.email, "Sin correo")} · {safeDisplayText(member.rol_en_proyecto, "colaborador")}</span>
                     </div>
-                    {member.activo ? (
+                    {member.activo && canManageActiveProjectUi ? (
                       <ActionButton onClick={() => handleDeactivateMember(member.id)} size="sm" tone="danger" type="button">
                         Desactivar
                       </ActionButton>
@@ -1525,6 +1541,8 @@ export default function PMProjectDetailPage() {
           planningCriticalPath={planningCriticalPath}
           planningRefreshing={planningRefreshing}
           planningSummary={planningSummary}
+          canConfigureCalendar={canManageActiveProjectUi}
+          canEditTasks={canEditActiveProjectUi}
           projectId={id}
           refreshing={refreshing}
           selectedTaskId={selectedTaskId}
@@ -1540,9 +1558,13 @@ export default function PMProjectDetailPage() {
       {activeView === "baseline" ? (
         <PMProjectBaselineTab
           empresaId={empresaId}
+          canApprove={canApprovePmUi}
+          canEditChanges={canEditActiveProjectUi}
+          canManage={canManagePmUi}
           onComparisonLoaded={setBaselineComparison}
           onOpenApprovals={() => setActiveView("aprobaciones")}
           onPlanningChanged={() => refreshPmWorkPlanLight({ background: true })}
+          projectEditable={projectEditable}
           projectId={id}
           reloadToken={baselineReloadToken}
           tasks={resolvedTasks}
@@ -1553,9 +1575,11 @@ export default function PMProjectDetailPage() {
       {activeView === "kanban" ? (
         <DataCard
           actions={
-            <ActionButton onClick={openNewTaskModal} tone="primary" type="button">
-              Nueva tarea
-            </ActionButton>
+            canEditActiveProjectUi ? (
+              <ActionButton onClick={openNewTaskModal} tone="primary" type="button">
+                Nueva tarea
+              </ActionButton>
+            ) : null
           }
           subtitle="Vista rápida de ejecución por estados, con bloqueo visible por prerrequisitos."
           title="Kanban"
@@ -1647,12 +1671,13 @@ export default function PMProjectDetailPage() {
                               <ActionButton
                                 icon={<Pencil size={14} strokeWidth={1.9} />}
                                 onClick={() => openExistingTaskModal(task.id)}
+                                disabled={!canEditActiveProjectUi}
                                 size="sm"
                                 type="button"
                               >
                                 Editar
                               </ActionButton>
-                              {isPending ? (
+                              {isPending && canEditActiveProjectUi ? (
                                 <ActionButton
                                   icon={<CheckSquare size={14} strokeWidth={1.9} />}
                                   className={`${blocked ? "is-soft-disabled" : ""} ${starting ? "pm-button-loading" : ""}`.trim()}
@@ -1671,7 +1696,7 @@ export default function PMProjectDetailPage() {
                                   {starting ? "Actualizando..." : "Marcar en progreso"}
                                 </ActionButton>
                               ) : null}
-                              {isPending || isInProgress || isInReview ? (
+                              {(isPending || isInProgress || isInReview) && canEditActiveProjectUi ? (
                                 <ActionButton
                                   icon={<CheckCheck size={14} strokeWidth={1.9} />}
                                   className={`${blocked ? "is-soft-disabled" : ""} ${completing ? "pm-button-loading" : ""}`.trim()}
@@ -1721,7 +1746,9 @@ export default function PMProjectDetailPage() {
       {activeView === "presupuesto" ? (
         <PMProjectBudgetTab
           empresaId={empresaId}
+          canManage={canManagePmUi}
           onChanged={() => loadProjectBundle({ background: true })}
+          projectEditable={projectEditable}
           project={project}
           projectId={id}
           token={token}
@@ -1731,9 +1758,13 @@ export default function PMProjectDetailPage() {
       {activeView === "estimaciones" ? (
         <PMProjectEstimationsTab
           empresaId={empresaId}
+          canApprove={canApprovePmUi}
+          canEdit={canEditProjectUi}
+          canManage={canManagePmUi}
           onChanged={() => loadProjectBundle({ background: true })}
           onOpenApprovals={() => setActiveView("aprobaciones")}
           onOpenBudget={() => setActiveView("presupuesto")}
+          projectEditable={projectEditable}
           projectId={id}
           token={token}
         />
@@ -1794,7 +1825,13 @@ export default function PMProjectDetailPage() {
       ) : null}
 
       {activeView === "aprobaciones" ? (
-        <PMProjectApprovalsTab empresaId={empresaId} projectId={id} token={token} />
+        <PMProjectApprovalsTab
+          empresaId={empresaId}
+          canApprove={canApprovePmUi}
+          canManage={canManagePmUi}
+          projectId={id}
+          token={token}
+        />
       ) : null}
 
       {activeView === "documentos" ? (
@@ -1802,7 +1839,7 @@ export default function PMProjectDetailPage() {
       ) : null}
 
       {activeView === "portal" ? (
-        <PMProjectPortalTab empresaId={empresaId} project={project} projectId={id} token={token} />
+        <PMProjectPortalTab empresaId={empresaId} canManage={canManagePmUi} project={project} projectEditable={projectEditable} projectId={id} token={token} />
       ) : null}
 
       <ModalShell

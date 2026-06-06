@@ -1,4 +1,23 @@
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
+function normalizeBaseUrl(value) {
+  return String(value || "").trim().replace(/\/+$/, "");
+}
+
+function resolveApiUrl() {
+  return normalizeBaseUrl(import.meta.env.VITE_API_URL) || "/api";
+}
+
+function resolvePublicAppUrl() {
+  const configured = normalizeBaseUrl(import.meta.env.VITE_PUBLIC_APP_URL);
+  if (configured) {
+    return configured;
+  }
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return normalizeBaseUrl(window.location.origin);
+  }
+  return "";
+}
+
+const API_URL = resolveApiUrl();
 const DEV = import.meta.env.DEV;
 
 
@@ -1768,6 +1787,11 @@ export function createPmPortalComment({ token, payload }) {
     method: "POST",
     body: payload,
   });
+}
+
+
+export function getPublicAppUrl() {
+  return resolvePublicAppUrl();
 }
 
 

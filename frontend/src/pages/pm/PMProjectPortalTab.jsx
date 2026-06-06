@@ -3,6 +3,7 @@ import { Copy, ExternalLink, KeyRound, RefreshCw, RotateCcw, ShieldOff } from "l
 
 import {
   createPmProjectExternalInvite,
+  getPublicAppUrl,
   listPmProjectExternalInvites,
   listPmProjectPortalAccessLogs,
   regeneratePmProjectExternalInvite,
@@ -61,7 +62,14 @@ function toPortalExpiryIso(value) {
   return parsed.toISOString();
 }
 
-export default function PMProjectPortalTab({ empresaId, project, projectId, token }) {
+export default function PMProjectPortalTab({
+  empresaId,
+  canManage = false,
+  project,
+  projectEditable = true,
+  projectId,
+  token,
+}) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -151,7 +159,7 @@ export default function PMProjectPortalTab({ empresaId, project, projectId, toke
           expira_at: expiraAt,
         },
       });
-      const link = response.portal_url || `${window.location.origin}${response.portal_path}`;
+      const link = response.portal_url || `${getPublicAppUrl()}${response.portal_path}`;
       setGeneratedLink(link);
       setSuccess("Acceso externo creado.");
       await loadPortalData({ background: true });
@@ -180,7 +188,7 @@ export default function PMProjectPortalTab({ empresaId, project, projectId, toke
     setSuccess("");
     try {
       const response = await regeneratePmProjectExternalInvite({ inviteId, token, empresaId });
-      const link = response.portal_url || `${window.location.origin}${response.portal_path}`;
+      const link = response.portal_url || `${getPublicAppUrl()}${response.portal_path}`;
       setGeneratedLink(link);
       setSuccess("Link regenerado.");
       await loadPortalData({ background: true });
@@ -201,18 +209,20 @@ export default function PMProjectPortalTab({ empresaId, project, projectId, toke
             >
               {refreshing ? "Actualizando..." : "Actualizar"}
             </ActionButton>
-            <ActionButton
-              icon={<KeyRound size={16} strokeWidth={1.9} />}
-              onClick={() => {
-                setError("");
-                setSuccess("");
-                setCreateModalOpen(true);
-              }}
-              tone="primary"
-              type="button"
-            >
-              Crear acceso externo
-            </ActionButton>
+            {canManage && projectEditable ? (
+              <ActionButton
+                icon={<KeyRound size={16} strokeWidth={1.9} />}
+                onClick={() => {
+                  setError("");
+                  setSuccess("");
+                  setCreateModalOpen(true);
+                }}
+                tone="primary"
+                type="button"
+              >
+                Crear acceso externo
+              </ActionButton>
+            ) : null}
           </div>
         )}
         subtitle="Comparte una vista limitada del proyecto con clientes o invitados."
@@ -296,23 +306,27 @@ export default function PMProjectPortalTab({ empresaId, project, projectId, toke
                     <td>{formatDateTime(invite.ultimo_acceso_at)}</td>
                     <td>
                       <div className="inventory-actions inventory-actions-wrap">
-                        <ActionButton
-                          icon={<RotateCcw size={14} strokeWidth={1.9} />}
-                          onClick={() => handleRegenerateInvite(invite.id)}
-                          size="sm"
-                          type="button"
-                        >
-                          Regenerar link
-                        </ActionButton>
-                        <ActionButton
-                          icon={<ShieldOff size={14} strokeWidth={1.9} />}
-                          onClick={() => handleRevokeInvite(invite.id)}
-                          size="sm"
-                          tone="danger"
-                          type="button"
-                        >
-                          Revocar acceso
-                        </ActionButton>
+                        {canManage && projectEditable ? (
+                          <>
+                            <ActionButton
+                              icon={<RotateCcw size={14} strokeWidth={1.9} />}
+                              onClick={() => handleRegenerateInvite(invite.id)}
+                              size="sm"
+                              type="button"
+                            >
+                              Regenerar link
+                            </ActionButton>
+                            <ActionButton
+                              icon={<ShieldOff size={14} strokeWidth={1.9} />}
+                              onClick={() => handleRevokeInvite(invite.id)}
+                              size="sm"
+                              tone="danger"
+                              type="button"
+                            >
+                              Revocar acceso
+                            </ActionButton>
+                          </>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

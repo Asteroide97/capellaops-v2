@@ -295,8 +295,10 @@ function getChapterDisplayTotals(chapter, chapterItems) {
 
 
 export default function PMProjectBudgetTab({
+  canManage = false,
   empresaId,
   onChanged,
+  projectEditable = true,
   project,
   projectId,
   token,
@@ -338,6 +340,7 @@ export default function PMProjectBudgetTab({
   );
   const selectedOperationalItem = selectedBudgetItem?.tipo === "partida" ? selectedBudgetItem : null;
   const projectBudgetBase = numericValue(project?.presupuesto_estimado);
+  const canEditBudget = canManage && projectEditable;
   const budgetCalculatedCost = numericValue(budget?.total_costo ?? vsActual?.presupuesto_detallado_costo);
   const budgetSaleTotal = numericValue(budget?.total_venta ?? vsActual?.presupuesto_detallado_venta);
   const budgetEstimatedMargin = numericValue(budget?.margen_estimado ?? vsActual?.margen_estimado);
@@ -404,6 +407,11 @@ export default function PMProjectBudgetTab({
     event?.stopPropagation?.();
     setError("");
     setSuccess("");
+
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar el presupuesto de este proyecto.");
+      return;
+    }
 
     if (type !== "budget" && !budget?.id) {
       setError("Primero crea el presupuesto del proyecto.");
@@ -523,6 +531,10 @@ export default function PMProjectBudgetTab({
   }
 
   async function handleQuickCreateBudget({ useProjectBase = false } = {}) {
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar el presupuesto de este proyecto.");
+      return;
+    }
     setSaving(true);
     setError("");
     setSuccess("");
@@ -553,6 +565,10 @@ export default function PMProjectBudgetTab({
 
   async function handleSaveBudget(event) {
     event.preventDefault();
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar el presupuesto de este proyecto.");
+      return;
+    }
     setSaving(true);
     setError("");
     setSuccess("");
@@ -582,6 +598,10 @@ export default function PMProjectBudgetTab({
   }
 
   async function handleApproveBudget() {
+    if (!canEditBudget) {
+      setError("No tienes permiso para aprobar el presupuesto de este proyecto.");
+      return;
+    }
     if (!budget?.id) {
       return;
     }
@@ -608,6 +628,10 @@ export default function PMProjectBudgetTab({
   }
 
   async function handleCancelBudget() {
+    if (!canEditBudget) {
+      setError("No tienes permiso para cancelar el presupuesto de este proyecto.");
+      return;
+    }
     if (!budget?.id || !window.confirm("El presupuesto se marcará como cancelado. ¿Continuar?")) {
       return;
     }
@@ -647,6 +671,10 @@ export default function PMProjectBudgetTab({
 
   async function handleSaveItem(event) {
     event.preventDefault();
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar partidas en este proyecto.");
+      return;
+    }
     if (!budget?.id) {
       setError("Primero crea el presupuesto del proyecto.");
       return;
@@ -687,6 +715,10 @@ export default function PMProjectBudgetTab({
   }
 
   async function handleDeactivateItem(item) {
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar partidas en este proyecto.");
+      return;
+    }
     if (!item?.id || !window.confirm("La partida se desactivará del presupuesto activo. ¿Continuar?")) {
       return;
     }
@@ -723,6 +755,10 @@ export default function PMProjectBudgetTab({
 
   async function handleSaveMaterial(event) {
     event.preventDefault();
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar materiales presupuestados en este proyecto.");
+      return;
+    }
     if (!selectedOperationalItem?.id) {
       setError("Primero crea o selecciona una partida.");
       return;
@@ -758,6 +794,10 @@ export default function PMProjectBudgetTab({
   }
 
   async function handleDeactivateMaterial(component) {
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar materiales presupuestados en este proyecto.");
+      return;
+    }
     if (!component?.id || !window.confirm("El material se quitará del desglose de costo. ¿Continuar?")) {
       return;
     }
@@ -778,6 +818,10 @@ export default function PMProjectBudgetTab({
 
   async function handleSaveLabor(event) {
     event.preventDefault();
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar la mano de obra presupuestada en este proyecto.");
+      return;
+    }
     if (!selectedOperationalItem?.id) {
       setError("Primero crea o selecciona una partida.");
       return;
@@ -810,6 +854,10 @@ export default function PMProjectBudgetTab({
   }
 
   async function handleDeactivateLabor(component) {
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar la mano de obra presupuestada en este proyecto.");
+      return;
+    }
     if (!component?.id || !window.confirm("La mano de obra se quitará del desglose de costo. ¿Continuar?")) {
       return;
     }
@@ -830,6 +878,10 @@ export default function PMProjectBudgetTab({
 
   async function handleSaveIndirect(event) {
     event.preventDefault();
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar costos indirectos en este proyecto.");
+      return;
+    }
     if (!budget?.id) {
       setError("Primero crea el presupuesto del proyecto.");
       return;
@@ -862,6 +914,10 @@ export default function PMProjectBudgetTab({
   }
 
   async function handleDeactivateIndirect(indirect) {
+    if (!canEditBudget) {
+      setError("No tienes permiso para editar costos indirectos en este proyecto.");
+      return;
+    }
     if (!indirect?.id || !window.confirm("El costo indirecto se quitará del presupuesto activo. ¿Continuar?")) {
       return;
     }
@@ -914,29 +970,29 @@ export default function PMProjectBudgetTab({
           <div className="inventory-actions inventory-actions-wrap">
             {!budget ? (
               <>
-                <ActionButton disabled={saving} icon={<Plus size={16} strokeWidth={1.9} />} onClick={() => handleQuickCreateBudget()} tone="primary" type="button">
+                <ActionButton disabled={saving || !canEditBudget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={() => handleQuickCreateBudget()} tone="primary" type="button">
                   Crear presupuesto
                 </ActionButton>
                 <ActionButton
-                  disabled={saving}
+                  disabled={saving || !canEditBudget}
                   onClick={() => handleQuickCreateBudget({ useProjectBase: true })}
                   type="button"
                 >
                   Usar presupuesto base del proyecto
                 </ActionButton>
-                <ActionButton disabled={saving} onClick={openCreateBudgetModal} type="button">
+                <ActionButton disabled={saving || !canEditBudget} onClick={openCreateBudgetModal} type="button">
                   Configurar cabecera
                 </ActionButton>
               </>
             ) : (
               <>
-                <ActionButton onClick={openEditBudgetModal} type="button">
+                <ActionButton disabled={!canEditBudget} onClick={openEditBudgetModal} type="button">
                   Editar
                 </ActionButton>
-                <ActionButton disabled={saving || budget.estatus === "aprobado"} onClick={handleApproveBudget} tone="primary" type="button">
+                <ActionButton disabled={saving || budget.estatus === "aprobado" || !canEditBudget} onClick={handleApproveBudget} tone="primary" type="button">
                   Aprobar presupuesto
                 </ActionButton>
-                <ActionButton disabled={saving || budget.estatus === "cancelado"} onClick={handleCancelBudget} tone="danger" type="button">
+                <ActionButton disabled={saving || budget.estatus === "cancelado" || !canEditBudget} onClick={handleCancelBudget} tone="danger" type="button">
                   Cancelar
                 </ActionButton>
               </>
@@ -953,11 +1009,11 @@ export default function PMProjectBudgetTab({
           <EmptyState
             action={(
               <div className="inventory-actions inventory-actions-wrap">
-                <ActionButton disabled={saving} onClick={() => handleQuickCreateBudget()} tone="primary" type="button">
+                <ActionButton disabled={saving || !canEditBudget} onClick={() => handleQuickCreateBudget()} tone="primary" type="button">
                   Crear presupuesto
                 </ActionButton>
                 <ActionButton
-                  disabled={saving}
+                  disabled={saving || !canEditBudget}
                   onClick={() => handleQuickCreateBudget({ useProjectBase: true })}
                   type="button"
                 >
@@ -1018,12 +1074,16 @@ export default function PMProjectBudgetTab({
         <DataCard
           actions={(
             <div className="inventory-actions inventory-actions-wrap">
-              <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={(event) => openCreateItemModal("capitulo", event)} type="button">
-                Agregar capítulo
-              </ActionButton>
-              <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={(event) => openCreateItemModal("partida", event)} tone="primary" type="button">
-                Agregar partida
-              </ActionButton>
+              {canEditBudget ? (
+                <>
+                  <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={(event) => openCreateItemModal("capitulo", event)} type="button">
+                    Agregar capítulo
+                  </ActionButton>
+                  <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={(event) => openCreateItemModal("partida", event)} tone="primary" type="button">
+                    Agregar partida
+                  </ActionButton>
+                </>
+              ) : null}
             </div>
           )}
           subtitle="Organiza el presupuesto por capítulos y partidas."
@@ -1033,7 +1093,7 @@ export default function PMProjectBudgetTab({
             <EmptyState compact note="Primero crea el presupuesto del proyecto." title="Sin presupuesto" />
           ) : activeItems.length === 0 ? (
             <EmptyState
-              action={(
+              action={canEditBudget ? (
                 <div className="inventory-actions inventory-actions-wrap">
                   <ActionButton onClick={(event) => openCreateItemModal("capitulo", event)} type="button">
                     Agregar capítulo
@@ -1042,7 +1102,7 @@ export default function PMProjectBudgetTab({
                     Agregar primera partida
                   </ActionButton>
                 </div>
-              )}
+              ) : null}
               compact
               note="Todavía no hay capítulos ni partidas."
               title="Sin estructura"
@@ -1063,14 +1123,16 @@ export default function PMProjectBudgetTab({
                         </span>
                       </div>
                     </button>
-                    <div className="table-actions">
-                      <ActionButton onClick={(event) => openEditItemModal(chapter, event)} size="sm" type="button">
-                        Editar
-                      </ActionButton>
-                      <ActionButton onClick={() => handleDeactivateItem(chapter)} size="sm" tone="danger" type="button">
-                        Desactivar
-                      </ActionButton>
-                    </div>
+                    {canEditBudget ? (
+                      <div className="table-actions">
+                        <ActionButton onClick={(event) => openEditItemModal(chapter, event)} size="sm" type="button">
+                          Editar
+                        </ActionButton>
+                        <ActionButton onClick={() => handleDeactivateItem(chapter)} size="sm" tone="danger" type="button">
+                          Desactivar
+                        </ActionButton>
+                      </div>
+                    ) : null}
                   </div>
 
                   {chapterItems.length === 0 ? (
@@ -1091,14 +1153,16 @@ export default function PMProjectBudgetTab({
                             </div>
                             <StatusBadge tone={getItemTypeTone(item.tipo)}>{itemTypeLabels[item.tipo] ?? safeDisplayText(item.tipo)}</StatusBadge>
                           </button>
-                          <div className="table-actions">
-                            <ActionButton onClick={(event) => openEditItemModal(item, event)} size="sm" type="button">
-                              Editar
-                            </ActionButton>
-                            <ActionButton onClick={() => handleDeactivateItem(item)} size="sm" tone="danger" type="button">
-                              Desactivar
-                            </ActionButton>
-                          </div>
+                          {canEditBudget ? (
+                            <div className="table-actions">
+                              <ActionButton onClick={(event) => openEditItemModal(item, event)} size="sm" type="button">
+                                Editar
+                              </ActionButton>
+                              <ActionButton onClick={() => handleDeactivateItem(item)} size="sm" tone="danger" type="button">
+                                Desactivar
+                              </ActionButton>
+                            </div>
+                          ) : null}
                         </div>
                       ))}
                     </div>
@@ -1124,14 +1188,16 @@ export default function PMProjectBudgetTab({
                             </span>
                           </div>
                         </button>
-                        <div className="table-actions">
-                          <ActionButton onClick={(event) => openEditItemModal(item, event)} size="sm" type="button">
-                            Editar
-                          </ActionButton>
-                          <ActionButton onClick={() => handleDeactivateItem(item)} size="sm" tone="danger" type="button">
-                            Desactivar
-                          </ActionButton>
-                        </div>
+                        {canEditBudget ? (
+                          <div className="table-actions">
+                            <ActionButton onClick={(event) => openEditItemModal(item, event)} size="sm" type="button">
+                              Editar
+                            </ActionButton>
+                            <ActionButton onClick={() => handleDeactivateItem(item)} size="sm" tone="danger" type="button">
+                              Desactivar
+                            </ActionButton>
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -1143,14 +1209,18 @@ export default function PMProjectBudgetTab({
 
         <div className="pm-budget-side-stack">
           <DataCard
-            actions={(
-              <div className="inventory-actions inventory-actions-wrap">
-                <ActionButton disabled={!selectedOperationalItem} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateMaterialModal} type="button">
-                  Agregar material
-                </ActionButton>
-                <ActionButton disabled={!selectedOperationalItem} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateLaborModal} tone="primary" type="button">
-                  Agregar mano de obra
-                </ActionButton>
+          actions={(
+            <div className="inventory-actions inventory-actions-wrap">
+              {canEditBudget ? (
+                <>
+                  <ActionButton disabled={!selectedOperationalItem} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateMaterialModal} type="button">
+                    Agregar material
+                  </ActionButton>
+                  <ActionButton disabled={!selectedOperationalItem} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateLaborModal} tone="primary" type="button">
+                    Agregar mano de obra
+                  </ActionButton>
+                </>
+              ) : null}
               </div>
             )}
             subtitle={selectedOperationalItem
@@ -1162,11 +1232,11 @@ export default function PMProjectBudgetTab({
               <EmptyState compact note="Primero crea el presupuesto del proyecto." title="Sin presupuesto" />
             ) : !selectedOperationalItem ? (
               <EmptyState
-                action={(
+                action={canEditBudget ? (
                   <ActionButton onClick={(event) => openCreateItemModal("partida", event)} tone="primary" type="button">
                     Agregar partida
                   </ActionButton>
-                )}
+                ) : null}
                 compact
                 note="Selecciona una partida para agregar materiales y mano de obra."
                 title="Sin partida seleccionada"
@@ -1199,14 +1269,16 @@ export default function PMProjectBudgetTab({
                             <td>{formatMoney(component.costo_unitario ?? 0)}</td>
                             <td>{formatMoney(component.costo_total ?? 0)}</td>
                             <td>
-                              <div className="table-actions">
-                                <ActionButton onClick={(event) => openEditMaterialModal(component, event)} size="sm" type="button">
-                                  Editar
-                                </ActionButton>
-                                <ActionButton onClick={() => handleDeactivateMaterial(component)} size="sm" tone="danger" type="button">
-                                  Quitar
-                                </ActionButton>
-                              </div>
+                              {canEditBudget ? (
+                                <div className="table-actions">
+                                  <ActionButton onClick={(event) => openEditMaterialModal(component, event)} size="sm" type="button">
+                                    Editar
+                                  </ActionButton>
+                                  <ActionButton onClick={() => handleDeactivateMaterial(component)} size="sm" tone="danger" type="button">
+                                    Quitar
+                                  </ActionButton>
+                                </div>
+                              ) : "—"}
                             </td>
                           </tr>
                         ))}
@@ -1231,14 +1303,16 @@ export default function PMProjectBudgetTab({
                             <td>{formatMoney(component.tarifa_hora ?? 0)}</td>
                             <td>{formatMoney(component.costo_total ?? 0)}</td>
                             <td>
-                              <div className="table-actions">
-                                <ActionButton onClick={(event) => openEditLaborModal(component, event)} size="sm" type="button">
-                                  Editar
-                                </ActionButton>
-                                <ActionButton onClick={() => handleDeactivateLabor(component)} size="sm" tone="danger" type="button">
-                                  Quitar
-                                </ActionButton>
-                              </div>
+                              {canEditBudget ? (
+                                <div className="table-actions">
+                                  <ActionButton onClick={(event) => openEditLaborModal(component, event)} size="sm" type="button">
+                                    Editar
+                                  </ActionButton>
+                                  <ActionButton onClick={() => handleDeactivateLabor(component)} size="sm" tone="danger" type="button">
+                                    Quitar
+                                  </ActionButton>
+                                </div>
+                              ) : "—"}
                             </td>
                           </tr>
                         ))}
@@ -1251,11 +1325,13 @@ export default function PMProjectBudgetTab({
           </DataCard>
 
           <DataCard
-            actions={(
+          actions={(
+            canEditBudget ? (
               <ActionButton disabled={!budget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateIndirectModal} tone="primary" type="button">
                 Agregar indirecto
               </ActionButton>
-            )}
+            ) : null
+          )}
             subtitle="Agrega gastos generales del proyecto: administración, fletes, supervisión, herramientas, viáticos u otros."
             title="Costos indirectos"
           >
@@ -1271,14 +1347,16 @@ export default function PMProjectBudgetTab({
                       <td>{indirect.tipo === "porcentaje" ? formatPercent(indirect.porcentaje ?? 0) : formatMoney(indirect.monto ?? 0)}</td>
                       <td>{formatMoney(indirect.monto ?? 0)}</td>
                       <td>
-                        <div className="table-actions">
-                          <ActionButton onClick={(event) => openEditIndirectModal(indirect, event)} size="sm" type="button">
-                            Editar
-                          </ActionButton>
-                          <ActionButton onClick={() => handleDeactivateIndirect(indirect)} size="sm" tone="danger" type="button">
-                            Quitar
-                          </ActionButton>
-                        </div>
+                        {canEditBudget ? (
+                          <div className="table-actions">
+                            <ActionButton onClick={(event) => openEditIndirectModal(indirect, event)} size="sm" type="button">
+                              Editar
+                            </ActionButton>
+                            <ActionButton onClick={() => handleDeactivateIndirect(indirect)} size="sm" tone="danger" type="button">
+                              Quitar
+                            </ActionButton>
+                          </div>
+                        ) : "—"}
                       </td>
                     </tr>
                   ))}

@@ -29,6 +29,7 @@ import {
   safeDisplayText,
 } from "../inventory/shared";
 import {
+  canManagePmRole,
   getPriorityLabel,
   getPriorityTone,
   getProjectStatusLabel,
@@ -60,7 +61,8 @@ function StatusDistribution({ items, kind }) {
 
 export default function PMDashboardPage() {
   const navigate = useNavigate();
-  const { empresaId, token } = useAuth();
+  const { empresaId, token, membership, user } = useAuth();
+  const canManagePmUi = canManagePmRole(membership?.role, Boolean(user?.is_superadmin));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [dashboard, setDashboard] = useState(null);
@@ -104,15 +106,19 @@ export default function PMDashboardPage() {
             >
               Reporte ejecutivo
             </ActionButton>
-            <ActionButton onClick={() => navigate("/pm/rates")} type="button">
-              Tarifas PM
-            </ActionButton>
+            {canManagePmUi ? (
+              <ActionButton onClick={() => navigate("/pm/rates")} type="button">
+                Tarifas PM
+              </ActionButton>
+            ) : null}
             <ActionButton onClick={() => navigate("/pm/projects")} type="button">
               Ver proyectos
             </ActionButton>
-            <ActionButton onClick={() => navigate("/pm/projects")} tone="primary" type="button">
-              Nuevo proyecto
-            </ActionButton>
+            {canManagePmUi ? (
+              <ActionButton onClick={() => navigate("/pm/projects")} tone="primary" type="button">
+                Nuevo proyecto
+              </ActionButton>
+            ) : null}
           </div>
         )}
       />

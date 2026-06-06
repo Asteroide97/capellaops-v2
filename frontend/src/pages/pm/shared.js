@@ -157,6 +157,35 @@ const pmVisualCopyFixups = [
   [/proximos/g, "próximos"],
 ];
 
+const pmManageRoles = new Set(["owner", "admin"]);
+const pmEditProjectRoles = new Set(["owner", "admin", "user"]);
+
+export function canManagePmRole(role, isSuperadmin = false) {
+  return Boolean(isSuperadmin || pmManageRoles.has(String(role ?? "").toLowerCase()));
+}
+
+export function canApprovePmRole(role, isSuperadmin = false) {
+  return canManagePmRole(role, isSuperadmin);
+}
+
+export function canEditPmProjectRole(role, isSuperadmin = false) {
+  return Boolean(isSuperadmin || pmEditProjectRoles.has(String(role ?? "").toLowerCase()));
+}
+
+export function canViewPmProjectRole(_role, _isSuperadmin = false) {
+  return true;
+}
+
+export function isPmProjectEditable(project) {
+  if (!project) {
+    return false;
+  }
+  if (project.activo === false) {
+    return false;
+  }
+  return String(project.estatus ?? "").toLowerCase() !== "cancelado";
+}
+
 export function normalizePmCopy(value) {
   const source = String(value ?? "");
   const withoutMojibake = mojibakeFixups.reduce(

@@ -135,6 +135,8 @@ npm run dev
 ### Backend
 
 - `DATABASE_URL`
+- `PUBLIC_FRONTEND_URL`
+- `CORS_ORIGINS`
 - `AZURE_SQL_SERVER`
 - `AZURE_SQL_DATABASE`
 - `AZURE_SQL_USERNAME`
@@ -152,7 +154,53 @@ npm run dev
 ### Frontend
 
 - `VITE_API_URL`
+- `VITE_PUBLIC_APP_URL`
 - `VITE_RECAPTCHA_SITE_KEY`
+
+## Configuración de URLs por entorno
+
+### Desarrollo
+
+Backend:
+
+```env
+PUBLIC_FRONTEND_URL=http://localhost:5173
+CORS_ORIGINS=http://localhost:5173
+```
+
+Frontend:
+
+```env
+VITE_API_URL=http://localhost:8000
+VITE_PUBLIC_APP_URL=http://localhost:5173
+```
+
+### Producción
+
+Backend:
+
+```env
+PUBLIC_FRONTEND_URL=https://app.capellaops.com
+CORS_ORIGINS=https://app.capellaops.com
+```
+
+Frontend:
+
+```env
+VITE_PUBLIC_APP_URL=https://app.capellaops.com
+VITE_API_URL=<URL pública del backend>
+```
+
+Opciones típicas para `VITE_API_URL`:
+
+- `https://api.capellaops.com`
+- `https://app.capellaops.com/api` si se usa proxy
+
+Notas:
+
+- `PUBLIC_FRONTEND_URL` se usa en backend para generar links del portal externo PM.
+- `VITE_API_URL` se define al momento del build de Vite; si cambia, hay que reconstruir el frontend.
+- Si el frontend necesita construir links públicos, usa `VITE_PUBLIC_APP_URL` y, en su defecto, `window.location.origin`.
 
 ## Base de datos
 
@@ -1144,6 +1192,40 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Gráficas avanzadas
 - Optimización agregada para muchos proyectos
 - Permisos finos por rol
+
+## PM MVP - Estado vendible
+
+- El MVP PM ya incluye:
+  - dashboard y reporte ejecutivo
+  - listado y detalle de proyectos
+  - plan de trabajo con tareas, dependencias, alertas y cronograma visual guiado
+  - presupuesto detallado y comparativo contra costo real
+  - estimaciones / estados de pago internos
+  - línea base, comparativo y control de cambios
+  - materiales, tiempo y costos
+  - aprobaciones, documentos y portal externo
+- Queda fuera de este MVP:
+  - facturación fiscal / CFDI
+  - Stripe o factura.com
+  - firma electrónica
+  - notificaciones por email o WhatsApp
+  - exportación PDF / Excel
+  - BI avanzado
+  - mantenimiento
+- Limitaciones conocidas del MVP:
+  - permisos finos por rol siguen en nivel básico `owner/admin/user`
+  - el reporte ejecutivo calcula datos en tiempo real y aún no usa agregados optimizados
+  - el portal externo sigue limitado a lectura controlada sin documentos reales en Azure Blob configurado
+  - estimaciones siguen siendo internas y no generan documentos fiscales
+- Smoke manual recomendado:
+  - seguir `docs/pm_mvp_smoke_checklist.md`
+  - validar al menos dashboard, proyecto, plan de trabajo, presupuesto, estimaciones, línea base, aprobaciones, portal y reporte ejecutivo
+- Antes de demo:
+  - confirmar que no aparece `[object Object]`
+  - confirmar que no hay mojibake
+  - validar permisos visibles por rol
+  - validar que los modales cierran correctamente en éxito
+  - validar que el portal externo no expone costos ni información interna
 
 ## Inventario Fase 1.2
 

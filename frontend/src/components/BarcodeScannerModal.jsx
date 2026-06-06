@@ -10,8 +10,15 @@ function canUseCameraScanner() {
   }
 
   const hostname = window.location.hostname;
-  const isLocalhost = hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
-  return Boolean(window.isSecureContext || isLocalhost);
+  const isSingleLabelHost = Boolean(hostname) && !hostname.includes(".") && !hostname.includes(":");
+  const ipv4Parts = hostname.split(".");
+  const isLoopbackIpv4 =
+    ipv4Parts.length === 4 &&
+    ipv4Parts.every((part) => /^\d+$/.test(part)) &&
+    Number(ipv4Parts[0]) === 127 &&
+    ipv4Parts.every((part) => Number(part) >= 0 && Number(part) <= 255);
+  const isLoopbackIpv6 = hostname === "::1";
+  return Boolean(window.isSecureContext || isSingleLabelHost || isLoopbackIpv4 || isLoopbackIpv6);
 }
 
 

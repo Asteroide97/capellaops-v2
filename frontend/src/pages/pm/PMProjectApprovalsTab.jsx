@@ -76,7 +76,13 @@ function getRelatedEntityLabel(value) {
   return "Otro";
 }
 
-export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
+export default function PMProjectApprovalsTab({
+  canApprove = false,
+  canManage = false,
+  empresaId,
+  projectId,
+  token,
+}) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -206,18 +212,20 @@ export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
           >
             {refreshing ? "Actualizando..." : "Actualizar"}
           </ActionButton>
-          <ActionButton
-            icon={<ShieldCheck size={16} strokeWidth={1.9} />}
-            onClick={() => {
-              setError("");
-              setSuccess("");
-              setCreateModalOpen(true);
-            }}
-            tone="primary"
-            type="button"
-          >
-            Solicitar aprobación
-          </ActionButton>
+          {canManage ? (
+            <ActionButton
+              icon={<ShieldCheck size={16} strokeWidth={1.9} />}
+              onClick={() => {
+                setError("");
+                setSuccess("");
+                setCreateModalOpen(true);
+              }}
+              tone="primary"
+              type="button"
+            >
+              Solicitar aprobación
+            </ActionButton>
+          ) : null}
         </div>
       )}
       subtitle="Controla aprobaciones de presupuesto, cambios, entregas y cierres."
@@ -268,7 +276,7 @@ export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
                   <td>{safeDisplayText(approval.resuelto_por_nombre ?? approval.resuelto_por, "—")}</td>
                   <td>{formatDateTime(approval.resuelto_en)}</td>
                   <td>
-                    {pending ? (
+                    {pending && canApprove ? (
                       <div className="inventory-actions inventory-actions-wrap">
                         <ActionButton
                           icon={<CheckCheck size={14} strokeWidth={1.9} />}

@@ -195,6 +195,8 @@ export default function PMProjectWorkPlanView({
   alerts = [],
   alertActionLoading = {},
   baselineComparison = null,
+  canConfigureCalendar = false,
+  canEditTasks = false,
   empresaId,
   materialConsumptions,
   materialPlans,
@@ -284,18 +286,22 @@ export default function PMProjectWorkPlanView({
       >
         {refreshing ? "Actualizando..." : "Actualizar"}
       </ActionButton>
-      <ActionButton
-        className={planningRefreshing ? "pm-button-loading" : ""}
-        disabled={refreshing || planningRefreshing}
-        icon={<Sparkles size={16} strokeWidth={1.9} />}
-        onClick={onRecalculatePlanning}
-        type="button"
-      >
-        {planningRefreshing ? "Recalculando..." : "Recalcular planeación"}
-      </ActionButton>
-      <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={onCreateTask} tone="primary" type="button">
-        Nueva tarea
-      </ActionButton>
+      {canEditTasks ? (
+        <ActionButton
+          className={planningRefreshing ? "pm-button-loading" : ""}
+          disabled={refreshing || planningRefreshing}
+          icon={<Sparkles size={16} strokeWidth={1.9} />}
+          onClick={onRecalculatePlanning}
+          type="button"
+        >
+          {planningRefreshing ? "Recalculando..." : "Recalcular planeación"}
+        </ActionButton>
+      ) : null}
+      {canEditTasks ? (
+        <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={onCreateTask} tone="primary" type="button">
+          Nueva tarea
+        </ActionButton>
+      ) : null}
     </>
   );
 
@@ -313,18 +319,22 @@ export default function PMProjectWorkPlanView({
         <DataCard subtitle="La tabla y el cronograma se activan cuando existe plan de trabajo." title="Plan de trabajo">
           <EmptyState
             action={(
-              <ActionButton onClick={onCreateTask} tone="primary" type="button">
-                Crear primera tarea
-              </ActionButton>
+              canEditTasks ? (
+                <ActionButton onClick={onCreateTask} tone="primary" type="button">
+                  Crear primera tarea
+                </ActionButton>
+              ) : null
             )}
             note="Agrega tareas con fechas para visualizar el plan, las dependencias y la ruta crítica."
             title="Sin tareas"
           />
         </DataCard>
 
-        <ActionButton className="pm-workplan-fab" icon={<Plus size={18} strokeWidth={2} />} onClick={onCreateTask} tone="primary" type="button">
-          + Tarea
-        </ActionButton>
+        {canEditTasks ? (
+          <ActionButton className="pm-workplan-fab" icon={<Plus size={18} strokeWidth={2} />} onClick={onCreateTask} tone="primary" type="button">
+            + Tarea
+          </ActionButton>
+        ) : null}
       </section>
     );
   }
@@ -414,9 +424,11 @@ export default function PMProjectWorkPlanView({
       <div className="inventory-content-grid inventory-content-grid-2">
         <DataCard
           actions={(
-            <ActionButton icon={<CalendarRange size={16} strokeWidth={1.9} />} onClick={onConfigureCalendar} type="button">
-              Configurar calendario
-            </ActionButton>
+            canConfigureCalendar ? (
+              <ActionButton icon={<CalendarRange size={16} strokeWidth={1.9} />} onClick={onConfigureCalendar} type="button">
+                Configurar calendario
+              </ActionButton>
+            ) : null
           )}
           subtitle="Días laborales que usa la planeación para sugerir fechas."
           title="Calendario laboral"
@@ -429,7 +441,7 @@ export default function PMProjectWorkPlanView({
         </DataCard>
 
         <DataCard
-          actions={outOfSequenceTasks.length > 0 ? (
+          actions={canEditTasks && outOfSequenceTasks.length > 0 ? (
             <ActionButton onClick={onApplyAllSuggestions} tone="primary" type="button">
               Aplicar sugerencias
             </ActionButton>
@@ -487,6 +499,7 @@ export default function PMProjectWorkPlanView({
           title="Cronograma del proyecto"
         >
           <PMProjectGanttLite
+            canEditTask={canEditTasks}
             embedded
             onApplySuggestedDates={onApplySuggestedDates}
             onEditTaskDates={onEditTaskDates}
@@ -596,7 +609,7 @@ export default function PMProjectWorkPlanView({
                       </ActionButton>
                       <ActionButton
                         className={editingDates ? "pm-button-loading" : ""}
-                        disabled={editingDates}
+                        disabled={editingDates || !canEditTasks}
                         icon={<Pencil size={14} strokeWidth={1.9} />}
                         onClick={(event) => {
                           event.stopPropagation();
@@ -622,7 +635,7 @@ export default function PMProjectWorkPlanView({
             defaultOpen={false}
             isOpen={isDetailExpanded}
             onToggle={setIsDetailExpanded}
-            rightActions={selectedTask ? (
+            rightActions={selectedTask && canEditTasks ? (
               <>
                 <ActionButton onClick={() => onEditTask?.(selectedTask.id)} size="sm" type="button">
                   Editar tarea
@@ -647,6 +660,7 @@ export default function PMProjectWorkPlanView({
                 materialConsumptions={materialConsumptions}
                 materialPlans={materialPlans}
                 onApplySuggestedDates={onApplySuggestedDates}
+                canEditTask={canEditTasks}
                 onDependenciesChanged={onDependenciesChanged}
                 onEditTask={onEditTask}
                 onEditTaskDates={onEditTaskDates}

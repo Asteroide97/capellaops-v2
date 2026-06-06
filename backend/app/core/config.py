@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     app_name: str = "Capella Ops V2 API"
     secret_key: str = "change-this-secret-key"
     access_token_expire_minutes: int = 1440
-    cors_origins_raw: str = Field(default="http://localhost:5173", alias="CORS_ORIGINS")
-    public_frontend_url: str = Field(default="http://localhost:5173", alias="PUBLIC_FRONTEND_URL")
+    cors_origins_raw: str = Field(default="", alias="CORS_ORIGINS")
+    public_frontend_url: str = Field(default="", alias="PUBLIC_FRONTEND_URL")
 
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     azure_sql_server: str | None = Field(default=None, alias="AZURE_SQL_SERVER")
@@ -54,7 +54,16 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        return [origin.strip() for origin in self.cors_origins_raw.split(",") if origin.strip()]
+        origins = [origin.strip().rstrip("/") for origin in self.cors_origins_raw.split(",") if origin.strip()]
+        if origins:
+            return origins
+        if self.public_frontend_origin:
+            return [self.public_frontend_origin]
+        return []
+
+    @property
+    def public_frontend_origin(self) -> str:
+        return str(self.public_frontend_url or "").strip().rstrip("/")
 
     @property
     def sqlalchemy_database_url(self) -> str:

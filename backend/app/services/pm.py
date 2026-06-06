@@ -145,6 +145,7 @@ PM_MATERIAL_CONSUMPTION_ORIGIN = {"movimiento_manual", "requisicion_surtida", "a
 PM_RATE_SOURCE = {"usuario", "rol", "manual", "sin_tarifa"}
 PM_ALLOWED_RATE_ROLES = {"owner", "admin", "user", "almacenista", "lider", "colaborador", "observador"}
 PM_MANAGE_RATES_ROLES = {"owner", "admin"}
+PM_EDIT_PROJECT_ROLES = {"owner", "admin", "user"}
 PM_BUDGET_STATUS = {"borrador", "aprobado", "sustituido", "cancelado"}
 PM_BUDGET_ITEM_TYPES = {"capitulo", "partida"}
 PM_BUDGET_INDIRECT_TYPES = {"porcentaje", "monto"}
@@ -526,28 +527,42 @@ def ensure_pm_time_enabled(pm_context: PMContext) -> None:
         )
 
 
+def can_manage_pm(pm_context: PMContext) -> bool:
+    return bool(getattr(pm_context.user, "is_superadmin", False) or pm_context.membership_role in PM_MANAGE_RATES_ROLES)
+
+
+def can_approve_pm(pm_context: PMContext) -> bool:
+    return can_manage_pm(pm_context)
+
+
+def can_edit_pm_project(pm_context: PMContext) -> bool:
+    return bool(getattr(pm_context.user, "is_superadmin", False) or pm_context.membership_role in PM_EDIT_PROJECT_ROLES)
+
+
+def can_view_pm_project(pm_context: PMContext) -> bool:
+    return True
+
+
+def ensure_pm_project_manage_access(pm_context: PMContext, detail: str) -> None:
+    if not can_manage_pm(pm_context):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+def ensure_pm_project_edit_access(pm_context: PMContext, detail: str = "No tienes permiso para editar este proyecto PM.") -> None:
+    if not can_edit_pm_project(pm_context):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 def ensure_pm_rates_manage_access(pm_context: PMContext) -> None:
-    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo owner o admin pueden configurar tarifas PM.",
-        )
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden configurar tarifas PM.")
 
 
 def ensure_pm_budget_manage_access(pm_context: PMContext) -> None:
-    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo owner o admin pueden gestionar presupuestos PM.",
-        )
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden gestionar presupuestos PM.")
 
 
 def ensure_pm_estimation_manage_access(pm_context: PMContext) -> None:
-    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo owner o admin pueden gestionar estimaciones PM.",
-        )
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden gestionar estimaciones PM.")
 
 
 def ensure_pm_portal_enabled(pm_context: PMContext) -> None:
@@ -560,18 +575,23 @@ def ensure_pm_portal_enabled(pm_context: PMContext) -> None:
 
 def ensure_pm_portal_manage_access(pm_context: PMContext) -> None:
     ensure_pm_portal_enabled(pm_context)
-    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo owner o admin pueden gestionar el portal externo PM.",
-        )
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden gestionar el portal externo PM.")
 
 
 def ensure_pm_baseline_manage_access(pm_context: PMContext) -> None:
-    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden gestionar línea base y cambios aplicados.")
+
+
+def ensure_project_is_operable(project: PMProyecto) -> None:
+    if not bool(project.activo):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo owner o admin pueden gestionar linea base y cambios aplicados.",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este proyecto está inactivo. Reactívalo para continuar.",
+        )
+    if str(project.estatus or "").lower() == "cancelado":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este proyecto está cancelado. Ya no permite cambios operativos.",
         )
 
 
@@ -1303,6 +1323,7 @@ def create_project(
     activo: bool,
     ip_address: str | None,
 ) -> PMProyectoOut:
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden crear proyectos PM.")
     responsable = get_company_member_by_user_id(db, pm_context.empresa_id, responsable_user_id)
     project = PMProyecto(
         empresa_id=pm_context.empresa_id,
@@ -1362,6 +1383,7 @@ def update_project(
     activo: bool | None,
     ip_address: str | None,
 ) -> PMProyectoOut:
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden editar proyectos PM.")
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
     if nombre is not None:
         project.nombre = normalize_required_text(nombre, "Nombre")
@@ -1469,7 +1491,9 @@ def add_project_member(
     rol_en_proyecto: str,
     ip_address: str | None,
 ) -> PMProyectoMiembroOut:
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden gestionar miembros del proyecto.")
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     normalized_email = normalize_email(email)
     linked_user = get_company_member_by_user_id(db, pm_context.empresa_id, usuario_id)
     if linked_user is None and normalized_email:
@@ -1543,7 +1567,9 @@ def deactivate_project_member(
     member_id: str,
     ip_address: str | None,
 ) -> PMProyectoMiembroOut:
-    get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden gestionar miembros del proyecto.")
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     member = get_project_member_for_company(db, pm_context.empresa_id, member_id)
     if member.proyecto_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Miembro de proyecto no encontrado.")
@@ -2835,7 +2861,9 @@ def update_project_work_calendar(
     ip_address: str | None,
 ) -> PMWorkCalendarOut:
     ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden configurar el calendario laboral.")
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     validate_work_calendar_days(
         lunes=lunes,
         martes=martes,
@@ -3044,7 +3072,9 @@ def update_task_dates_with_impact(
     ip_address: str | None,
 ) -> PMApplyScheduleOut:
     ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context)
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     task = get_task_for_company(db, pm_context.empresa_id, task_id)
     if task.proyecto_id != project.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tarea no pertenece al proyecto indicado.")
@@ -3121,7 +3151,9 @@ def apply_task_suggested_dates(
     ip_address: str | None,
 ) -> PMApplyScheduleOut:
     ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context)
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     task = get_task_for_company(db, pm_context.empresa_id, task_id)
     if task.proyecto_id != project.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tarea no pertenece al proyecto indicado.")
@@ -3276,7 +3308,9 @@ def create_task(
     ip_address: str | None,
 ) -> PMTareaOut:
     ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context)
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     assigned_user = get_company_member_by_user_id(db, pm_context.empresa_id, asignado_user_id)
     normalized_status = normalize_task_status(estatus)
     completed_date = fecha_completada
@@ -3351,7 +3385,10 @@ def update_task(
     ip_address: str | None,
 ) -> PMTareaOut:
     ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context)
     task = get_task_for_company(db, pm_context.empresa_id, task_id)
+    project = get_project_for_company(db, pm_context.empresa_id, task.proyecto_id)
+    ensure_project_is_operable(project)
     if titulo is not None:
         task.titulo = normalize_required_text(titulo, "Titulo")
     if descripcion is not None:
@@ -3398,7 +3435,6 @@ def update_task(
     if activo is not None:
         task.activo = activo
     task.updated_by = pm_context.user.id
-    project = get_project_for_company(db, pm_context.empresa_id, task.proyecto_id)
     recalculate_project_progress(db, project)
     db.add(
         AuditLog(
@@ -3430,10 +3466,12 @@ def deactivate_task(
     ip_address: str | None,
 ) -> PMTareaOut:
     ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context)
     task = get_task_for_company(db, pm_context.empresa_id, task_id)
+    project = get_project_for_company(db, pm_context.empresa_id, task.proyecto_id)
+    ensure_project_is_operable(project)
     task.activo = False
     task.updated_by = pm_context.user.id
-    project = get_project_for_company(db, pm_context.empresa_id, task.proyecto_id)
     recalculate_project_progress(db, project)
     db.add(
         AuditLog(
@@ -5732,6 +5770,7 @@ def create_project_budget(
 ) -> PMPresupuestoOut:
     ensure_pm_budget_manage_access(pm_context)
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     current_budget = get_active_project_budget_row(db, pm_context.empresa_id, project.id)
     if current_budget:
         refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
@@ -5787,6 +5826,7 @@ def update_project_budget(
 ) -> PMPresupuestoOut:
     ensure_pm_budget_manage_access(pm_context)
     budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+    ensure_project_is_operable(get_project_for_company(db, pm_context.empresa_id, budget.proyecto_id))
     ensure_budget_editable(budget)
     if nombre is not None:
         budget.nombre = normalize_required_text(nombre, "Nombre")
@@ -5824,6 +5864,7 @@ def approve_project_budget(
 ) -> PMPresupuestoOut:
     ensure_pm_budget_manage_access(pm_context)
     budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+    ensure_project_is_operable(get_project_for_company(db, pm_context.empresa_id, budget.proyecto_id))
     ensure_budget_editable(budget)
     active_items = db.scalar(
         select(func.count(PMPresupuestoPartida.id)).where(
@@ -5864,6 +5905,7 @@ def cancel_project_budget(
 ) -> PMPresupuestoOut:
     ensure_pm_budget_manage_access(pm_context)
     budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+    ensure_project_is_operable(get_project_for_company(db, pm_context.empresa_id, budget.proyecto_id))
     budget.estatus = "cancelado"
     budget.activo = False
     budget.updated_by = pm_context.user.id
@@ -7887,7 +7929,9 @@ def create_project_approval(
     entidad_id: str | None,
     ip_address: str | None,
 ) -> PMAprobacionOut:
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden solicitar aprobaciones manuales en PM.")
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     normalized_entity_type, normalized_entity_id = validate_approval_entity_reference(
         db,
         pm_context.empresa_id,
@@ -8268,7 +8312,13 @@ def create_project_baseline(
     ensure_pm_tasks_enabled(pm_context)
     ensure_pm_baseline_manage_access(pm_context)
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project_id)
+    if not tasks:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agrega al menos una tarea antes de crear la línea base del proyecto.",
+        )
     dependencies = list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     project_costs = refresh_project_total_costs(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     critical_path = calculate_critical_path(
@@ -9066,7 +9116,9 @@ def create_project_estimation(
     linea_base_id: str | None,
     ip_address: str | None,
 ) -> PMEstimacionOut:
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para crear estimaciones en este proyecto PM.")
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     budget = get_active_project_budget_row(db, pm_context.empresa_id, project.id)
     if not budget:
         raise HTTPException(
@@ -9130,7 +9182,10 @@ def update_project_estimation(
     linea_base_id: str | None,
     ip_address: str | None,
 ) -> PMEstimacionOut:
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para editar estimaciones en este proyecto PM.")
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus != "borrador":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo las estimaciones en borrador pueden editarse.")
     if nombre is not None:
@@ -9182,8 +9237,10 @@ def cancel_project_estimation(
     estimation_id: str,
     ip_address: str | None,
 ) -> PMEstimacionOut:
-    ensure_pm_estimation_manage_access(pm_context)
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para cancelar estimaciones en este proyecto PM.")
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus == "cobrada":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Una estimacion cobrada no puede cancelarse.")
     if estimation.estatus == "cancelada":
@@ -9220,8 +9277,10 @@ def return_estimation_to_draft(
     estimation_id: str,
     ip_address: str | None,
 ) -> PMEstimacionOut:
-    ensure_pm_estimation_manage_access(pm_context)
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para regresar estimaciones a borrador en este proyecto PM.")
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus != "enviada_aprobacion":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -9264,7 +9323,10 @@ def add_estimation_detail(
     notas: str | None,
     ip_address: str | None,
 ) -> PMEstimacionDetailOut:
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para editar partidas de esta estimación.")
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus != "borrador":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo las estimaciones en borrador pueden editarse.")
     if not presupuesto_partida_id:
@@ -9346,8 +9408,11 @@ def update_estimation_detail(
     activo: bool | None,
     ip_address: str | None,
 ) -> PMEstimacionDetailOut:
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para editar partidas de esta estimación.")
     detail = get_estimation_detail_for_company(db, pm_context.empresa_id, detail_id)
     estimation = get_estimation_for_company(db, pm_context.empresa_id, detail.estimacion_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus != "borrador":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo las estimaciones en borrador pueden editarse.")
     if tarea_id is not None:
@@ -9421,7 +9486,10 @@ def submit_estimation(
     comment: str | None,
     ip_address: str | None,
 ) -> PMEstimacionOut:
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para enviar estimaciones a aprobación en este proyecto PM.")
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus != "borrador":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo las estimaciones en borrador pueden enviarse.")
     refresh_estimation_totals(db, estimation_id=estimation.id)
@@ -9519,6 +9587,8 @@ def approve_estimation(
 ) -> PMEstimacionOut:
     ensure_pm_estimation_manage_access(pm_context)
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus not in {"borrador", "enviada_aprobacion", "rechazada"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esa estimacion ya no puede aprobarse.")
     refresh_estimation_totals(db, estimation_id=estimation.id)
@@ -9560,6 +9630,8 @@ def reject_estimation(
 ) -> PMEstimacionOut:
     ensure_pm_estimation_manage_access(pm_context)
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus not in {"borrador", "enviada_aprobacion", "aprobada"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esa estimacion ya no puede rechazarse.")
     estimation.estatus = "rechazada"
@@ -9597,6 +9669,8 @@ def mark_estimation_sent(
 ) -> PMEstimacionOut:
     ensure_pm_estimation_manage_access(pm_context)
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus != "aprobada":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo una estimacion aprobada puede marcarse como enviada.")
     estimation.estatus = "enviada_cliente"
@@ -9628,6 +9702,8 @@ def mark_estimation_collected(
 ) -> PMEstimacionOut:
     ensure_pm_estimation_manage_access(pm_context)
     estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    ensure_project_is_operable(project)
     if estimation.estatus not in {"aprobada", "enviada_cliente", "cobrada"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo una estimacion aprobada o enviada puede registrarse como cobrada.")
     refresh_estimation_totals(db, estimation_id=estimation.id)
@@ -9720,7 +9796,9 @@ def create_project_change(
     ip_address: str | None,
 ) -> PMCambioProyectoOut:
     ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para registrar cambios en este proyecto PM.")
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    ensure_project_is_operable(project)
     baseline = None
     if linea_base_id:
         baseline = get_baseline_for_company(db, pm_context.empresa_id, linea_base_id)
@@ -9781,7 +9859,10 @@ def update_project_change(
     impacto_venta: Decimal | None,
     ip_address: str | None,
 ) -> PMCambioProyectoOut:
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para editar cambios en este proyecto PM.")
     change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    project = get_project_for_company(db, pm_context.empresa_id, change.proyecto_id)
+    ensure_project_is_operable(project)
     if change.estatus in {"aplicado", "cancelado"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese cambio ya no se puede editar.")
     if linea_base_id is not None:
@@ -9840,7 +9921,10 @@ def submit_project_change(
     comment: str | None,
     ip_address: str | None,
 ) -> PMCambioProyectoOut:
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para enviar cambios a aprobación en este proyecto PM.")
     change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    project = get_project_for_company(db, pm_context.empresa_id, change.proyecto_id)
+    ensure_project_is_operable(project)
     if change.estatus not in {"borrador", "rechazado"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo los cambios en borrador o rechazados pueden enviarse.")
     change.solicitado_por = pm_context.user.id
@@ -9921,6 +10005,8 @@ def approve_project_change(
 ) -> PMCambioProyectoOut:
     ensure_pm_baseline_manage_access(pm_context)
     change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    project = get_project_for_company(db, pm_context.empresa_id, change.proyecto_id)
+    ensure_project_is_operable(project)
     if change.estatus not in {"borrador", "pendiente_aprobacion", "rechazado"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese cambio ya no puede aprobarse.")
     change.estatus = "aprobado"
@@ -9958,6 +10044,8 @@ def reject_project_change(
 ) -> PMCambioProyectoOut:
     ensure_pm_baseline_manage_access(pm_context)
     change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    project = get_project_for_company(db, pm_context.empresa_id, change.proyecto_id)
+    ensure_project_is_operable(project)
     if change.estatus in {"aplicado", "cancelado"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese cambio ya no puede rechazarse.")
     change.estatus = "rechazado"
@@ -9990,7 +10078,10 @@ def cancel_project_change(
     change_id: str,
     ip_address: str | None,
 ) -> PMCambioProyectoOut:
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para cancelar cambios en este proyecto PM.")
     change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    project = get_project_for_company(db, pm_context.empresa_id, change.proyecto_id)
+    ensure_project_is_operable(project)
     if change.estatus == "aplicado":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Un cambio aplicado no puede cancelarse.")
     change.estatus = "cancelado"
@@ -10043,6 +10134,8 @@ def apply_project_change(
 ) -> PMCambioProyectoOut:
     ensure_pm_baseline_manage_access(pm_context)
     change = get_change_for_company(db, pm_context.empresa_id, change_id)
+    project = get_project_for_company(db, pm_context.empresa_id, change.proyecto_id)
+    ensure_project_is_operable(project)
     if change.estatus in {"aplicado", "cancelado", "rechazado"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ese cambio ya no puede aplicarse.")
     if change.requiere_aprobacion and change.estatus != "aprobado":

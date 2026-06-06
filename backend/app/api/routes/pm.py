@@ -280,7 +280,10 @@ def run_pm_write(db: Session, action: str, operation: Callable[[], T]) -> T:
 
 def build_portal_url(request: Request, token: str) -> str:
     settings = get_settings()
-    return f"{settings.public_frontend_url.rstrip('/')}/portal/pm/{token}"
+    frontend_origin = settings.public_frontend_origin or str(request.headers.get("origin") or "").strip().rstrip("/")
+    if not frontend_origin:
+        frontend_origin = str(request.base_url).strip().rstrip("/")
+    return f"{frontend_origin}/portal/pm/{token}"
 
 
 @router.get("/config", response_model=PMConfigOut)

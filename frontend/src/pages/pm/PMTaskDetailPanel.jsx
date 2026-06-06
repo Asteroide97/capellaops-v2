@@ -55,6 +55,7 @@ function isActionPending(taskActionLoading = {}, taskId, action) {
 
 export default function PMTaskDetailPanel({
   baselineTaskComparison,
+  canEditTask = true,
   embedded = false,
   empresaId,
   isExpanded = true,
@@ -212,6 +213,10 @@ export default function PMTaskDetailPanel({
   }
 
   function openDependencyModal() {
+    if (!canEditTask) {
+      setError("No tienes permiso para editar esta tarea.");
+      return;
+    }
     if (!taskId) {
       setError("Primero crea o selecciona una tarea.");
       return;
@@ -239,6 +244,10 @@ export default function PMTaskDetailPanel({
 
   async function handleCreateDependency(event) {
     event.preventDefault();
+    if (!canEditTask) {
+      setError("No tienes permiso para editar esta tarea.");
+      return;
+    }
     if (!taskId) {
       return;
     }
@@ -269,6 +278,10 @@ export default function PMTaskDetailPanel({
   }
 
   async function handleDeactivateDependency(dependencyId) {
+    if (!canEditTask) {
+      setError("No tienes permiso para editar esta tarea.");
+      return;
+    }
     setSavingDependency(true);
     setError("");
     setSuccess("");
@@ -295,13 +308,13 @@ export default function PMTaskDetailPanel({
           {isExpanded ? "Ocultar detalle" : "Mostrar detalle"}
         </ActionButton>
       ) : null}
-      <ActionButton disabled={!taskId} onClick={() => onEditTask?.(taskId)} tone="primary" type="button">
+      <ActionButton disabled={!taskId || !canEditTask} onClick={() => onEditTask?.(taskId)} tone="primary" type="button">
         Editar tarea
       </ActionButton>
-      <ActionButton disabled={!taskId || editDatesLoading} onClick={() => onEditTaskDates?.(taskId)} type="button">
+      <ActionButton disabled={!taskId || editDatesLoading || !canEditTask} onClick={() => onEditTaskDates?.(taskId)} type="button">
         {editDatesLoading ? "Guardando..." : "Editar fechas"}
       </ActionButton>
-      <ActionButton disabled={!taskId} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openDependencyModal} type="button">
+      <ActionButton disabled={!taskId || !canEditTask} icon={<Plus size={16} strokeWidth={1.9} />} onClick={openDependencyModal} type="button">
         Agregar prerrequisito
       </ActionButton>
     </div>
@@ -378,25 +391,29 @@ export default function PMTaskDetailPanel({
                   <strong>Fecha sugerida</strong>
                 </div>
                 <div className="inventory-actions inventory-actions-wrap">
-                  <ActionButton
-                    className={applySuggestedLoading ? "pm-button-loading" : ""}
-                    disabled={applySuggestedLoading || editDatesLoading}
-                    icon={<Sparkles size={14} strokeWidth={1.9} />}
-                    onClick={() => onApplySuggestedDates?.(taskId)}
-                    tone="primary"
-                    type="button"
-                  >
-                    {applySuggestedLoading ? "Aplicando..." : "Aplicar fecha sugerida"}
-                  </ActionButton>
-                  <ActionButton
-                    className={editDatesLoading ? "pm-button-loading" : ""}
-                    disabled={applySuggestedLoading || editDatesLoading}
-                    icon={<Pencil size={14} strokeWidth={1.9} />}
-                    onClick={() => onEditTaskDates?.(taskId)}
-                    type="button"
-                  >
-                    {editDatesLoading ? "Guardando..." : "Editar fechas"}
-                  </ActionButton>
+                  {canEditTask ? (
+                    <>
+                      <ActionButton
+                        className={applySuggestedLoading ? "pm-button-loading" : ""}
+                        disabled={applySuggestedLoading || editDatesLoading}
+                        icon={<Sparkles size={14} strokeWidth={1.9} />}
+                        onClick={() => onApplySuggestedDates?.(taskId)}
+                        tone="primary"
+                        type="button"
+                      >
+                        {applySuggestedLoading ? "Aplicando..." : "Aplicar fecha sugerida"}
+                      </ActionButton>
+                      <ActionButton
+                        className={editDatesLoading ? "pm-button-loading" : ""}
+                        disabled={applySuggestedLoading || editDatesLoading}
+                        icon={<Pencil size={14} strokeWidth={1.9} />}
+                        onClick={() => onEditTaskDates?.(taskId)}
+                        type="button"
+                      >
+                        {editDatesLoading ? "Guardando..." : "Editar fechas"}
+                      </ActionButton>
+                    </>
+                  ) : null}
                 </div>
               </div>
               <p className="table-note">La tarea debería iniciar después de completar sus prerrequisitos.</p>

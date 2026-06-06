@@ -290,10 +290,14 @@ function buildDetailPreview(candidate, currentProgress, fallbackPreviousProgress
 }
 
 export default function PMProjectEstimationsTab({
+  canApprove = false,
+  canEdit = false,
+  canManage = false,
   empresaId,
   onChanged,
   onOpenApprovals,
   onOpenBudget,
+  projectEditable = true,
   projectId,
   token,
 }) {
@@ -324,6 +328,27 @@ export default function PMProjectEstimationsTab({
   const hasBudget = Boolean(budgetBundle?.budget?.id);
   const hasPendingChanges = (pendingChanges?.length ?? 0) > 0;
   const budgetNotApproved = String(budgetBundle?.budget?.estatus ?? "").toLowerCase() !== "aprobado";
+  const canEditDrafts = canEdit && projectEditable;
+  const canApproveEstimations = canApprove && projectEditable;
+  const canManageCommercialFlow = canManage && projectEditable;
+  const estimationCanEdit = (item) => getEstimationStatus(item) === "borrador" && canEditDrafts;
+  const estimationCanApprove = (item) => getEstimationStatus(item) === "enviada_aprobacion" && canApproveEstimations;
+  const estimationCanReject = (item) => getEstimationStatus(item) === "enviada_aprobacion" && canApproveEstimations;
+  const estimationCanReturnToDraft = (item) => getEstimationStatus(item) === "enviada_aprobacion" && canEditDrafts;
+  const estimationCanCancel = (item) =>
+    ["borrador", "enviada_aprobacion"].includes(getEstimationStatus(item)) && canEditDrafts;
+  const estimationCanSubmit = (item) =>
+    getEstimationStatus(item) === "borrador" &&
+    estimationHasActiveDetails(item) &&
+    estimationHasGrossAmount(item) &&
+    canEditDrafts;
+  const estimationCanMarkSent = (item) => getEstimationStatus(item) === "aprobada" && canManageCommercialFlow;
+  const estimationCanMarkCollected = (item) =>
+    ["aprobada", "enviada_cliente"].includes(getEstimationStatus(item)) && canManageCommercialFlow;
+  const estimationCanCloseWithoutBalance = (item) =>
+    estimationCanMarkCollected(item) && estimationHasNoPendingBalance(item);
+  const estimationNeedsCollectionAmount = (item) =>
+    estimationCanMarkCollected(item) && !estimationHasNoPendingBalance(item);
 
   const selectedCandidate = useMemo(() => {
     if (!detailForm.presupuesto_partida_id) {
@@ -720,10 +745,12 @@ export default function PMProjectEstimationsTab({
               <RefreshCw size={16} />
               {refreshing ? "Actualizando..." : "Actualizar"}
             </ActionButton>
-            <ActionButton onClick={openCreateModal} tone="primary" type="button">
-              <Plus size={16} />
-              Nueva estimación
-            </ActionButton>
+            {canEditDrafts ? (
+              <ActionButton onClick={openCreateModal} tone="primary" type="button">
+                <Plus size={16} />
+                Nueva estimación
+              </ActionButton>
+            ) : null}
           </div>
         )}
         subtitle="Genera estados de pago internos a partir del avance del presupuesto."
@@ -771,13 +798,15 @@ export default function PMProjectEstimationsTab({
         {(estimations?.length ?? 0) === 0 ? (
           <EmptyState
             actions={(
+            canEditDrafts ? (
               <ActionButton onClick={openCreateModal} tone="primary" type="button">
                 Registrar estimación
               </ActionButton>
-            )}
-            note="Crea la primera estimación del proyecto para controlar monto aprobado, enviado y cobrado."
-            title="Aún no hay estimaciones registradas"
-          />
+            ) : null
+          )}
+          note={canEditDrafts ? "Crea la primera estimación del proyecto para controlar monto aprobado, enviado y cobrado." : "No tienes permiso para crear estimaciones en este proyecto."}
+          title="Aún no hay estimaciones registradas"
+        />
         ) : (
           <DataTable columns={["Folio / nombre", "Periodo", "Estatus", "Bruto", "Retención", "Neto", "Cobrado", "Pendiente", "Acciones"]}>
             <tbody>
@@ -811,13 +840,13 @@ export default function PMProjectEstimationsTab({
                           <Eye size={14} />
                           Ver detalle
                         </ActionButton>
-                        {estimationCanEdit(item) ? (
+                        {estimationCanEdit(item) && canEditDrafts ? (
                           <ActionButton onClick={() => openEditModal(item)} type="button">
                             <Pencil size={14} />
                             Editar
                           </ActionButton>
                         ) : null}
-                        {status === "borrador" ? (
+                        {status === "borrador" && canEditDrafts ? (
                           <ActionButton
                             onClick={async () => {
                               await loadEstimationDetail(item.id);
@@ -832,7 +861,7 @@ export default function PMProjectEstimationsTab({
                             {getPrimaryDetailActionLabel(item)}
                           </ActionButton>
                         ) : null}
-                        {canSubmit ? (
+                        {canSubmit && canEditDrafts ? (
                           <ActionButton
                             disabled={Boolean(actionLoading[`${actionPrefix}:submit`])}
                             onClick={() =>
@@ -856,7 +885,7 @@ export default function PMProjectEstimationsTab({
                             Ver aprobación
                           </ActionButton>
                         ) : null}
-                        {estimationCanApprove(item) ? (
+                        {estimationCanApprove(item) && canApproveEstimations ? (
                           <ActionButton
                             disabled={Boolean(actionLoading[`${actionPrefix}:approve`])}
                             onClick={() =>
@@ -874,7 +903,7 @@ export default function PMProjectEstimationsTab({
                             Aprobar
                           </ActionButton>
                         ) : null}
-                        {estimationCanReject(item) ? (
+                        {estimationCanReject(item) && canApproveEstimations ? (
                           <ActionButton
                             disabled={Boolean(actionLoading[`${actionPrefix}:reject`])}
                             onClick={() =>
@@ -892,7 +921,7 @@ export default function PMProjectEstimationsTab({
                             Rechazar
                           </ActionButton>
                         ) : null}
-                        {estimationCanReturnToDraft(item) ? (
+                        {estimationCanReturnToDraft(item) && canEditDrafts ? (
                           <ActionButton
                             disabled={Boolean(actionLoading[`${actionPrefix}:return`])}
                             onClick={() => handleReturnToDraft(item)}
@@ -902,7 +931,7 @@ export default function PMProjectEstimationsTab({
                             Regresar a borrador
                           </ActionButton>
                         ) : null}
-                        {estimationCanMarkSent(item) ? (
+                        {estimationCanMarkSent(item) && canManageCommercialFlow ? (
                           <ActionButton
                             disabled={Boolean(actionLoading[`${actionPrefix}:sent`])}
                             onClick={() =>
@@ -919,7 +948,7 @@ export default function PMProjectEstimationsTab({
                             Marcar enviada
                           </ActionButton>
                         ) : null}
-                        {estimationNeedsCollectionAmount(item) ? (
+                        {estimationNeedsCollectionAmount(item) && canManageCommercialFlow ? (
                           <ActionButton
                             disabled={Boolean(actionLoading[`${actionPrefix}:collected`])}
                             onClick={() => openCollectModal(item)}
@@ -930,7 +959,7 @@ export default function PMProjectEstimationsTab({
                             Marcar cobrada
                           </ActionButton>
                         ) : null}
-                        {estimationCanCloseWithoutBalance(item) ? (
+                        {estimationCanCloseWithoutBalance(item) && canManageCommercialFlow ? (
                           <ActionButton
                             disabled={Boolean(actionLoading[`${actionPrefix}:collected`])}
                             onClick={() => openCollectModal(item)}
@@ -942,7 +971,7 @@ export default function PMProjectEstimationsTab({
                             Cerrar sin saldo
                           </ActionButton>
                         ) : null}
-                        {estimationCanCancel(item) ? (
+                        {estimationCanCancel(item) && canEditDrafts ? (
                           <ActionButton
                             disabled={Boolean(actionLoading[`${actionPrefix}:cancel`])}
                             onClick={() =>
@@ -1051,13 +1080,7 @@ export default function PMProjectEstimationsTab({
       </ModalShell>
 
       <ModalShell
-        footer={(
-          <div className="inventory-actions inventory-actions-wrap">
-            <ActionButton onClick={closeDetailModal} type="button">
-              Cerrar
-            </ActionButton>
-          </div>
-        )}
+        footer={null}
         onClose={closeDetailModal}
         open={detailModalOpen}
         size="wide"
@@ -1071,13 +1094,13 @@ export default function PMProjectEstimationsTab({
                 {getDisplayedEstimationStatusLabel(selectedEstimation)}
               </StatusBadge>
               <div className="pm-estimation-actions">
-                {estimationCanEdit(selectedEstimation) ? (
+                {estimationCanEdit(selectedEstimation) && canEditDrafts ? (
                   <ActionButton onClick={openAddDetailModal} tone="primary" type="button">
                     <Plus size={14} />
                     Agregar partida
                   </ActionButton>
                 ) : null}
-                {getEstimationStatus(selectedEstimation) === "borrador" ? (
+                {getEstimationStatus(selectedEstimation) === "borrador" && canEditDrafts ? (
                   <ActionButton
                     disabled={!estimationCanSubmit(selectedEstimation) || Boolean(actionLoading[`detail:${selectedEstimation.id}:submit`])}
                     onClick={() =>
@@ -1103,38 +1126,42 @@ export default function PMProjectEstimationsTab({
                       <CheckCheck size={14} />
                       Ver aprobación
                     </ActionButton>
-                    <ActionButton
-                      disabled={Boolean(actionLoading[`detail:${selectedEstimation.id}:approve`])}
-                      onClick={() =>
-                        runEstimationAction(
-                          selectedEstimation,
-                          `detail:${selectedEstimation.id}:approve`,
-                          () => approvePmEstimation({ empresaId, estimationId: selectedEstimation.id, token }),
-                          "Estimación aprobada.",
-                          { closeDetail: true },
-                        )
-                      }
-                      tone="success"
-                      type="button"
-                    >
-                      Aprobar
-                    </ActionButton>
-                    <ActionButton
-                      disabled={Boolean(actionLoading[`detail:${selectedEstimation.id}:reject`])}
-                      onClick={() =>
-                        runEstimationAction(
-                          selectedEstimation,
-                          `detail:${selectedEstimation.id}:reject`,
-                          () => rejectPmEstimation({ empresaId, estimationId: selectedEstimation.id, token }),
-                          "Estimación rechazada.",
-                          { closeDetail: true },
-                        )
-                      }
-                      tone="danger"
-                      type="button"
-                    >
-                      Rechazar
-                    </ActionButton>
+                    {canApproveEstimations ? (
+                      <ActionButton
+                        disabled={Boolean(actionLoading[`detail:${selectedEstimation.id}:approve`])}
+                        onClick={() =>
+                          runEstimationAction(
+                            selectedEstimation,
+                            `detail:${selectedEstimation.id}:approve`,
+                            () => approvePmEstimation({ empresaId, estimationId: selectedEstimation.id, token }),
+                            "Estimación aprobada.",
+                            { closeDetail: true },
+                          )
+                        }
+                        tone="success"
+                        type="button"
+                      >
+                        Aprobar
+                      </ActionButton>
+                    ) : null}
+                    {canApproveEstimations ? (
+                      <ActionButton
+                        disabled={Boolean(actionLoading[`detail:${selectedEstimation.id}:reject`])}
+                        onClick={() =>
+                          runEstimationAction(
+                            selectedEstimation,
+                            `detail:${selectedEstimation.id}:reject`,
+                            () => rejectPmEstimation({ empresaId, estimationId: selectedEstimation.id, token }),
+                            "Estimación rechazada.",
+                            { closeDetail: true },
+                          )
+                        }
+                        tone="danger"
+                        type="button"
+                      >
+                        Rechazar
+                      </ActionButton>
+                    ) : null}
                   </>
                 ) : null}
                 {estimationCanMarkSent(selectedEstimation) ? (

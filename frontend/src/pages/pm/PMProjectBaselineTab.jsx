@@ -261,10 +261,14 @@ function buildChangePayload(changeForm, tasks, action = "draft") {
 }
 
 export default function PMProjectBaselineTab({
+  canApprove = false,
+  canEditChanges = false,
+  canManage = false,
   empresaId,
   onComparisonLoaded,
   onOpenApprovals,
   onPlanningChanged,
+  projectEditable = true,
   projectId,
   reloadToken = 0,
   tasks = [],
@@ -326,6 +330,9 @@ export default function PMProjectBaselineTab({
     () => deviationRows.filter((row) => !associatedChangeByTaskId.has(safeDisplayText(row?.task_id, ""))),
     [associatedChangeByTaskId, deviationRows],
   );
+  const canManageBaseline = canManage && projectEditable;
+  const canDraftChanges = canEditChanges && projectEditable;
+  const canApproveChanges = canApprove && projectEditable;
 
   function setPending(key, value) {
     setActionLoading((current) => {
@@ -780,18 +787,20 @@ export default function PMProjectBaselineTab({
               >
                 {refreshing ? "Actualizando..." : "Recalcular comparativo"}
               </ActionButton>
-              <ActionButton
-                icon={<Plus size={16} strokeWidth={1.9} />}
-                onClick={() => {
-                  setError("");
-                  setSuccess("");
-                  setBaselineModalOpen(true);
-                }}
-                tone="primary"
-                type="button"
-              >
-                Crear línea base
-              </ActionButton>
+              {canManageBaseline ? (
+                <ActionButton
+                  icon={<Plus size={16} strokeWidth={1.9} />}
+                  onClick={() => {
+                    setError("");
+                    setSuccess("");
+                    setBaselineModalOpen(true);
+                  }}
+                  tone="primary"
+                  type="button"
+                >
+                  Crear línea base
+                </ActionButton>
+              ) : null}
             </div>
           )}
           subtitle="Guarda una foto del plan aprobado para comparar tareas, fechas y costos."
@@ -800,9 +809,11 @@ export default function PMProjectBaselineTab({
           {baselines.length === 0 ? (
             <EmptyState
               action={(
-                <ActionButton onClick={() => setBaselineModalOpen(true)} tone="primary" type="button">
-                  Crear línea base
-                </ActionButton>
+                canManageBaseline ? (
+                  <ActionButton onClick={() => setBaselineModalOpen(true)} tone="primary" type="button">
+                    Crear línea base
+                  </ActionButton>
+                ) : null
               )}
               compact
               note="Guarda una foto del plan aprobado para comparar fechas, tareas y costos conforme avance el proyecto."
@@ -885,7 +896,7 @@ export default function PMProjectBaselineTab({
                           {getBaselineStatusLabel(baseline.estatus)}
                         </StatusBadge>
                         {baseline.es_principal ? <StatusBadge tone="success">Principal</StatusBadge> : null}
-                        {!baseline.es_principal && baseline.estatus === "activa" ? (
+                        {!baseline.es_principal && baseline.estatus === "activa" && canManageBaseline ? (
                           <ActionButton
                             disabled={isMainPending}
                             onClick={() => handleSetMainBaseline(baseline.id)}
@@ -895,7 +906,7 @@ export default function PMProjectBaselineTab({
                             {isMainPending ? "Actualizando..." : "Marcar como principal"}
                           </ActionButton>
                         ) : null}
-                        {baseline.estatus !== "archivada" ? (
+                        {baseline.estatus !== "archivada" && canManageBaseline ? (
                           <ActionButton
                             disabled={isArchivePending}
                             icon={<Archive size={14} strokeWidth={1.9} />}
@@ -994,7 +1005,7 @@ export default function PMProjectBaselineTab({
                             >
                               Ver cambio
                             </ActionButton>
-                          ) : rowHasDeviation ? (
+                          ) : rowHasDeviation && canDraftChanges ? (
                             <ActionButton
                               icon={<Plus size={14} strokeWidth={1.9} />}
                               onClick={() => openChangeFromDeviation(row)}
@@ -1020,22 +1031,26 @@ export default function PMProjectBaselineTab({
         <DataCard
           actions={(
             <div className="inventory-actions inventory-actions-wrap">
-              <ActionButton
-                icon={<Plus size={16} strokeWidth={1.9} />}
-                onClick={() => openCreateChangeModal()}
-                type="button"
-              >
-                Registrar cambio manual
-              </ActionButton>
-              <ActionButton
-                disabled={deviationsWithoutChange.length === 0}
-                icon={<Send size={16} strokeWidth={1.9} />}
-                onClick={handleOpenDeviationPicker}
-                tone="primary"
-                type="button"
-              >
-                Crear cambio desde desviación
-              </ActionButton>
+              {canDraftChanges ? (
+                <ActionButton
+                  icon={<Plus size={16} strokeWidth={1.9} />}
+                  onClick={() => openCreateChangeModal()}
+                  type="button"
+                >
+                  Registrar cambio manual
+                </ActionButton>
+              ) : null}
+              {canDraftChanges ? (
+                <ActionButton
+                  disabled={deviationsWithoutChange.length === 0}
+                  icon={<Send size={16} strokeWidth={1.9} />}
+                  onClick={handleOpenDeviationPicker}
+                  tone="primary"
+                  type="button"
+                >
+                  Crear cambio desde desviación
+                </ActionButton>
+              ) : null}
             </div>
           )}
           subtitle="Registra cambios importantes y su impacto en fechas, alcance o presupuesto."
@@ -1071,10 +1086,12 @@ export default function PMProjectBaselineTab({
             <EmptyState
               action={(
                 <div className="inventory-actions inventory-actions-wrap">
-                  <ActionButton onClick={() => openCreateChangeModal()} type="button">
-                    Registrar cambio manual
-                  </ActionButton>
-                  {controlEmptyState?.showDeviationAction ? (
+                  {canDraftChanges ? (
+                    <ActionButton onClick={() => openCreateChangeModal()} type="button">
+                      Registrar cambio manual
+                    </ActionButton>
+                  ) : null}
+                  {canDraftChanges && controlEmptyState?.showDeviationAction ? (
                     <ActionButton onClick={handleOpenDeviationPicker} tone="primary" type="button">
                       Crear cambio desde desviación
                     </ActionButton>
@@ -1145,31 +1162,35 @@ export default function PMProjectBaselineTab({
                         <div className="inventory-actions inventory-actions-wrap">
                           {change.estatus === "borrador" ? (
                             <>
-                              <ActionButton
-                                icon={<Pencil size={14} strokeWidth={1.9} />}
-                                onClick={() => openEditChangeModal(change)}
-                                size="sm"
-                                type="button"
-                              >
-                                Editar
-                              </ActionButton>
-                              <ActionButton
-                                disabled={submitPending}
-                                icon={<Send size={14} strokeWidth={1.9} />}
-                                onClick={() =>
-                                  runChangeAction({
-                                    key: `change-submit:${change.id}`,
-                                    action: () => submitPmProjectChange({ changeId: change.id, token, empresaId, payload: {} }),
-                                    successMessage: "Cambio enviado a aprobación.",
-                                    errorMessage: "No se pudo enviar el cambio a aprobación.",
-                                  })
-                                }
-                                size="sm"
-                                tone="primary"
-                                type="button"
-                              >
-                                {submitPending ? "Enviando..." : "Enviar a aprobación"}
-                              </ActionButton>
+                              {canDraftChanges ? (
+                                <ActionButton
+                                  icon={<Pencil size={14} strokeWidth={1.9} />}
+                                  onClick={() => openEditChangeModal(change)}
+                                  size="sm"
+                                  type="button"
+                                >
+                                  Editar
+                                </ActionButton>
+                              ) : null}
+                              {canDraftChanges ? (
+                                <ActionButton
+                                  disabled={submitPending}
+                                  icon={<Send size={14} strokeWidth={1.9} />}
+                                  onClick={() =>
+                                    runChangeAction({
+                                      key: `change-submit:${change.id}`,
+                                      action: () => submitPmProjectChange({ changeId: change.id, token, empresaId, payload: {} }),
+                                      successMessage: "Cambio enviado a aprobación.",
+                                      errorMessage: "No se pudo enviar el cambio a aprobación.",
+                                    })
+                                  }
+                                  size="sm"
+                                  tone="primary"
+                                  type="button"
+                                >
+                                  {submitPending ? "Enviando..." : "Enviar a aprobación"}
+                                </ActionButton>
+                              ) : null}
                               {!change.requiere_aprobacion && canApply ? (
                                 <ActionButton
                                   disabled={applyPending}
@@ -1182,22 +1203,24 @@ export default function PMProjectBaselineTab({
                                   {applyPending ? "Aplicando..." : "Aplicar cambio"}
                                 </ActionButton>
                               ) : null}
-                              <ActionButton
-                                disabled={cancelPending}
-                                icon={<Slash size={14} strokeWidth={1.9} />}
-                                onClick={() =>
-                                  runChangeAction({
-                                    key: `change-cancel:${change.id}`,
-                                    action: () => cancelPmProjectChange({ changeId: change.id, token, empresaId }),
-                                    successMessage: "Cambio cancelado.",
-                                    errorMessage: "No se pudo cancelar el cambio.",
-                                  })
-                                }
-                                size="sm"
-                                type="button"
-                              >
-                                {cancelPending ? "Cancelando..." : "Cancelar"}
-                              </ActionButton>
+                              {canDraftChanges ? (
+                                <ActionButton
+                                  disabled={cancelPending}
+                                  icon={<Slash size={14} strokeWidth={1.9} />}
+                                  onClick={() =>
+                                    runChangeAction({
+                                      key: `change-cancel:${change.id}`,
+                                      action: () => cancelPmProjectChange({ changeId: change.id, token, empresaId }),
+                                      successMessage: "Cambio cancelado.",
+                                      errorMessage: "No se pudo cancelar el cambio.",
+                                    })
+                                  }
+                                  size="sm"
+                                  type="button"
+                                >
+                                  {cancelPending ? "Cancelando..." : "Cancelar"}
+                                </ActionButton>
+                              ) : null}
                             </>
                           ) : null}
 
@@ -1213,63 +1236,69 @@ export default function PMProjectBaselineTab({
                                   Ver aprobación
                                 </ActionButton>
                               ) : null}
-                              <ActionButton
-                                disabled={approvePending}
-                                icon={<CheckCheck size={14} strokeWidth={1.9} />}
-                                onClick={() =>
-                                  runChangeAction({
-                                    key: `change-approve:${change.id}`,
-                                    action: () => approvePmProjectChange({ changeId: change.id, token, empresaId, payload: {} }),
-                                    successMessage: "Cambio aprobado.",
-                                    errorMessage: "No se pudo aprobar el cambio.",
-                                  })
-                                }
-                                size="sm"
-                                tone="primary"
-                                type="button"
-                              >
-                                {approvePending ? "Aprobando..." : "Aprobar"}
-                              </ActionButton>
-                              <ActionButton
-                                disabled={rejectPending}
-                                icon={<XCircle size={14} strokeWidth={1.9} />}
-                                onClick={() => {
-                                  const comentario = window.prompt("Motivo del rechazo", "") ?? "";
-                                  runChangeAction({
-                                    key: `change-reject:${change.id}`,
-                                    action: () =>
-                                      rejectPmProjectChange({
-                                        changeId: change.id,
-                                        token,
-                                        empresaId,
-                                        payload: { comentario_resolucion: comentario.trim() || null },
-                                      }),
-                                    successMessage: "Cambio rechazado.",
-                                    errorMessage: "No se pudo rechazar el cambio.",
-                                  });
-                                }}
-                                size="sm"
-                                tone="danger"
-                                type="button"
-                              >
-                                {rejectPending ? "Rechazando..." : "Rechazar"}
-                              </ActionButton>
-                              <ActionButton
-                                disabled={cancelPending}
-                                icon={<Slash size={14} strokeWidth={1.9} />}
-                                onClick={() =>
-                                  runChangeAction({
-                                    key: `change-cancel:${change.id}`,
-                                    action: () => cancelPmProjectChange({ changeId: change.id, token, empresaId }),
-                                    successMessage: "Cambio cancelado.",
-                                    errorMessage: "No se pudo cancelar el cambio.",
-                                  })
-                                }
-                                size="sm"
-                                type="button"
-                              >
-                                {cancelPending ? "Cancelando..." : "Cancelar"}
-                              </ActionButton>
+                              {canApproveChanges ? (
+                                <ActionButton
+                                  disabled={approvePending}
+                                  icon={<CheckCheck size={14} strokeWidth={1.9} />}
+                                  onClick={() =>
+                                    runChangeAction({
+                                      key: `change-approve:${change.id}`,
+                                      action: () => approvePmProjectChange({ changeId: change.id, token, empresaId, payload: {} }),
+                                      successMessage: "Cambio aprobado.",
+                                      errorMessage: "No se pudo aprobar el cambio.",
+                                    })
+                                  }
+                                  size="sm"
+                                  tone="primary"
+                                  type="button"
+                                >
+                                  {approvePending ? "Aprobando..." : "Aprobar"}
+                                </ActionButton>
+                              ) : null}
+                              {canApproveChanges ? (
+                                <ActionButton
+                                  disabled={rejectPending}
+                                  icon={<XCircle size={14} strokeWidth={1.9} />}
+                                  onClick={() => {
+                                    const comentario = window.prompt("Motivo del rechazo", "") ?? "";
+                                    runChangeAction({
+                                      key: `change-reject:${change.id}`,
+                                      action: () =>
+                                        rejectPmProjectChange({
+                                          changeId: change.id,
+                                          token,
+                                          empresaId,
+                                          payload: { comentario_resolucion: comentario.trim() || null },
+                                        }),
+                                      successMessage: "Cambio rechazado.",
+                                      errorMessage: "No se pudo rechazar el cambio.",
+                                    });
+                                  }}
+                                  size="sm"
+                                  tone="danger"
+                                  type="button"
+                                >
+                                  {rejectPending ? "Rechazando..." : "Rechazar"}
+                                </ActionButton>
+                              ) : null}
+                              {canDraftChanges ? (
+                                <ActionButton
+                                  disabled={cancelPending}
+                                  icon={<Slash size={14} strokeWidth={1.9} />}
+                                  onClick={() =>
+                                    runChangeAction({
+                                      key: `change-cancel:${change.id}`,
+                                      action: () => cancelPmProjectChange({ changeId: change.id, token, empresaId }),
+                                      successMessage: "Cambio cancelado.",
+                                      errorMessage: "No se pudo cancelar el cambio.",
+                                    })
+                                  }
+                                  size="sm"
+                                  type="button"
+                                >
+                                  {cancelPending ? "Cancelando..." : "Cancelar"}
+                                </ActionButton>
+                              ) : null}
                             </>
                           ) : null}
 
@@ -1285,16 +1314,18 @@ export default function PMProjectBaselineTab({
                                   Ver aprobación
                                 </ActionButton>
                               ) : null}
-                              <ActionButton
-                                disabled={applyPending}
-                                icon={<Flag size={14} strokeWidth={1.9} />}
-                                onClick={() => handleApplyChange(change)}
-                                size="sm"
-                                tone="success"
-                                type="button"
-                              >
-                                {applyPending ? "Aplicando..." : "Aplicar cambio"}
-                              </ActionButton>
+                              {canManageBaseline ? (
+                                <ActionButton
+                                  disabled={applyPending}
+                                  icon={<Flag size={14} strokeWidth={1.9} />}
+                                  onClick={() => handleApplyChange(change)}
+                                  size="sm"
+                                  tone="success"
+                                  type="button"
+                                >
+                                  {applyPending ? "Aplicando..." : "Aplicar cambio"}
+                                </ActionButton>
+                              ) : null}
                             </>
                           ) : null}
 

@@ -103,6 +103,7 @@ function buildGroups(tasks) {
 }
 
 function TimelineBody({
+  canEditTask = true,
   onApplySuggestedDates,
   onEditTaskDates,
   onSelectTask,
@@ -232,7 +233,7 @@ function TimelineBody({
                     >
                       Ver detalle
                     </ActionButton>
-                    {!completed ? (
+                    {!completed && canEditTask ? (
                       <ActionButton
                         className={editingDates ? "pm-button-loading" : ""}
                         disabled={editingDates || applyingSuggestion}
@@ -244,7 +245,7 @@ function TimelineBody({
                         {editingDates ? "Guardando..." : "Editar fechas"}
                       </ActionButton>
                     ) : null}
-                    {outOfSequence ? (
+                    {outOfSequence && canEditTask ? (
                       <ActionButton
                         className={applyingSuggestion ? "pm-button-loading" : ""}
                         disabled={editingDates || applyingSuggestion}
