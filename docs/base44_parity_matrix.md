@@ -199,8 +199,13 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | APU basico | Parcial | Alta | PM F4 | Ya existe APU basico con materiales y mano de obra por partida, pero sin versiones avanzadas, plantillas ni formulas compuestas. | Costeo estimado menos preciso o mas manual. |
 | PM | Indirectos | Parcial | Media | PM F4 | Ya existen indirectos por porcentaje o monto fijo, pero sin catalogo avanzado ni reglas contables. | Subestimacion de costo total presupuestado. |
 | PM | Comparativo presupuesto vs real | Implementado | Alta | PM F4 | Ya compara presupuesto detallado contra costo real de materiales y horas en proyecto y dashboard. | Desviaciones economicas invisibles. |
-| PM | Estados de pago / estimaciones formales | Pendiente | Media | PM F5 | No existen estimaciones, valuaciones ni estados de pago formales. | Seguimiento economico incompleto frente a obra real. |
+| PM | Estados de pago / estimaciones formales | Implementado MVP | Media | PM F10 | Ya existen estimaciones internas por proyecto, con detalle por partida, avance anterior/actual/periodo y flujo basico hasta cobrada. | Seguimiento economico incompleto si no se usa el flujo de estimaciones. |
+| PM | Retenciones / anticipos simples | Parcial | Media | PM F10 | La estimacion ya soporta retencion porcentual simple y anticipo aplicado simple, pero sin reglas contractuales avanzadas. | Calculo comercial limitado en contratos complejos. |
 | PM | Facturacion / cobranza | Pendiente | Alta | PM comercial futura | PM no conecta todavia con facturacion ni cobranza. | Rentabilidad sin cierre comercial completo. |
+| PM | Facturación desde estimación | Pendiente | Alta | PM futura | La estimación todavía no genera documentos fiscales ni facturas. | Doble captura operativa entre PM y facturación. |
+| PM | Cobranza real | Pendiente | Alta | PM futura | Solo existe marca operativa de cobrada; no hay integración bancaria, conciliación ni cartera. | Cobranza con trazabilidad parcial. |
+| PM | PDF de estimación | Pendiente | Media | PM futura | No existe exportación formal a PDF para compartir estados de pago. | Salida documental limitada. |
+| PM | Firma / aprobación cliente | Pendiente | Media | PM futura | La aprobación actual es interna y no incluye confirmación formal del cliente. | Cierre comercial menos auditable. |
 | PM | Aprobacion de horas | Pendiente | Media | PM F4 | No existe workflow formal de aprobacion o bloqueo previo al costeo. | Riesgo de capturas no validadas. |
 | PM | Documentos | Implementado | Media | PM F5 | El proyecto ya soporta carga de documentos a storage externo, clasificacion por tipo, visibilidad externa, edicion de metadatos y desactivacion logica. | Informacion dispersa. |
 | PM | Aprobaciones basicas | Implementado | Media | PM F5 | Ya existen solicitudes, aprobacion, rechazo, cancelacion e historial basico enlazable a proyecto, documento, tarea o presupuesto. | Flujo interno sin control de decisiones. |

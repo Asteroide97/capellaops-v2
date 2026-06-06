@@ -23,6 +23,8 @@ from app.models.pm import (
     PMChecklistItem,
     PMComentario,
     PMDocumento,
+    PMEstimacion,
+    PMEstimacionDetalle,
     PMInvitadoExterno,
     PMPortalAccessLog,
     PMPresupuesto,
@@ -66,6 +68,10 @@ from app.schemas.pm import (
     PMCriticalPathTaskOut,
     PMCreateProjectRequisitionRequest,
     PMDependencyStateOut,
+    PMEstimationCandidateOut,
+    PMEstimacionDetailOut,
+    PMEstimacionDetalleOut,
+    PMEstimacionOut,
     PMLineaBaseDetailOut,
     PMLineaBaseOut,
     PMLineaBaseTareaOut,
@@ -73,6 +79,7 @@ from app.schemas.pm import (
     PMProjectBudgetBundleOut,
     PMProjectCostsOut,
     PMProjectPlanningOut,
+    PMProyectoEstimacionesResumenOut,
     PMPlanningSummaryOut,
     PMPlanningTaskOut,
     PMPresupuestoIndirectoOut,
@@ -142,6 +149,7 @@ PM_APPROVAL_TYPES = {
     "aprobar_entrega",
     "aprobar_cierre_etapa",
     "aprobar_cierre_proyecto",
+    "aprobar_estimacion",
     "otro",
 }
 PM_APPROVAL_STATUS = {"pendiente", "aprobada", "rechazada", "cancelada"}
@@ -165,6 +173,7 @@ PM_ALERT_STATUS = {"abierta", "resuelta", "descartada"}
 PM_BASELINE_STATUS = {"activa", "archivada", "sustituida", "cancelada"}
 PM_CHANGE_TYPES = {"fecha", "alcance", "presupuesto", "partida", "tarea_critica", "documento", "otro"}
 PM_CHANGE_STATUS = {"borrador", "pendiente_aprobacion", "aprobado", "rechazado", "aplicado", "cancelado"}
+PM_ESTIMATION_STATUS = {"borrador", "enviada_aprobacion", "aprobada", "rechazada", "enviada_cliente", "cobrada", "cancelada"}
 ZERO = Decimal("0")
 WORKDAY_FIELDS = {
     0: "lunes",
@@ -176,7 +185,7 @@ WORKDAY_FIELDS = {
     6: "domingo",
 }
 DEFAULT_WORK_CALENDAR_VALUES = {
-    "nombre": "Calendario estÃ¡ndar",
+    "nombre": "Calendario estándar",
     "lunes": True,
     "martes": True,
     "miercoles": True,
@@ -331,6 +340,13 @@ def normalize_approval_type(value: str | None) -> str:
     normalized = normalize_required_text(value or "", "Tipo de aprobacion").lower()
     if normalized not in PM_APPROVAL_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de aprobacion invalido.")
+    return normalized
+
+
+def normalize_estimation_status(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Estatus").lower()
+    if normalized not in PM_ESTIMATION_STATUS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estatus de estimacion invalido.")
     return normalized
 
 
@@ -516,6 +532,14 @@ def ensure_pm_budget_manage_access(pm_context: PMContext) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo owner o admin pueden gestionar presupuestos PM.",
+        )
+
+
+def ensure_pm_estimation_manage_access(pm_context: PMContext) -> None:
+    if pm_context.membership_role not in PM_MANAGE_RATES_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo owner o admin pueden gestionar estimaciones PM.",
         )
 
 
@@ -2250,7 +2274,7 @@ def calculate_critical_path(
     if len(topo) != len(task_ids):
         return PMCriticalPathOut(
             has_cycle=True,
-            warnings=["Se detectÃ³ un ciclo en dependencias. No se pudo calcular la ruta crÃ­tica."],
+            warnings=["Se detectó un ciclo en dependencias. No se pudo calcular la ruta crítica."],
         )
 
     durations = {task.id: get_task_duration_days(task, calendar) for task in tasks}
@@ -2549,7 +2573,7 @@ def generate_pm_alerts(
                 task_id=task.id,
                 tipo="tarea_critica_atrasada",
                 severidad="critical",
-                titulo="Tarea crÃ­tica atrasada",
+                titulo="Tarea crítica atrasada",
                 descripcion=f"{task.titulo} forma parte de la ruta critica y ya esta atrasada.",
             )
 
@@ -7102,7 +7126,7 @@ def validate_approval_entity_reference(
 ) -> tuple[str | None, str | None]:
     normalized_type = normalize_optional_text(entity_type)
     normalized_id = normalize_optional_text(entity_id)
-    if normalized_type in {"sin_relacion", "sin_relaciÃ³n"}:
+    if normalized_type in {"sin_relacion", "sin_relación"}:
         normalized_type = None
     if not normalized_type:
         return None, None
@@ -7114,6 +7138,8 @@ def validate_approval_entity_reference(
 
     if normalized_type == "presupuesto":
         get_budget_for_company(db, empresa_id, normalized_id)
+    elif normalized_type == "estimacion":
+        get_estimation_for_company(db, empresa_id, normalized_id)
     elif normalized_type == "documento":
         get_document_for_company(db, empresa_id, normalized_id)
     elif normalized_type == "tarea":
@@ -7330,6 +7356,12 @@ def resolve_project_approval(
     approval.resuelto_en = utcnow()
     approval.comentario_resolucion = normalize_optional_text(comment)
     sync_project_change_from_approval(
+        db,
+        approval=approval,
+        next_status=next_status,
+        user_id=pm_context.user.id,
+    )
+    sync_estimation_from_approval(
         db,
         approval=approval,
         next_status=next_status,
@@ -8059,6 +8091,995 @@ def get_project_baseline_vs_actual(
     )
 
 
+def get_estimation_for_company(db: Session, empresa_id: str, estimation_id: str) -> PMEstimacion:
+    estimation = db.scalar(
+        select(PMEstimacion).where(
+            PMEstimacion.empresa_id == empresa_id,
+            PMEstimacion.id == estimation_id,
+        )
+    )
+    if not estimation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Estimacion no encontrada.")
+    return estimation
+
+
+def get_estimation_detail_for_company(db: Session, empresa_id: str, detail_id: str) -> PMEstimacionDetalle:
+    detail = db.scalar(
+        select(PMEstimacionDetalle).where(
+            PMEstimacionDetalle.empresa_id == empresa_id,
+            PMEstimacionDetalle.id == detail_id,
+        )
+    )
+    if not detail:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Detalle de estimacion no encontrado.")
+    return detail
+
+
+def serialize_estimation_detail(detail: PMEstimacionDetalle) -> PMEstimacionDetalleOut:
+    return PMEstimacionDetalleOut(
+        id=detail.id,
+        empresa_id=detail.empresa_id,
+        estimacion_id=detail.estimacion_id,
+        proyecto_id=detail.proyecto_id,
+        presupuesto_partida_id=detail.presupuesto_partida_id,
+        tarea_id=detail.tarea_id,
+        codigo_snapshot=detail.codigo_snapshot,
+        concepto_snapshot=detail.concepto_snapshot,
+        unidad_snapshot=detail.unidad_snapshot,
+        cantidad_presupuestada=decimal_or_zero(detail.cantidad_presupuestada),
+        precio_unitario_snapshot=decimal_or_zero(detail.precio_unitario_snapshot),
+        importe_presupuestado=decimal_or_zero(detail.importe_presupuestado),
+        avance_anterior_pct=decimal_or_zero(detail.avance_anterior_pct),
+        avance_actual_pct=decimal_or_zero(detail.avance_actual_pct),
+        avance_periodo_pct=decimal_or_zero(detail.avance_periodo_pct),
+        importe_anterior=decimal_or_zero(detail.importe_anterior),
+        importe_periodo=decimal_or_zero(detail.importe_periodo),
+        importe_acumulado=decimal_or_zero(detail.importe_acumulado),
+        saldo_por_estimar=decimal_or_zero(detail.saldo_por_estimar),
+        notas=detail.notas,
+        activo=detail.activo,
+        created_at=detail.created_at,
+        updated_at=detail.updated_at,
+    )
+
+
+def serialize_estimation(db: Session, estimation: PMEstimacion) -> PMEstimacionOut:
+    approval = None
+    if estimation.aprobacion_id:
+        approval = db.scalar(
+            select(PMAprobacion).where(
+                PMAprobacion.empresa_id == estimation.empresa_id,
+                PMAprobacion.id == estimation.aprobacion_id,
+            )
+        )
+    active_details_count = (
+        db.scalar(
+            select(func.count(PMEstimacionDetalle.id)).where(
+                PMEstimacionDetalle.empresa_id == estimation.empresa_id,
+                PMEstimacionDetalle.estimacion_id == estimation.id,
+                PMEstimacionDetalle.activo == True,
+            )
+        )
+        or 0
+    )
+    return PMEstimacionOut(
+        id=estimation.id,
+        empresa_id=estimation.empresa_id,
+        proyecto_id=estimation.proyecto_id,
+        presupuesto_id=estimation.presupuesto_id,
+        linea_base_id=estimation.linea_base_id,
+        folio=estimation.folio,
+        nombre=estimation.nombre,
+        descripcion=estimation.descripcion,
+        periodo_inicio=estimation.periodo_inicio,
+        periodo_fin=estimation.periodo_fin,
+        estatus=estimation.estatus,
+        moneda=estimation.moneda,
+        monto_bruto=decimal_or_zero(estimation.monto_bruto),
+        anticipo_aplicado=decimal_or_zero(estimation.anticipo_aplicado),
+        retencion_pct=decimal_or_zero(estimation.retencion_pct),
+        retencion_monto=decimal_or_zero(estimation.retencion_monto),
+        monto_neto=decimal_or_zero(estimation.monto_neto),
+        monto_aprobado=decimal_or_zero(estimation.monto_aprobado),
+        monto_cobrado=decimal_or_zero(estimation.monto_cobrado),
+        saldo_pendiente=decimal_or_zero(estimation.saldo_pendiente),
+        requiere_aprobacion=estimation.requiere_aprobacion,
+        aprobacion_id=estimation.aprobacion_id,
+        aprobacion_estatus=approval.estatus if approval else None,
+        aprobacion_titulo=approval.titulo if approval else None,
+        partidas_activas_count=int(active_details_count),
+        enviada_at=estimation.enviada_at,
+        aprobada_at=estimation.aprobada_at,
+        rechazada_at=estimation.rechazada_at,
+        cobrada_at=estimation.cobrada_at,
+        cancelada_at=estimation.cancelada_at,
+        comentario_resolucion=estimation.comentario_resolucion,
+        created_by=estimation.created_by,
+        updated_by=estimation.updated_by,
+        created_at=estimation.created_at,
+        updated_at=estimation.updated_at,
+        activo=estimation.activo,
+    )
+
+
+def serialize_estimation_detail_bundle(db: Session, estimation: PMEstimacion) -> PMEstimacionDetailOut:
+    details = db.scalars(
+        select(PMEstimacionDetalle)
+        .where(
+            PMEstimacionDetalle.empresa_id == estimation.empresa_id,
+            PMEstimacionDetalle.estimacion_id == estimation.id,
+            PMEstimacionDetalle.activo == True,
+        )
+        .order_by(PMEstimacionDetalle.created_at.asc(), PMEstimacionDetalle.id.asc())
+    ).all()
+    return PMEstimacionDetailOut(
+        **serialize_estimation(db, estimation).model_dump(),
+        details=[serialize_estimation_detail(item) for item in details],
+    )
+
+
+def generate_next_estimation_folio(db: Session, *, empresa_id: str, project_id: str) -> str:
+    next_sequence = (
+        db.scalar(
+            select(func.count(PMEstimacion.id)).where(
+                PMEstimacion.empresa_id == empresa_id,
+                PMEstimacion.proyecto_id == project_id,
+            )
+        )
+        or 0
+    ) + 1
+    return f"EST-{str(next_sequence).zfill(3)}"
+
+
+def get_previous_estimated_progress(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    presupuesto_partida_id: str,
+    exclude_estimation_id: str | None = None,
+    exclude_detail_id: str | None = None,
+) -> Decimal:
+    query = (
+        select(func.max(PMEstimacionDetalle.avance_actual_pct))
+        .join(PMEstimacion, PMEstimacion.id == PMEstimacionDetalle.estimacion_id)
+        .where(
+            PMEstimacionDetalle.empresa_id == empresa_id,
+            PMEstimacionDetalle.proyecto_id == project_id,
+            PMEstimacionDetalle.presupuesto_partida_id == presupuesto_partida_id,
+            PMEstimacionDetalle.activo == True,
+            PMEstimacion.activo == True,
+            PMEstimacion.estatus.notin_(["cancelada", "rechazada"]),
+        )
+    )
+    if exclude_estimation_id:
+        query = query.where(PMEstimacion.id != exclude_estimation_id)
+    if exclude_detail_id:
+        query = query.where(PMEstimacionDetalle.id != exclude_detail_id)
+    result = db.scalar(query)
+    return decimal_or_zero(result)
+
+
+def validate_estimation_progress(
+    *,
+    previous_progress: Decimal,
+    current_progress: Decimal,
+) -> None:
+    normalized_previous = quantize_percentage(decimal_or_zero(previous_progress))
+    normalized_current = quantize_percentage(decimal_or_zero(current_progress))
+    if normalized_current < normalized_previous:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El avance actual no puede ser menor al avance anterior estimado.",
+        )
+    if normalized_current > Decimal("100"):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El avance estimado acumulado no puede superar 100%.",
+        )
+
+
+def build_estimation_detail_values(
+    *,
+    importe_presupuestado: Decimal,
+    avance_anterior_pct: Decimal,
+    avance_actual_pct: Decimal,
+) -> dict[str, Decimal]:
+    previous_progress = quantize_percentage(decimal_or_zero(avance_anterior_pct))
+    current_progress = quantize_percentage(decimal_or_zero(avance_actual_pct))
+    validate_estimation_progress(previous_progress=previous_progress, current_progress=current_progress)
+    period_progress = quantize_percentage(current_progress - previous_progress)
+    previous_amount = quantize_money((importe_presupuestado * previous_progress) / Decimal("100"))
+    period_amount = quantize_money((importe_presupuestado * period_progress) / Decimal("100"))
+    accumulated_amount = quantize_money((importe_presupuestado * current_progress) / Decimal("100"))
+    remaining_amount = quantize_money(max(ZERO, importe_presupuestado - accumulated_amount))
+    return {
+        "avance_anterior_pct": previous_progress,
+        "avance_actual_pct": current_progress,
+        "avance_periodo_pct": period_progress,
+        "importe_anterior": previous_amount,
+        "importe_periodo": period_amount,
+        "importe_acumulado": accumulated_amount,
+        "saldo_por_estimar": remaining_amount,
+    }
+
+
+def refresh_estimation_totals(db: Session, *, estimation_id: str) -> PMEstimacion:
+    estimation = db.scalar(select(PMEstimacion).where(PMEstimacion.id == estimation_id))
+    if not estimation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Estimacion no encontrada.")
+    details = db.scalars(
+        select(PMEstimacionDetalle).where(
+            PMEstimacionDetalle.empresa_id == estimation.empresa_id,
+            PMEstimacionDetalle.estimacion_id == estimation.id,
+            PMEstimacionDetalle.activo == True,
+        )
+    ).all()
+    gross_amount = quantize_money(sum(decimal_or_zero(item.importe_periodo) for item in details) if details else ZERO)
+    retention_pct = quantize_percentage(decimal_or_zero(estimation.retencion_pct))
+    retention_amount = quantize_money((gross_amount * retention_pct) / Decimal("100"))
+    advance_applied = quantize_money(decimal_or_zero(estimation.anticipo_aplicado))
+    net_amount = quantize_money(max(ZERO, gross_amount - advance_applied - retention_amount))
+    collected_amount = quantize_money(decimal_or_zero(estimation.monto_cobrado))
+    approved_amount = (
+        quantize_money(decimal_or_zero(estimation.monto_aprobado))
+        if estimation.estatus in {"aprobada", "enviada_cliente", "cobrada"}
+        else ZERO
+    )
+    if approved_amount == ZERO and estimation.estatus in {"aprobada", "enviada_cliente", "cobrada"}:
+        approved_amount = net_amount
+    pending_amount = quantize_money(max(ZERO, (approved_amount or net_amount) - collected_amount))
+
+    estimation.monto_bruto = gross_amount
+    estimation.retencion_pct = retention_pct
+    estimation.retencion_monto = retention_amount
+    estimation.anticipo_aplicado = advance_applied
+    estimation.monto_neto = net_amount
+    estimation.monto_aprobado = approved_amount
+    estimation.monto_cobrado = collected_amount
+    estimation.saldo_pendiente = pending_amount
+    return estimation
+
+
+def get_project_estimations_summary(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> PMProyectoEstimacionesResumenOut:
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    budget = get_active_project_budget_row(db, pm_context.empresa_id, project.id)
+    if budget:
+        budget = refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    estimations = db.scalars(
+        select(PMEstimacion).where(
+            PMEstimacion.empresa_id == pm_context.empresa_id,
+            PMEstimacion.proyecto_id == project.id,
+            PMEstimacion.activo == True,
+        )
+    ).all()
+    live_estimations = [item for item in estimations if item.estatus not in {"cancelada", "rechazada"}]
+    total_estimado = quantize_money(sum(decimal_or_zero(item.monto_neto) for item in live_estimations) if live_estimations else ZERO)
+    total_aprobado = quantize_money(
+        sum(decimal_or_zero(item.monto_aprobado) for item in live_estimations if item.estatus in {"aprobada", "enviada_cliente", "cobrada"})
+        if live_estimations
+        else ZERO
+    )
+    total_cobrado = quantize_money(sum(decimal_or_zero(item.monto_cobrado) for item in live_estimations) if live_estimations else ZERO)
+    pendiente = quantize_money(max(ZERO, total_aprobado - total_cobrado))
+    presupuesto_total = decimal_or_zero(budget.total_venta if budget else ZERO)
+    porcentaje_estimado = (
+        quantize_percentage((total_estimado / presupuesto_total) * Decimal("100"))
+        if presupuesto_total > ZERO
+        else ZERO
+    )
+    return PMProyectoEstimacionesResumenOut(
+        project_id=project.id,
+        presupuesto_id=budget.id if budget else None,
+        total_estimado=total_estimado,
+        total_aprobado=total_aprobado,
+        total_cobrado=total_cobrado,
+        pendiente_por_cobrar=pendiente,
+        presupuesto_total=presupuesto_total,
+        porcentaje_presupuesto_estimado=porcentaje_estimado,
+    )
+
+
+def list_project_estimation_candidates(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> list[PMEstimationCandidateOut]:
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    budget = get_active_project_budget_row(db, pm_context.empresa_id, project.id)
+    if not budget:
+        return []
+    items = db.scalars(
+        select(PMPresupuestoPartida)
+        .where(
+            PMPresupuestoPartida.empresa_id == pm_context.empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget.id,
+            PMPresupuestoPartida.activo == True,
+            PMPresupuestoPartida.tipo == "partida",
+        )
+        .order_by(PMPresupuestoPartida.orden.asc(), PMPresupuestoPartida.created_at.asc(), PMPresupuestoPartida.id.asc())
+    ).all()
+    candidates: list[PMEstimationCandidateOut] = []
+    for item in items:
+        previous_progress = get_previous_estimated_progress(
+            db,
+            empresa_id=pm_context.empresa_id,
+            project_id=project.id,
+            presupuesto_partida_id=item.id,
+        )
+        budget_amount = quantize_money(decimal_or_zero(item.subtotal_venta))
+        accumulated_amount = quantize_money((budget_amount * previous_progress) / Decimal("100"))
+        candidates.append(
+            PMEstimationCandidateOut(
+                partida_id=item.id,
+                codigo=item.codigo,
+                nombre=item.nombre,
+                unidad=item.unidad,
+                cantidad=decimal_or_zero(item.cantidad),
+                precio_unitario=decimal_or_zero(item.precio_unitario),
+                importe_presupuestado=budget_amount,
+                avance_estimado_anterior=previous_progress,
+                saldo_por_estimar=quantize_money(max(ZERO, budget_amount - accumulated_amount)),
+            )
+        )
+    return candidates
+
+
+def list_project_estimations(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> list[PMEstimacionOut]:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    estimations = db.scalars(
+        select(PMEstimacion)
+        .where(
+            PMEstimacion.empresa_id == pm_context.empresa_id,
+            PMEstimacion.proyecto_id == project_id,
+            PMEstimacion.activo == True,
+        )
+        .order_by(desc(PMEstimacion.created_at), desc(PMEstimacion.updated_at))
+    ).all()
+    return [serialize_estimation(db, refresh_estimation_totals(db, estimation_id=item.id)) for item in estimations]
+
+
+def get_project_estimation(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+) -> PMEstimacionDetailOut:
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    db.flush()
+    return serialize_estimation_detail_bundle(db, estimation)
+
+
+def create_project_estimation(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    nombre: str,
+    descripcion: str | None,
+    periodo_inicio: date | None,
+    periodo_fin: date | None,
+    retencion_pct: Decimal | None,
+    anticipo_aplicado: Decimal | None,
+    requiere_aprobacion: bool,
+    moneda: str | None,
+    linea_base_id: str | None,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    budget = get_active_project_budget_row(db, pm_context.empresa_id, project.id)
+    if not budget:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Este proyecto necesita un presupuesto para generar estimaciones.",
+        )
+    baseline = None
+    if linea_base_id:
+        baseline = get_baseline_for_company(db, pm_context.empresa_id, linea_base_id)
+        if baseline.proyecto_id != project.id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La linea base no pertenece al proyecto.")
+    estimation = PMEstimacion(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        presupuesto_id=budget.id,
+        linea_base_id=baseline.id if baseline else None,
+        folio=generate_next_estimation_folio(db, empresa_id=pm_context.empresa_id, project_id=project.id),
+        nombre=normalize_required_text(nombre, "Nombre"),
+        descripcion=normalize_optional_text(descripcion),
+        periodo_inicio=periodo_inicio,
+        periodo_fin=periodo_fin,
+        estatus="borrador",
+        moneda=(normalize_optional_text(moneda) or budget.moneda or "MXN").upper(),
+        retencion_pct=quantize_percentage(decimal_or_zero(retencion_pct)),
+        anticipo_aplicado=quantize_money(decimal_or_zero(anticipo_aplicado)),
+        requiere_aprobacion=bool(requiere_aprobacion),
+        created_by=pm_context.user.id,
+        updated_by=pm_context.user.id,
+        activo=True,
+    )
+    db.add(estimation)
+    db.flush()
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.create",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": project.id},
+        )
+    )
+    return serialize_estimation(db, estimation)
+
+
+def update_project_estimation(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    nombre: str | None,
+    descripcion: str | None,
+    periodo_inicio: date | None,
+    periodo_fin: date | None,
+    retencion_pct: Decimal | None,
+    anticipo_aplicado: Decimal | None,
+    requiere_aprobacion: bool | None,
+    moneda: str | None,
+    linea_base_id: str | None,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus != "borrador":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo las estimaciones en borrador pueden editarse.")
+    if nombre is not None:
+        estimation.nombre = normalize_required_text(nombre, "Nombre")
+    if descripcion is not None:
+        estimation.descripcion = normalize_optional_text(descripcion)
+    if periodo_inicio is not None:
+        estimation.periodo_inicio = periodo_inicio
+    if periodo_fin is not None:
+        estimation.periodo_fin = periodo_fin
+    if estimation.periodo_inicio and estimation.periodo_fin and estimation.periodo_fin < estimation.periodo_inicio:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El periodo final no puede ser anterior al periodo inicial.")
+    if retencion_pct is not None:
+        estimation.retencion_pct = quantize_percentage(decimal_or_zero(retencion_pct))
+    if anticipo_aplicado is not None:
+        estimation.anticipo_aplicado = quantize_money(decimal_or_zero(anticipo_aplicado))
+    if requiere_aprobacion is not None:
+        estimation.requiere_aprobacion = bool(requiere_aprobacion)
+    if moneda is not None:
+        estimation.moneda = (normalize_optional_text(moneda) or estimation.moneda or "MXN").upper()
+    if linea_base_id is not None:
+        if linea_base_id:
+            baseline = get_baseline_for_company(db, pm_context.empresa_id, linea_base_id)
+            if baseline.proyecto_id != estimation.proyecto_id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La linea base no pertenece al proyecto.")
+            estimation.linea_base_id = baseline.id
+        else:
+            estimation.linea_base_id = None
+    estimation.updated_by = pm_context.user.id
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.update",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id},
+        )
+    )
+    return serialize_estimation(db, estimation)
+
+
+def cancel_project_estimation(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    ensure_pm_estimation_manage_access(pm_context)
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus == "cobrada":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Una estimacion cobrada no puede cancelarse.")
+    if estimation.estatus == "cancelada":
+        return serialize_estimation(db, estimation)
+    estimation.estatus = "cancelada"
+    estimation.cancelada_at = utcnow()
+    estimation.updated_by = pm_context.user.id
+    if estimation.aprobacion_id:
+        approval = get_approval_for_company(db, pm_context.empresa_id, estimation.aprobacion_id)
+        if approval.estatus == "pendiente":
+            approval.estatus = "cancelada"
+            approval.resuelto_por = pm_context.user.id
+            approval.resuelto_en = estimation.cancelada_at
+            approval.comentario_resolucion = "Estimacion cancelada desde el proyecto."
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.cancel",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id},
+        )
+    )
+    return serialize_estimation(db, estimation)
+
+
+def return_estimation_to_draft(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    ensure_pm_estimation_manage_access(pm_context)
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus != "enviada_aprobacion":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo una estimación enviada a aprobación puede regresar a borrador.",
+        )
+    estimation.estatus = "borrador"
+    estimation.updated_by = pm_context.user.id
+    estimation.comentario_resolucion = normalize_optional_text(estimation.comentario_resolucion)
+    if estimation.aprobacion_id:
+        approval = get_approval_for_company(db, pm_context.empresa_id, estimation.aprobacion_id)
+        if approval.estatus == "pendiente":
+            approval.estatus = "cancelada"
+            approval.resuelto_por = pm_context.user.id
+            approval.resuelto_en = utcnow()
+            approval.comentario_resolucion = "Estimación regresada a borrador para corrección."
+        estimation.aprobacion_id = None
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.return_to_draft",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_estimation(db, estimation)
+
+
+def add_estimation_detail(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    presupuesto_partida_id: str | None,
+    tarea_id: str | None,
+    avance_actual_pct: Decimal,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMEstimacionDetailOut:
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus != "borrador":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo las estimaciones en borrador pueden editarse.")
+    if not presupuesto_partida_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Debes seleccionar una partida del presupuesto.")
+    budget_item = get_budget_item_for_company(db, pm_context.empresa_id, presupuesto_partida_id)
+    if budget_item.proyecto_id != estimation.proyecto_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La partida no pertenece al proyecto.")
+    if budget_item.tipo != "partida":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo se pueden estimar partidas del presupuesto.")
+    duplicate = db.scalar(
+        select(PMEstimacionDetalle).where(
+            PMEstimacionDetalle.empresa_id == pm_context.empresa_id,
+            PMEstimacionDetalle.estimacion_id == estimation.id,
+            PMEstimacionDetalle.presupuesto_partida_id == budget_item.id,
+            PMEstimacionDetalle.activo == True,
+        )
+    )
+    if duplicate:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="La partida ya fue agregada a esta estimacion.")
+    task = None
+    if tarea_id:
+        task = get_task_for_company(db, pm_context.empresa_id, tarea_id)
+        if task.proyecto_id != estimation.proyecto_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tarea no pertenece al proyecto.")
+    previous_progress = get_previous_estimated_progress(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=estimation.proyecto_id,
+        presupuesto_partida_id=budget_item.id,
+        exclude_estimation_id=estimation.id,
+    )
+    budget_amount = quantize_money(decimal_or_zero(budget_item.subtotal_venta))
+    values = build_estimation_detail_values(
+        importe_presupuestado=budget_amount,
+        avance_anterior_pct=previous_progress,
+        avance_actual_pct=decimal_or_zero(avance_actual_pct),
+    )
+    detail = PMEstimacionDetalle(
+        empresa_id=pm_context.empresa_id,
+        estimacion_id=estimation.id,
+        proyecto_id=estimation.proyecto_id,
+        presupuesto_partida_id=budget_item.id,
+        tarea_id=task.id if task else None,
+        codigo_snapshot=budget_item.codigo,
+        concepto_snapshot=budget_item.nombre,
+        unidad_snapshot=budget_item.unidad,
+        cantidad_presupuestada=decimal_or_zero(budget_item.cantidad),
+        precio_unitario_snapshot=decimal_or_zero(budget_item.precio_unitario),
+        importe_presupuestado=budget_amount,
+        notas=normalize_optional_text(notas),
+        activo=True,
+        **values,
+    )
+    db.add(detail)
+    db.flush()
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation_detail.create",
+            entity_name="pm_estimacion_detalle",
+            entity_id=detail.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id, "estimation_id": estimation.id},
+        )
+    )
+    return serialize_estimation_detail_bundle(db, estimation)
+
+
+def update_estimation_detail(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    detail_id: str,
+    tarea_id: str | None,
+    avance_actual_pct: Decimal | None,
+    notas: str | None,
+    activo: bool | None,
+    ip_address: str | None,
+) -> PMEstimacionDetailOut:
+    detail = get_estimation_detail_for_company(db, pm_context.empresa_id, detail_id)
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, detail.estimacion_id)
+    if estimation.estatus != "borrador":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo las estimaciones en borrador pueden editarse.")
+    if tarea_id is not None:
+        if tarea_id:
+            task = get_task_for_company(db, pm_context.empresa_id, tarea_id)
+            if task.proyecto_id != estimation.proyecto_id:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tarea no pertenece al proyecto.")
+            detail.tarea_id = task.id
+        else:
+            detail.tarea_id = None
+    if avance_actual_pct is not None:
+        previous_progress = get_previous_estimated_progress(
+            db,
+            empresa_id=pm_context.empresa_id,
+            project_id=estimation.proyecto_id,
+            presupuesto_partida_id=detail.presupuesto_partida_id,
+            exclude_estimation_id=estimation.id,
+            exclude_detail_id=detail.id,
+        )
+        values = build_estimation_detail_values(
+            importe_presupuestado=decimal_or_zero(detail.importe_presupuestado),
+            avance_anterior_pct=previous_progress,
+            avance_actual_pct=decimal_or_zero(avance_actual_pct),
+        )
+        for field_name, value in values.items():
+            setattr(detail, field_name, value)
+    if notas is not None:
+        detail.notas = normalize_optional_text(notas)
+    if activo is not None:
+        detail.activo = bool(activo)
+    db.flush()
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation_detail.update",
+            entity_name="pm_estimacion_detalle",
+            entity_id=detail.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id, "estimation_id": estimation.id},
+        )
+    )
+    return serialize_estimation_detail_bundle(db, estimation)
+
+
+def deactivate_estimation_detail(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    detail_id: str,
+    ip_address: str | None,
+) -> PMEstimacionDetailOut:
+    return update_estimation_detail(
+        db,
+        pm_context,
+        detail_id=detail_id,
+        tarea_id=None,
+        avance_actual_pct=None,
+        notas=None,
+        activo=False,
+        ip_address=ip_address,
+    )
+
+
+def submit_estimation(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus != "borrador":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo las estimaciones en borrador pueden enviarse.")
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    detail_count = db.scalar(
+        select(func.count(PMEstimacionDetalle.id)).where(
+            PMEstimacionDetalle.empresa_id == pm_context.empresa_id,
+            PMEstimacionDetalle.estimacion_id == estimation.id,
+            PMEstimacionDetalle.activo == True,
+        )
+    ) or 0
+    if detail_count <= 0:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agrega al menos una partida antes de enviar la estimacion.")
+    estimation.updated_by = pm_context.user.id
+    if estimation.requiere_aprobacion:
+        if estimation.aprobacion_id:
+            approval = get_approval_for_company(db, pm_context.empresa_id, estimation.aprobacion_id)
+        else:
+            approval = PMAprobacion(
+                empresa_id=pm_context.empresa_id,
+                proyecto_id=estimation.proyecto_id,
+                tipo_aprobacion="aprobar_estimacion",
+                titulo=f"Aprobar estimacion {estimation.folio or estimation.nombre}",
+                descripcion=normalize_optional_text(comment) or estimation.descripcion,
+                estatus="pendiente",
+                entidad_tipo="estimacion",
+                entidad_id=estimation.id,
+                solicitado_por=pm_context.user.id,
+                solicitado_en=utcnow(),
+                activo=True,
+            )
+            db.add(approval)
+            db.flush()
+            estimation.aprobacion_id = approval.id
+        estimation.estatus = "enviada_aprobacion"
+    else:
+        estimation.estatus = "aprobada"
+        estimation.aprobada_at = utcnow()
+        estimation.monto_aprobado = decimal_or_zero(estimation.monto_neto)
+        estimation.saldo_pendiente = quantize_money(max(ZERO, decimal_or_zero(estimation.monto_aprobado) - decimal_or_zero(estimation.monto_cobrado)))
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.submit",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id, "comment": normalize_optional_text(comment)},
+        )
+    )
+    db.flush()
+    return serialize_estimation(db, estimation)
+
+
+def sync_estimation_from_approval(
+    db: Session,
+    *,
+    approval: PMAprobacion,
+    next_status: str,
+    user_id: str | None,
+) -> None:
+    if approval.entidad_tipo != "estimacion" or not approval.entidad_id:
+        return
+    estimation = db.scalar(
+        select(PMEstimacion).where(
+            PMEstimacion.empresa_id == approval.empresa_id,
+            PMEstimacion.id == approval.entidad_id,
+        )
+    )
+    if not estimation:
+        return
+    estimation.aprobacion_id = approval.id
+    estimation.comentario_resolucion = approval.comentario_resolucion
+    if next_status == "aprobada":
+        estimation.estatus = "aprobada"
+        estimation.aprobada_at = approval.resuelto_en or utcnow()
+        estimation.monto_aprobado = decimal_or_zero(estimation.monto_neto)
+        estimation.saldo_pendiente = quantize_money(max(ZERO, decimal_or_zero(estimation.monto_aprobado) - decimal_or_zero(estimation.monto_cobrado)))
+    elif next_status == "rechazada":
+        estimation.estatus = "rechazada"
+        estimation.rechazada_at = approval.resuelto_en or utcnow()
+    elif next_status == "cancelada" and estimation.estatus == "enviada_aprobacion":
+        estimation.estatus = "cancelada"
+        estimation.cancelada_at = approval.resuelto_en or utcnow()
+    estimation.updated_by = user_id
+
+
+def approve_estimation(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    ensure_pm_estimation_manage_access(pm_context)
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus not in {"borrador", "enviada_aprobacion", "rechazada"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esa estimacion ya no puede aprobarse.")
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    estimation.estatus = "aprobada"
+    estimation.aprobada_at = utcnow()
+    estimation.comentario_resolucion = normalize_optional_text(comment)
+    estimation.monto_aprobado = decimal_or_zero(estimation.monto_neto)
+    estimation.saldo_pendiente = quantize_money(max(ZERO, decimal_or_zero(estimation.monto_aprobado) - decimal_or_zero(estimation.monto_cobrado)))
+    estimation.updated_by = pm_context.user.id
+    if estimation.aprobacion_id:
+        approval = get_approval_for_company(db, pm_context.empresa_id, estimation.aprobacion_id)
+        if approval.estatus == "pendiente":
+            approval.estatus = "aprobada"
+            approval.resuelto_por = pm_context.user.id
+            approval.resuelto_en = estimation.aprobada_at
+            approval.comentario_resolucion = normalize_optional_text(comment)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.approve",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_estimation(db, estimation)
+
+
+def reject_estimation(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    ensure_pm_estimation_manage_access(pm_context)
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus not in {"borrador", "enviada_aprobacion", "aprobada"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Esa estimacion ya no puede rechazarse.")
+    estimation.estatus = "rechazada"
+    estimation.rechazada_at = utcnow()
+    estimation.comentario_resolucion = normalize_optional_text(comment)
+    estimation.updated_by = pm_context.user.id
+    if estimation.aprobacion_id:
+        approval = get_approval_for_company(db, pm_context.empresa_id, estimation.aprobacion_id)
+        if approval.estatus == "pendiente":
+            approval.estatus = "rechazada"
+            approval.resuelto_por = pm_context.user.id
+            approval.resuelto_en = estimation.rechazada_at
+            approval.comentario_resolucion = normalize_optional_text(comment)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.reject",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_estimation(db, estimation)
+
+
+def mark_estimation_sent(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    ensure_pm_estimation_manage_access(pm_context)
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus != "aprobada":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo una estimacion aprobada puede marcarse como enviada.")
+    estimation.estatus = "enviada_cliente"
+    estimation.enviada_at = utcnow()
+    estimation.updated_by = pm_context.user.id
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.mark_sent",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id},
+        )
+    )
+    db.flush()
+    return serialize_estimation(db, estimation)
+
+
+def mark_estimation_collected(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    estimation_id: str,
+    amount: Decimal | None,
+    comment: str | None,
+    ip_address: str | None,
+) -> PMEstimacionOut:
+    ensure_pm_estimation_manage_access(pm_context)
+    estimation = get_estimation_for_company(db, pm_context.empresa_id, estimation_id)
+    if estimation.estatus not in {"aprobada", "enviada_cliente", "cobrada"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Solo una estimacion aprobada o enviada puede registrarse como cobrada.")
+    refresh_estimation_totals(db, estimation_id=estimation.id)
+    pending = decimal_or_zero(estimation.saldo_pendiente or estimation.monto_aprobado or estimation.monto_neto)
+    if pending <= ZERO and estimation.estatus == "cobrada":
+        return serialize_estimation(db, estimation)
+    if pending <= ZERO:
+        collected_now = ZERO
+    else:
+        collected_now = quantize_money(decimal_or_zero(amount) if amount is not None else pending)
+        if collected_now <= ZERO:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Debes indicar un monto cobrado valido.")
+        if collected_now > pending:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El monto cobrado no puede superar el saldo pendiente.")
+        estimation.monto_cobrado = quantize_money(decimal_or_zero(estimation.monto_cobrado) + collected_now)
+    if pending <= ZERO:
+        estimation.monto_cobrado = quantize_money(decimal_or_zero(estimation.monto_cobrado))
+    estimation.saldo_pendiente = quantize_money(max(ZERO, decimal_or_zero(estimation.monto_aprobado or estimation.monto_neto) - decimal_or_zero(estimation.monto_cobrado)))
+    estimation.comentario_resolucion = normalize_optional_text(comment) or estimation.comentario_resolucion
+    estimation.updated_by = pm_context.user.id
+    if estimation.saldo_pendiente <= ZERO:
+        estimation.estatus = "cobrada"
+        estimation.cobrada_at = utcnow()
+    elif estimation.estatus == "aprobada":
+        estimation.estatus = "enviada_cliente"
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.estimation.mark_collected",
+            entity_name="pm_estimacion",
+            entity_id=estimation.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": estimation.proyecto_id, "amount": str(collected_now)},
+        )
+    )
+    db.flush()
+    return serialize_estimation(db, estimation)
+
+
 def list_project_changes(
     db: Session,
     pm_context: PMContext,
@@ -8647,12 +9668,12 @@ def resolve_portal_token(
     raw_token = normalize_required_text(token, "Token")
     invite = db.scalar(select(PMInvitadoExterno).where(PMInvitadoExterno.token_hash == hash_portal_token(raw_token)))
     if not invite:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Este enlace no estÃ¡ disponible.")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Este enlace no está disponible.")
 
     project = get_project_for_company(db, invite.empresa_id, invite.proyecto_id)
     config, _ = get_or_create_pm_config(db, invite.empresa_id)
     if not config.pm_enabled or not config.pm_portal_enabled:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace no estÃ¡ disponible.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace no está disponible.")
 
     if not invite.activo or invite.revocado_at is not None:
         log_portal_access(
@@ -8677,11 +9698,11 @@ def resolve_portal_token(
             invite_id=invite.id,
             action="acceso_denegado_expirado",
             result="denegado",
-            detail="El acceso externo expirÃ³.",
+            detail="El acceso externo expiró.",
             ip_address=ip_address,
             user_agent=user_agent,
         )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace expirÃ³.")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Este enlace expiró.")
 
     if track_access:
         invite.ultimo_acceso_at = utcnow()
@@ -8693,7 +9714,7 @@ def resolve_portal_token(
             invite_id=invite.id,
             action="acceso_portal",
             result="ok",
-            detail="Acceso externo vÃ¡lido.",
+            detail="Acceso externo válido.",
             ip_address=ip_address,
             user_agent=user_agent,
         )

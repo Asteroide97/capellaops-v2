@@ -1074,6 +1074,48 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - Undo / redo
 - Más niveles de agrupación y zoom temporal
 
+## PM Fase 10 - Estimaciones / estados de pago MVP
+
+- El proyecto ya puede generar estimaciones internas a partir de partidas activas del presupuesto.
+- Cada estimación permite:
+  - capturar periodo
+  - aplicar retención simple
+  - aplicar anticipo simple
+  - agregar partidas del presupuesto
+  - registrar avance anterior, avance actual y avance del periodo
+- Los importes se calculan en backend para evitar:
+  - avance acumulado mayor a 100%
+  - avance actual menor al avance estimado anterior
+- El flujo MVP soporta:
+  - borrador
+  - enviada a aprobación
+  - aprobada
+  - rechazada
+  - enviada al cliente
+  - cobrada
+  - cancelada
+- La aprobación reutiliza `PMAprobacion` con entidad relacionada `estimacion`.
+- El workspace del proyecto ya muestra:
+  - total estimado
+  - total aprobado
+  - total cobrado
+  - pendiente por cobrar
+  - porcentaje del presupuesto estimado
+- Alcance explícito de esta fase:
+  - no genera CFDI
+  - no conecta con Stripe
+  - no conecta con factura.com
+  - no cobra automáticamente
+
+### Pendientes de PM Fase 10
+
+- PDF formal de estimación
+- Integración con facturación fiscal
+- Cobranza real y conciliación
+- Firma o aprobación del cliente
+- Enlace con estados de pago externos
+- Reportes comerciales ejecutivos por proyecto
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.

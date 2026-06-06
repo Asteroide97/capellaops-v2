@@ -59,6 +59,23 @@ function getErrorMessage(error, fallback) {
   return fallback;
 }
 
+function getRelatedEntityLabel(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "estimacion") {
+    return "Estimación";
+  }
+  if (normalized === "presupuesto") {
+    return "Presupuesto";
+  }
+  if (normalized === "documento") {
+    return "Documento";
+  }
+  if (normalized === "tarea") {
+    return "Tarea";
+  }
+  return "Otro";
+}
+
 export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -234,6 +251,11 @@ export default function PMProjectApprovalsTab({ empresaId, projectId, token }) {
                   <td>
                     <div className="inventory-cell-main">{safeDisplayText(approval.titulo, "Solicitud")}</div>
                     <div className="inventory-cell-sub">{safeDisplayText(approval.descripcion, "—")}</div>
+                    {approval.entidad_tipo ? (
+                      <div className="inventory-cell-sub">
+                        Relacionada con: {getRelatedEntityLabel(approval.entidad_tipo)}
+                      </div>
+                    ) : null}
                   </td>
                   <td>{getApprovalTypeLabel(approval.tipo_aprobacion)}</td>
                   <td>

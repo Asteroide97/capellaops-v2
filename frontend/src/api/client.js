@@ -1292,6 +1292,141 @@ export function listPmProjectChanges({ projectId, token, empresaId, params = {} 
 }
 
 
+export function listPmProjectEstimations({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/estimations`, { token, empresaId });
+}
+
+
+export function createPmProjectEstimation({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/estimations`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmEstimation({ estimationId, token, empresaId }) {
+  return apiRequest(`/pm/estimations/${estimationId}`, { token, empresaId });
+}
+
+
+export function updatePmEstimation({ estimationId, token, empresaId, payload }) {
+  return apiRequest(`/pm/estimations/${estimationId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelPmEstimation({ estimationId, token, empresaId }) {
+  return apiRequest(`/pm/estimations/${estimationId}/cancel`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function addPmEstimationDetail({ estimationId, token, empresaId, payload }) {
+  return apiRequest(`/pm/estimations/${estimationId}/details`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePmEstimationDetail({ detailId, token, empresaId, payload }) {
+  return apiRequest(`/pm/estimation-details/${detailId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivatePmEstimationDetail({ detailId, token, empresaId }) {
+  return apiRequest(`/pm/estimation-details/${detailId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function submitPmEstimation({ estimationId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/estimations/${estimationId}/submit`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function approvePmEstimation({ estimationId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/estimations/${estimationId}/approve`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function rejectPmEstimation({ estimationId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/estimations/${estimationId}/reject`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+export function returnPmEstimationToDraft({ estimationId, token, empresaId }) {
+  return apiRequest(`/pm/estimations/${estimationId}/return-to-draft`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function markPmEstimationSent({ estimationId, token, empresaId }) {
+  return apiRequest(`/pm/estimations/${estimationId}/mark-sent`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function markPmEstimationCollected({ estimationId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pm/estimations/${estimationId}/mark-collected`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPmProjectEstimationsSummary({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/estimations-summary`, { token, empresaId });
+}
+
+
+export function listPmProjectEstimationCandidates({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/estimation-candidates`, { token, empresaId });
+}
+
+
 export function createPmProjectChange({ projectId, token, empresaId, payload }) {
   return apiRequest(`/pm/projects/${projectId}/changes`, {
     method: "POST",

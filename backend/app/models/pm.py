@@ -72,6 +72,7 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     work_calendars = relationship("PMCalendarioLaboral", back_populates="proyecto", cascade="all, delete-orphan")
     baselines = relationship("PMProyectoLineaBase", back_populates="proyecto", cascade="all, delete-orphan")
     changes = relationship("PMCambioProyecto", back_populates="proyecto", cascade="all, delete-orphan")
+    estimations = relationship("PMEstimacion", back_populates="proyecto", cascade="all, delete-orphan")
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="proyecto", cascade="all, delete-orphan")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
     time_entries = relationship("PMTimeEntry", back_populates="proyecto", cascade="all, delete-orphan")
@@ -463,6 +464,7 @@ class PMPresupuesto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     proyecto = relationship("PMProyecto", back_populates="budgets")
     items = relationship("PMPresupuestoPartida", back_populates="presupuesto", cascade="all, delete-orphan")
     indirects = relationship("PMPresupuestoIndirecto", back_populates="presupuesto", cascade="all, delete-orphan")
+    estimations = relationship("PMEstimacion", back_populates="presupuesto")
 
 
 class PMPresupuestoPartida(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -737,6 +739,7 @@ class PMAprobacion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     proyecto = relationship("PMProyecto", back_populates="approvals")
     related_changes = relationship("PMCambioProyecto", back_populates="approval")
+    related_estimations = relationship("PMEstimacion", back_populates="approval")
 
 
 class PMInvitadoExterno(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -933,3 +936,97 @@ class PMCambioProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     proyecto = relationship("PMProyecto", back_populates="changes")
     linea_base = relationship("PMProyectoLineaBase", back_populates="changes")
     approval = relationship("PMAprobacion", back_populates="related_changes")
+
+
+class PMEstimacion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_estimaciones"
+    __table_args__ = (
+        Index("ix_pm_estimaciones_empresa_id", "empresa_id"),
+        Index("ix_pm_estimaciones_proyecto_id", "proyecto_id"),
+        Index("ix_pm_estimaciones_presupuesto_id", "presupuesto_id"),
+        Index("ix_pm_estimaciones_linea_base_id", "linea_base_id"),
+        Index("ix_pm_estimaciones_estatus", "estatus"),
+        Index("ix_pm_estimaciones_aprobacion_id", "aprobacion_id"),
+        Index("ix_pm_estimaciones_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    presupuesto_id: Mapped[str | None] = mapped_column(ForeignKey("pm_presupuestos.id"), nullable=True, index=True)
+    linea_base_id: Mapped[str | None] = mapped_column(
+        ForeignKey("pm_proyecto_lineas_base.id"),
+        nullable=True,
+        index=True,
+    )
+    folio: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    nombre: Mapped[str] = mapped_column(String(180), nullable=False)
+    descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    periodo_inicio: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    periodo_fin: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    estatus: Mapped[str] = mapped_column(String(30), nullable=False, default="borrador", server_default="borrador")
+    moneda: Mapped[str] = mapped_column(String(8), nullable=False, default="MXN", server_default="MXN")
+    monto_bruto: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    anticipo_aplicado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    retencion_pct: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False, default=0, server_default="0")
+    retencion_monto: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    monto_neto: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    monto_aprobado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    monto_cobrado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    saldo_pendiente: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    requiere_aprobacion: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+    aprobacion_id: Mapped[str | None] = mapped_column(ForeignKey("pm_aprobaciones.id"), nullable=True, index=True)
+    enviada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    aprobada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rechazada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cobrada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    comentario_resolucion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+
+    proyecto = relationship("PMProyecto", back_populates="estimations")
+    presupuesto = relationship("PMPresupuesto", back_populates="estimations")
+    linea_base = relationship("PMProyectoLineaBase")
+    approval = relationship("PMAprobacion", back_populates="related_estimations")
+    details = relationship("PMEstimacionDetalle", back_populates="estimacion", cascade="all, delete-orphan")
+
+
+class PMEstimacionDetalle(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_estimacion_detalles"
+    __table_args__ = (
+        Index("ix_pm_estimacion_detalles_empresa_id", "empresa_id"),
+        Index("ix_pm_estimacion_detalles_estimacion_id", "estimacion_id"),
+        Index("ix_pm_estimacion_detalles_proyecto_id", "proyecto_id"),
+        Index("ix_pm_estimacion_detalles_partida_id", "presupuesto_partida_id"),
+        Index("ix_pm_estimacion_detalles_tarea_id", "tarea_id"),
+        Index("ix_pm_estimacion_detalles_activo", "activo"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    estimacion_id: Mapped[str] = mapped_column(ForeignKey("pm_estimaciones.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    presupuesto_partida_id: Mapped[str | None] = mapped_column(
+        ForeignKey("pm_presupuesto_partidas.id"),
+        nullable=True,
+        index=True,
+    )
+    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id"), nullable=True, index=True)
+    codigo_snapshot: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    concepto_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
+    unidad_snapshot: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    cantidad_presupuestada: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    precio_unitario_snapshot: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False, default=0, server_default="0")
+    importe_presupuestado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    avance_anterior_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    avance_actual_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    avance_periodo_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    importe_anterior: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    importe_periodo: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    importe_acumulado: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    saldo_por_estimar: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
+    notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
+
+    estimacion = relationship("PMEstimacion", back_populates="details")
+    proyecto = relationship("PMProyecto")

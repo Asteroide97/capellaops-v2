@@ -56,6 +56,7 @@ export const pmApprovalTypeOptions = [
   { value: "aprobar_entrega", label: "Aprobar entrega" },
   { value: "aprobar_cierre_etapa", label: "Aprobar cierre de etapa" },
   { value: "aprobar_cierre_proyecto", label: "Aprobar cierre de proyecto" },
+  { value: "aprobar_estimacion", label: "Aprobar estimación" },
   { value: "otro", label: "Otro" },
 ];
 
@@ -88,6 +89,16 @@ export const pmChangeStatusOptions = [
   { value: "rechazado", label: "Rechazado" },
   { value: "aplicado", label: "Aplicado" },
   { value: "cancelado", label: "Cancelado" },
+];
+
+export const pmEstimationStatusOptions = [
+  { value: "borrador", label: "Borrador" },
+  { value: "enviada_aprobacion", label: "Enviada a aprobación" },
+  { value: "aprobada", label: "Aprobada" },
+  { value: "rechazada", label: "Rechazada" },
+  { value: "enviada_cliente", label: "Enviada al cliente" },
+  { value: "cobrada", label: "Cobrada" },
+  { value: "cancelada", label: "Cancelada" },
 ];
 
 export const weekdayOptions = [
@@ -190,6 +201,10 @@ export function getChangeStatusLabel(value) {
   return getOptionLabel(pmChangeStatusOptions, value, "Borrador");
 }
 
+export function getEstimationStatusLabel(value) {
+  return getOptionLabel(pmEstimationStatusOptions, value, "Borrador");
+}
+
 export function getProjectStatusTone(value) {
   const normalized = String(value ?? "").toLowerCase();
   if (normalized === "activo") {
@@ -265,6 +280,23 @@ export function getChangeStatusTone(value) {
   }
   if (normalized === "rechazado" || normalized === "cancelado") {
     return "danger";
+  }
+  return "neutral";
+}
+
+export function getEstimationStatusTone(value) {
+  const normalized = String(value ?? "").toLowerCase();
+  if (normalized === "aprobada" || normalized === "cobrada") {
+    return "success";
+  }
+  if (normalized === "enviada_aprobacion" || normalized === "enviada_cliente") {
+    return "info";
+  }
+  if (normalized === "rechazada") {
+    return "danger";
+  }
+  if (normalized === "cancelada") {
+    return "warning";
   }
   return "neutral";
 }

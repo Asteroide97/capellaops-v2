@@ -6,6 +6,7 @@ import {
   CheckCheck,
   CheckSquare,
   Clock3,
+  CircleDollarSign,
   Eye,
   FileText,
   Flag,
@@ -75,6 +76,7 @@ import PMProjectPortalTab from "./PMProjectPortalTab";
 import PMRescheduleImpactModal from "./PMRescheduleImpactModal";
 import PMTaskDetailModal from "./PMTaskDetailModal";
 import PMWorkCalendarModal from "./PMWorkCalendarModal";
+import PMProjectEstimationsTab from "./PMProjectEstimationsTab";
 import {
   formatPercent,
   formatWorkCalendarSummary,
@@ -94,8 +96,9 @@ const projectViews = [
   { key: "general", label: "Vista general", icon: Gauge },
   { key: "plan", label: "Plan de trabajo", icon: CheckSquare },
   { key: "kanban", label: "Kanban", icon: FolderKanban },
-  { key: "baseline", label: "Línea base", icon: Flag },
   { key: "presupuesto", label: "Presupuesto", icon: BadgeDollarSign },
+  { key: "estimaciones", label: "Estimaciones", icon: CircleDollarSign },
+  { key: "baseline", label: "Línea base", icon: Flag },
   { key: "materiales", label: "Materiales", icon: PackageOpen },
   { key: "costos", label: "Tiempo y costos", icon: Clock3 },
   { key: "comentarios", label: "Comentarios", icon: MessageSquare },
@@ -1712,6 +1715,17 @@ export default function PMProjectDetailPage() {
           empresaId={empresaId}
           onChanged={() => loadProjectBundle({ background: true })}
           project={project}
+          projectId={id}
+          token={token}
+        />
+      ) : null}
+
+      {activeView === "estimaciones" ? (
+        <PMProjectEstimationsTab
+          empresaId={empresaId}
+          onChanged={() => loadProjectBundle({ background: true })}
+          onOpenApprovals={() => setActiveView("aprobaciones")}
+          onOpenBudget={() => setActiveView("presupuesto")}
           projectId={id}
           token={token}
         />

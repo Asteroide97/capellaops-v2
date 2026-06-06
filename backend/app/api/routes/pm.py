@@ -32,6 +32,16 @@ from app.schemas.pm import (
     PMDashboardOut,
     PMDocumentoOut,
     PMDocumentoUpdate,
+    PMEstimationCandidateOut,
+    PMEstimacionCobroRequest,
+    PMEstimacionCreate,
+    PMEstimacionDetailOut,
+    PMEstimacionDetalleCreate,
+    PMEstimacionDetalleUpdate,
+    PMEstimacionOut,
+    PMEstimacionResolveRequest,
+    PMEstimacionSubmitRequest,
+    PMEstimacionUpdate,
     PMInvitadoExternoCreate,
     PMInvitadoExternoCreatedOut,
     PMInvitadoExternoOut,
@@ -72,6 +82,7 @@ from app.schemas.pm import (
     PMProyectoListResponse,
     PMProyectoMiembroCreate,
     PMProyectoMiembroOut,
+    PMProyectoEstimacionesResumenOut,
     PMProyectoOut,
     PMProyectoUpdate,
     PMTarifaHoraRolCreate,
@@ -106,18 +117,22 @@ from app.services.pm import (
     add_budget_indirect,
     add_budget_item_labor,
     add_budget_item_material,
+    add_estimation_detail,
     add_project_member,
     add_project_material_plan,
     apply_project_change,
     approve_project_budget,
     approve_project_change,
+    approve_estimation,
     cancel_project_budget,
     cancel_project_change,
     cancel_project_approval,
+    cancel_project_estimation,
     create_task_dependency,
     create_external_invite,
     create_project_baseline,
     create_budget_item,
+    create_project_estimation,
     create_project_change,
     create_portal_comment,
     create_project_budget,
@@ -146,6 +161,7 @@ from app.services.pm import (
     deactivate_budget_item,
     deactivate_budget_item_labor,
     deactivate_budget_item_material,
+    deactivate_estimation_detail,
     dismiss_pm_alert,
     get_pm_context,
     get_pm_dashboard,
@@ -157,6 +173,8 @@ from app.services.pm import (
     get_project_budget,
     get_project_budget_vs_actual,
     get_project_change,
+    get_project_estimation,
+    get_project_estimations_summary,
     get_project,
     get_project_costs,
     get_task,
@@ -165,6 +183,8 @@ from app.services.pm import (
     list_project_alerts,
     list_project_baselines,
     list_project_changes,
+    list_project_estimation_candidates,
+    list_project_estimations,
     list_project_documents,
     list_project_external_invites,
     list_project_portal_access_logs,
@@ -180,6 +200,8 @@ from app.services.pm import (
     refresh_project_planning,
     refresh_project_total_costs,
     reject_project_change,
+    reject_estimation,
+    return_estimation_to_draft,
     resolve_pm_alert,
     serialize_pm_config,
     approve_project_approval,
@@ -193,7 +215,9 @@ from app.services.pm import (
     update_budget_item,
     update_budget_item_labor,
     update_budget_item_material,
+    update_estimation_detail,
     update_project_budget,
+    update_project_estimation,
     update_project_change,
     update_project_time_entry,
     update_checklist_item,
@@ -207,7 +231,10 @@ from app.services.pm import (
     update_user_hourly_rate,
     set_project_baseline_as_main,
     archive_project_baseline,
+    mark_estimation_collected,
+    mark_estimation_sent,
     submit_project_change,
+    submit_estimation,
 )
 from app.schemas.procurement import RequisitionResponse
 from app.services.storage import StorageConfigurationError
@@ -560,6 +587,309 @@ def get_project_budget_vs_actual_endpoint(
     db: Session = Depends(get_db),
 ) -> PMBudgetVsActualOut:
     return get_project_budget_vs_actual(db, pm_context, project_id)
+
+
+@router.get("/projects/{project_id}/estimations", response_model=list[PMEstimacionOut])
+def list_project_estimations_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMEstimacionOut]:
+    return list_project_estimations(db, pm_context, project_id=project_id)
+
+
+@router.post("/projects/{project_id}/estimations", response_model=PMEstimacionOut, status_code=status.HTTP_201_CREATED)
+def create_project_estimation_endpoint(
+    project_id: str,
+    payload: PMEstimacionCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "create_project_estimation",
+        lambda: create_project_estimation(
+            db,
+            pm_context,
+            project_id=project_id,
+            nombre=payload.nombre,
+            descripcion=payload.descripcion,
+            periodo_inicio=payload.periodo_inicio,
+            periodo_fin=payload.periodo_fin,
+            retencion_pct=payload.retencion_pct,
+            anticipo_aplicado=payload.anticipo_aplicado,
+            requiere_aprobacion=payload.requiere_aprobacion,
+            moneda=payload.moneda,
+            linea_base_id=payload.linea_base_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/estimations/{estimation_id}", response_model=PMEstimacionDetailOut)
+def get_project_estimation_endpoint(
+    estimation_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionDetailOut:
+    return get_project_estimation(db, pm_context, estimation_id=estimation_id)
+
+
+@router.put("/estimations/{estimation_id}", response_model=PMEstimacionOut)
+def update_project_estimation_endpoint(
+    estimation_id: str,
+    payload: PMEstimacionUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "update_project_estimation",
+        lambda: update_project_estimation(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            nombre=payload.nombre,
+            descripcion=payload.descripcion,
+            periodo_inicio=payload.periodo_inicio,
+            periodo_fin=payload.periodo_fin,
+            retencion_pct=payload.retencion_pct,
+            anticipo_aplicado=payload.anticipo_aplicado,
+            requiere_aprobacion=payload.requiere_aprobacion,
+            moneda=payload.moneda,
+            linea_base_id=payload.linea_base_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimations/{estimation_id}/cancel", response_model=PMEstimacionOut)
+def cancel_project_estimation_endpoint(
+    estimation_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "cancel_project_estimation",
+        lambda: cancel_project_estimation(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimations/{estimation_id}/details", response_model=PMEstimacionDetailOut, status_code=status.HTTP_201_CREATED)
+def add_estimation_detail_endpoint(
+    estimation_id: str,
+    payload: PMEstimacionDetalleCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionDetailOut:
+    return run_pm_write(
+        db,
+        "add_estimation_detail",
+        lambda: add_estimation_detail(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            presupuesto_partida_id=payload.presupuesto_partida_id,
+            tarea_id=payload.tarea_id,
+            avance_actual_pct=payload.avance_actual_pct,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/estimation-details/{detail_id}", response_model=PMEstimacionDetailOut)
+def update_estimation_detail_endpoint(
+    detail_id: str,
+    payload: PMEstimacionDetalleUpdate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionDetailOut:
+    return run_pm_write(
+        db,
+        "update_estimation_detail",
+        lambda: update_estimation_detail(
+            db,
+            pm_context,
+            detail_id=detail_id,
+            tarea_id=payload.tarea_id,
+            avance_actual_pct=payload.avance_actual_pct,
+            notas=payload.notas,
+            activo=payload.activo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimation-details/{detail_id}/deactivate", response_model=PMEstimacionDetailOut)
+def deactivate_estimation_detail_endpoint(
+    detail_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionDetailOut:
+    return run_pm_write(
+        db,
+        "deactivate_estimation_detail",
+        lambda: deactivate_estimation_detail(
+            db,
+            pm_context,
+            detail_id=detail_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimations/{estimation_id}/submit", response_model=PMEstimacionOut)
+def submit_estimation_endpoint(
+    estimation_id: str,
+    payload: PMEstimacionSubmitRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "submit_estimation",
+        lambda: submit_estimation(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            comment=payload.comentario,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimations/{estimation_id}/approve", response_model=PMEstimacionOut)
+def approve_estimation_endpoint(
+    estimation_id: str,
+    payload: PMEstimacionResolveRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "approve_estimation",
+        lambda: approve_estimation(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            comment=payload.comentario,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimations/{estimation_id}/reject", response_model=PMEstimacionOut)
+def reject_estimation_endpoint(
+    estimation_id: str,
+    payload: PMEstimacionResolveRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "reject_estimation",
+        lambda: reject_estimation(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            comment=payload.comentario,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimations/{estimation_id}/return-to-draft", response_model=PMEstimacionOut)
+def return_estimation_to_draft_endpoint(
+    estimation_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "return_estimation_to_draft",
+        lambda: return_estimation_to_draft(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimations/{estimation_id}/mark-sent", response_model=PMEstimacionOut)
+def mark_estimation_sent_endpoint(
+    estimation_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "mark_estimation_sent",
+        lambda: mark_estimation_sent(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/estimations/{estimation_id}/mark-collected", response_model=PMEstimacionOut)
+def mark_estimation_collected_endpoint(
+    estimation_id: str,
+    payload: PMEstimacionCobroRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMEstimacionOut:
+    return run_pm_write(
+        db,
+        "mark_estimation_collected",
+        lambda: mark_estimation_collected(
+            db,
+            pm_context,
+            estimation_id=estimation_id,
+            amount=payload.monto_cobrado,
+            comment=payload.comentario,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/projects/{project_id}/estimations-summary", response_model=PMProyectoEstimacionesResumenOut)
+def get_project_estimations_summary_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoEstimacionesResumenOut:
+    return get_project_estimations_summary(db, pm_context, project_id=project_id)
+
+
+@router.get("/projects/{project_id}/estimation-candidates", response_model=list[PMEstimationCandidateOut])
+def list_project_estimation_candidates_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMEstimationCandidateOut]:
+    return list_project_estimation_candidates(db, pm_context, project_id=project_id)
 
 
 @router.post("/budgets/{budget_id}/items", response_model=PMPresupuestoPartidaOut, status_code=status.HTTP_201_CREATED)

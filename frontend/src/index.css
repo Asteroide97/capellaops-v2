@@ -3643,3 +3643,123 @@ body.pm-is-dragging {
     align-items: stretch;
   }
 }
+
+.pm-estimations-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.pm-estimation-warning {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(217, 119, 6, 0.18);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 251, 235, 0.95), rgba(255, 247, 237, 0.98));
+}
+
+.pm-estimation-guide {
+  display: grid;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(15, 118, 110, 0.14);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(240, 253, 250, 0.95), rgba(248, 250, 252, 0.98));
+}
+
+.pm-estimation-guide strong {
+  font-size: 0.92rem;
+}
+
+.pm-estimation-guide-steps {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.pm-estimation-guide-step {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid rgba(15, 118, 110, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.8);
+  color: var(--muted-text, #667085);
+  font-size: 0.88rem;
+}
+
+.pm-estimation-guide-step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.12);
+  color: #0f766e;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.pm-estimation-cell-title {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.pm-estimation-cell-title strong {
+  font-size: 0.92rem;
+}
+
+.pm-estimation-cell-title span {
+  color: var(--muted-text, #667085);
+  font-size: 0.82rem;
+}
+
+.pm-estimation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.pm-estimation-detail-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.pm-estimation-detail-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.pm-estimation-helper {
+  margin-top: 0.35rem;
+}
+
+.pm-estimation-warning-block {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.pm-estimation-zero-balance-note {
+  border-color: rgba(21, 128, 61, 0.16);
+  background: linear-gradient(180deg, rgba(240, 253, 244, 0.9), rgba(248, 250, 252, 0.98));
+}
+
+.pm-estimation-progress-cell {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.pm-estimation-preview-grid {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}

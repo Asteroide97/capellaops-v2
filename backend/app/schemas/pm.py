@@ -1,7 +1,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
 
 class PMConfigOut(BaseModel):
@@ -625,6 +625,161 @@ class PMCambioProyectoOut(BaseModel):
     created_by: str | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class PMEstimacionCreate(BaseModel):
+    nombre: str = Field(min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=4000)
+    periodo_inicio: date | None = None
+    periodo_fin: date | None = None
+    retencion_pct: Decimal = Field(default=Decimal("0"), ge=0, le=100)
+    anticipo_aplicado: Decimal = Field(default=Decimal("0"), ge=0)
+    requiere_aprobacion: bool = True
+    moneda: str = Field(default="MXN", min_length=3, max_length=8)
+    linea_base_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        if self.periodo_inicio and self.periodo_fin and self.periodo_fin < self.periodo_inicio:
+            raise ValueError("El periodo final no puede ser anterior al periodo inicial.")
+        return self
+
+
+class PMEstimacionUpdate(BaseModel):
+    nombre: str | None = Field(default=None, min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=4000)
+    periodo_inicio: date | None = None
+    periodo_fin: date | None = None
+    retencion_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    anticipo_aplicado: Decimal | None = Field(default=None, ge=0)
+    requiere_aprobacion: bool | None = None
+    moneda: str | None = Field(default=None, min_length=3, max_length=8)
+    linea_base_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_period(self):
+        if self.periodo_inicio and self.periodo_fin and self.periodo_fin < self.periodo_inicio:
+            raise ValueError("El periodo final no puede ser anterior al periodo inicial.")
+        return self
+
+
+class PMEstimacionDetalleCreate(BaseModel):
+    presupuesto_partida_id: str | None = None
+    tarea_id: str | None = None
+    avance_actual_pct: Decimal = Field(ge=0, le=100)
+    notas: str | None = Field(default=None, max_length=4000)
+
+
+class PMEstimacionDetalleUpdate(BaseModel):
+    tarea_id: str | None = None
+    avance_actual_pct: Decimal | None = Field(default=None, ge=0, le=100)
+    notas: str | None = Field(default=None, max_length=4000)
+    activo: bool | None = None
+
+
+class PMEstimacionSubmitRequest(BaseModel):
+    comentario: str | None = Field(default=None, max_length=2000)
+
+
+class PMEstimacionResolveRequest(BaseModel):
+    comentario: str | None = Field(default=None, max_length=2000)
+
+
+class PMEstimacionCobroRequest(BaseModel):
+    monto_cobrado: Decimal | None = Field(default=None, ge=0)
+    comentario: str | None = Field(default=None, max_length=2000)
+
+
+class PMEstimacionDetalleOut(BaseModel):
+    id: str
+    empresa_id: str
+    estimacion_id: str
+    proyecto_id: str
+    presupuesto_partida_id: str | None = None
+    tarea_id: str | None = None
+    codigo_snapshot: str | None = None
+    concepto_snapshot: str
+    unidad_snapshot: str | None = None
+    cantidad_presupuestada: Decimal = Decimal("0")
+    precio_unitario_snapshot: Decimal = Decimal("0")
+    importe_presupuestado: Decimal = Decimal("0")
+    avance_anterior_pct: Decimal = Decimal("0")
+    avance_actual_pct: Decimal = Decimal("0")
+    avance_periodo_pct: Decimal = Decimal("0")
+    importe_anterior: Decimal = Decimal("0")
+    importe_periodo: Decimal = Decimal("0")
+    importe_acumulado: Decimal = Decimal("0")
+    saldo_por_estimar: Decimal = Decimal("0")
+    notas: str | None = None
+    activo: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMEstimacionOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    presupuesto_id: str | None = None
+    linea_base_id: str | None = None
+    folio: str | None = None
+    nombre: str
+    descripcion: str | None = None
+    periodo_inicio: date | None = None
+    periodo_fin: date | None = None
+    estatus: str
+    moneda: str = "MXN"
+    monto_bruto: Decimal = Decimal("0")
+    anticipo_aplicado: Decimal = Decimal("0")
+    retencion_pct: Decimal = Decimal("0")
+    retencion_monto: Decimal = Decimal("0")
+    monto_neto: Decimal = Decimal("0")
+    monto_aprobado: Decimal = Decimal("0")
+    monto_cobrado: Decimal = Decimal("0")
+    saldo_pendiente: Decimal = Decimal("0")
+    requiere_aprobacion: bool = True
+    aprobacion_id: str | None = None
+    aprobacion_estatus: str | None = None
+    aprobacion_titulo: str | None = None
+    partidas_activas_count: int = 0
+    enviada_at: datetime | None = None
+    aprobada_at: datetime | None = None
+    rechazada_at: datetime | None = None
+    cobrada_at: datetime | None = None
+    cancelada_at: datetime | None = None
+    comentario_resolucion: str | None = None
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    activo: bool
+
+
+class PMEstimacionDetailOut(PMEstimacionOut):
+    details: list[PMEstimacionDetalleOut] = Field(default_factory=list)
+
+
+class PMEstimationCandidateOut(BaseModel):
+    partida_id: str
+    codigo: str | None = None
+    nombre: str
+    unidad: str | None = None
+    cantidad: Decimal = Decimal("0")
+    precio_unitario: Decimal = Decimal("0")
+    importe_presupuestado: Decimal = Decimal("0")
+    avance_estimado_anterior: Decimal = Decimal("0")
+    saldo_por_estimar: Decimal = Decimal("0")
+
+
+class PMProyectoEstimacionesResumenOut(BaseModel):
+    project_id: str
+    presupuesto_id: str | None = None
+    total_estimado: Decimal = Decimal("0")
+    total_aprobado: Decimal = Decimal("0")
+    total_cobrado: Decimal = Decimal("0")
+    pendiente_por_cobrar: Decimal = Decimal("0")
+    presupuesto_total: Decimal = Decimal("0")
+    porcentaje_presupuesto_estimado: Decimal = Decimal("0")
 
 
 class PMAprobacionCreate(BaseModel):
