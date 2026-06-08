@@ -25,13 +25,11 @@ import {
   safeDisplayText,
 } from "./shared";
 
-
 const defaultFilters = {
   q: "",
   limit: 25,
   offset: 0,
 };
-
 
 function getProjectStatusTone(status) {
   const normalized = String(status || "").toLowerCase();
@@ -47,14 +45,13 @@ function getProjectStatusTone(status) {
   return "neutral";
 }
 
-
 function getMovementLabel(movement) {
-  if (movement.referencia_tipo === "DEVOLUCION_PROYECTO") {
-    return "Devolución";
-  }
-  return "Consumo";
+  return movement.referencia_tipo === "DEVOLUCION_PROYECTO" ? "Devolución" : "Consumo";
 }
 
+function SectionDivider() {
+  return <div className="inventory-divider" />;
+}
 
 export default function ProjectsInventoryPage() {
   const navigate = useNavigate();
@@ -71,13 +68,14 @@ export default function ProjectsInventoryPage() {
 
   async function loadProjects(nextFilters = filters) {
     const response = await getInventoryProjects({ token, empresaId, filters: nextFilters });
-    setProjects(response.items ?? []);
+    const items = response.items ?? [];
+    setProjects(items);
     setMeta({
-      total: response.total,
-      limit: response.limit,
-      offset: response.offset,
+      total: response.total ?? 0,
+      limit: response.limit ?? nextFilters.limit,
+      offset: response.offset ?? nextFilters.offset,
     });
-    return response.items ?? [];
+    return items;
   }
 
   async function loadProjectDetail(projectId) {
@@ -86,12 +84,18 @@ export default function ProjectsInventoryPage() {
       setProjectMovements([]);
       return;
     }
+
     setDetailLoading(true);
     setError("");
     try {
       const [materialsResponse, movementsResponse] = await Promise.all([
         getInventoryProjectMaterials({ projectId, token, empresaId }),
-        getInventoryProjectMovements({ projectId, token, empresaId, filters: { limit: 100, offset: 0 } }),
+        getInventoryProjectMovements({
+          projectId,
+          token,
+          empresaId,
+          filters: { limit: 100, offset: 0 },
+        }),
       ]);
       setProjectMaterials(materialsResponse.items ?? []);
       setProjectMovements(movementsResponse.items ?? []);
@@ -107,6 +111,7 @@ export default function ProjectsInventoryPage() {
       if (!token || !empresaId) {
         return;
       }
+
       setLoading(true);
       setError("");
       try {
@@ -147,10 +152,10 @@ export default function ProjectsInventoryPage() {
   }
 
   async function handlePageChange(nextOffset) {
-    const nextFilters = { ...filters, offset: nextOffset };
     setLoading(true);
     setError("");
     try {
+      const nextFilters = { ...filters, offset: nextOffset };
       const items = await loadProjects(nextFilters);
       setFilters(nextFilters);
       const nextSelected =
@@ -179,8 +184,8 @@ export default function ProjectsInventoryPage() {
     <div className="dashboard-stack inventory-screen">
       <PageHeader
         eyebrow="Inventario"
-        subtitle="Consulta materiales consumidos, devoluciones y costos reales vinculados a proyectos."
         title="Inventario por proyecto"
+        subtitle="Consulta materiales consumidos, devoluciones y costos reales vinculados a proyectos."
       />
 
       {error ? <p className="form-error">{error}</p> : null}
@@ -210,6 +215,8 @@ export default function ProjectsInventoryPage() {
       </div>
 
       <DataCard
+        title="Proyectos con consumo de inventario"
+        subtitle="Resumen de consumos netos de inventario vinculados a proyectos PM."
         actions={
           <div className="inventory-actions">
             <ActionButton onClick={handleApplyFilters} size="sm" tone="primary" type="button">
@@ -217,12 +224,12 @@ export default function ProjectsInventoryPage() {
             </ActionButton>
           </div>
         }
-        subtitle="Resumen de consumos netos de inventario vinculados a proyectos PM."
-        title="Proyectos con consumo de inventario"
       >
         <SearchInput
-          hint="Busca por nombre o código del proyecto."
           label="Buscar proyecto"
+          hint="Busca por nombre o código del proyecto."
+          placeholder="Nombre o código del proyecto"
+          value={filters.q}
           onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -230,15 +237,14 @@ export default function ProjectsInventoryPage() {
               handleApplyFilters();
             }
           }}
-          placeholder="Nombre o código del proyecto"
-          value={filters.q}
         />
         <ResultMeta label="proyectos" loaded={projects.length} total={meta.total} />
+
         {projects.length === 0 ? (
           <EmptyState
             compact
-            note="Todavía no hay consumos de inventario asociados a proyectos."
-            title="Sin consumo por proyecto"
+            title="Sin consumos por proyecto"
+            note="No hay consumos por proyecto todavía. Cuando consumas materiales desde PM, aparecerán aquí."
           />
         ) : (
           <>
@@ -246,8 +252,8 @@ export default function ProjectsInventoryPage() {
               columns={[
                 "Proyecto",
                 "Estatus",
-                "Material consumido",
-                "Costo real",
+                "Materiales consumidos",
+                "Costo real de materiales",
                 "Movimientos",
                 "Último movimiento",
                 "Acciones",
@@ -256,8 +262,8 @@ export default function ProjectsInventoryPage() {
               <tbody>
                 {projects.map((project) => (
                   <tr
-                    className={selectedProject?.project_id === project.project_id ? "inventory-row-selected" : ""}
                     key={project.project_id}
+                    className={selectedProject?.project_id === project.project_id ? "inventory-row-selected" : ""}
                   >
                     <td>
                       <div className="inventory-cell-main">{safeDisplayText(project.nombre)}</div>
@@ -283,7 +289,7 @@ export default function ProjectsInventoryPage() {
                           tone="primary"
                           type="button"
                         >
-                          Ir a PM
+                          Abrir proyecto PM
                         </ActionButton>
                       </div>
                     </td>
@@ -291,28 +297,37 @@ export default function ProjectsInventoryPage() {
                 ))}
               </tbody>
             </DataTable>
+
             <PaginationControls
+              total={meta.total}
               limit={meta.limit}
               offset={meta.offset}
               onPageChange={handlePageChange}
-              total={meta.total}
             />
           </>
         )}
       </DataCard>
 
       <DataCard
-        subtitle="Materiales netos consumidos por el proyecto seleccionado."
         title={selectedProject ? `Detalle · ${safeDisplayText(selectedProject.nombre)}` : "Detalle del proyecto"}
+        subtitle="Materiales netos consumidos por el proyecto seleccionado."
       >
         {!selectedProject ? (
-          <EmptyState compact note="Selecciona un proyecto para ver su consumo de materiales." title="Sin proyecto seleccionado" />
+          <EmptyState
+            compact
+            title="Sin proyecto seleccionado"
+            note="Selecciona un proyecto para ver su consumo de materiales."
+          />
         ) : detailLoading ? (
           <div className="screen-center">Cargando detalle del proyecto...</div>
         ) : (
           <>
             {projectMaterials.length === 0 ? (
-              <EmptyState compact note="El proyecto todavía no tiene movimientos netos de materiales." title="Sin materiales consumidos" />
+              <EmptyState
+                compact
+                title="Sin materiales consumidos"
+                note="Este proyecto todavía no tiene movimientos netos de materiales."
+              />
             ) : (
               <DataTable
                 columns={[
@@ -349,7 +364,7 @@ export default function ProjectsInventoryPage() {
             <SectionDivider />
 
             {projectMovements.length === 0 ? (
-              <EmptyState compact note="No hay movimientos registrados para este proyecto." title="Sin movimientos" />
+              <EmptyState compact title="Sin movimientos" note="No hay movimientos registrados para este proyecto." />
             ) : (
               <DataTable
                 columns={[
@@ -391,9 +406,4 @@ export default function ProjectsInventoryPage() {
       </DataCard>
     </div>
   );
-}
-
-
-function SectionDivider() {
-  return <div className="inventory-divider" />;
 }
