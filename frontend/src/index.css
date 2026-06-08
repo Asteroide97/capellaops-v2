@@ -258,6 +258,15 @@ textarea {
   background: var(--surface-muted);
 }
 
+.auth-hero-list-item.is-active {
+  border-color: rgba(20, 92, 67, 0.24);
+  background: var(--brand-soft);
+}
+
+.auth-hero-list-item.is-complete {
+  border-color: rgba(21, 128, 61, 0.16);
+}
+
 .auth-hero-list-item strong {
   color: var(--text-primary);
 }
@@ -351,6 +360,170 @@ textarea {
   cursor: pointer;
   font-size: 0.85rem;
   font-weight: 600;
+}
+
+.register-card {
+  width: min(100%, 760px);
+  justify-self: stretch;
+}
+
+.register-stepper {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.register-step-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.55rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.register-step-pill.is-active {
+  color: var(--brand-strong);
+  background: var(--brand-soft);
+  border-color: rgba(20, 92, 67, 0.18);
+}
+
+.register-step-pill.is-complete {
+  color: var(--success);
+  background: rgba(21, 128, 61, 0.08);
+  border-color: rgba(21, 128, 61, 0.18);
+}
+
+.register-section {
+  display: grid;
+  gap: 1rem;
+  padding: 1.15rem;
+  border-radius: 1.15rem;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-muted);
+}
+
+.register-optional-panel {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1rem 1.15rem;
+  border-radius: 1.15rem;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--surface) 92%, #eef5ff 8%);
+}
+
+.register-optional-toggle {
+  justify-self: start;
+}
+
+.register-optional-panel-body {
+  display: grid;
+  gap: 1rem;
+}
+
+.register-password-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.register-password-field {
+  align-content: start;
+}
+
+.field-support {
+  min-height: 1.35rem;
+  display: grid;
+  align-content: start;
+}
+
+.register-password-field .field-support {
+  min-height: 1.45rem;
+}
+
+.register-placeholder-hint {
+  visibility: hidden;
+}
+
+.register-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  padding-top: 0.35rem;
+}
+
+.register-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.register-plan-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    background 120ms ease;
+}
+
+.register-plan-card strong {
+  font-size: 1rem;
+}
+
+.register-plan-card span {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.register-plan-card:hover {
+  transform: translateY(-1px);
+}
+
+.register-plan-card.is-selected {
+  border-color: rgba(20, 92, 67, 0.24);
+  background: var(--brand-soft);
+  box-shadow: var(--shadow-sm);
+}
+
+.register-verification-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.85rem;
+}
+
+.register-summary-card {
+  display: grid;
+  gap: 0.25rem;
+  padding: 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-muted);
+}
+
+.register-summary-card span {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.register-summary-card strong {
+  color: var(--text-primary);
 }
 
 .split-fields {
@@ -3644,6 +3817,12 @@ body.pm-is-dragging {
 }
 
 @media (max-width: 900px) {
+  .register-password-grid,
+  .register-plan-grid,
+  .register-verification-summary {
+    grid-template-columns: 1fr;
+  }
+
   .pm-task-table-compact .pm-workplan-row-head {
     display: none;
   }
@@ -3696,6 +3875,11 @@ body.pm-is-dragging {
 
   .inventory-form-grid-wide {
     grid-template-columns: 1fr;
+  }
+
+  .register-form-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
   }
 
   .inventory-filter-grid {

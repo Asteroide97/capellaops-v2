@@ -5,10 +5,52 @@ import { useAuth } from "../auth/AuthContext";
 import { getRecaptchaToken, hasRecaptchaSiteKey, isRecaptchaEnabled } from "../lib/recaptcha";
 
 
+const STEP_EMPRESA = "empresa";
+const STEP_ADMIN = "admin";
+const STEP_PLAN = "plan";
+const STEP_VERIFY = "verify";
+
+const stepSequence = [STEP_EMPRESA, STEP_ADMIN, STEP_PLAN];
+const stepMeta = {
+  [STEP_EMPRESA]: {
+    index: 1,
+    title: "Datos de empresa",
+    description: "Captura solo la información básica de tu operación para iniciar el trial.",
+  },
+  [STEP_ADMIN]: {
+    index: 2,
+    title: "Administrador principal",
+    description: "Define la cuenta que configurará la empresa y recibirá acceso completo.",
+  },
+  [STEP_PLAN]: {
+    index: 3,
+    title: "Plan inicial y verificación",
+    description: "Elige un plan inicial y valida la solicitud antes de enviar el código SMS.",
+  },
+};
+
+const heroSteps = [
+  {
+    key: STEP_EMPRESA,
+    title: "Empresa",
+    description: "Captura los datos básicos de tu operación.",
+  },
+  {
+    key: STEP_ADMIN,
+    title: "Administrador",
+    description: "Crea el acceso principal de la empresa.",
+  },
+  {
+    key: STEP_PLAN,
+    title: "Verificación SMS",
+    description: "Confirmamos tu teléfono antes de activar el trial.",
+  },
+];
+
 const planOptions = [
   { value: "basico", label: "Básico", note: "Inventario" },
-  { value: "pro", label: "Pro", note: "Inventario, POS y facturación pendiente" },
-  { value: "total", label: "Total", note: "Inventario, POS, CRM y PM" },
+  { value: "pro", label: "Pro", note: "Inventario, POS y CRM" },
+  { value: "total", label: "Total", note: "Inventario, POS, CRM y Gestión de Proyectos" },
 ];
 
 const countryOptions = [
@@ -23,6 +65,9 @@ const countryOptions = [
   { value: "other", label: "Otro", countryCode: "", placeholder: "5512345678" },
 ];
 
+const companyValidationFields = ["empresa_nombre", "empresa_email_contacto"];
+const adminValidationFields = ["nombre_completo", "email", "country_code", "phone_number", "password", "confirm_password"];
+const planValidationFields = ["plan_code"];
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 
@@ -95,7 +140,10 @@ function translateRegisterError(message) {
 export default function RegisterPage() {
   const navigate = useNavigate();
   const { registerStart, registerVerify } = useAuth();
+  const [currentStep, setCurrentStep] = useState(STEP_EMPRESA);
   const [countrySelection, setCountrySelection] = useState("mx");
+  const [showOptionalCompanyDetails, setShowOptionalCompanyDetails] = useState(false);
+  const [showPasswords, setShowPasswords] = useState(false);
   const [form, setForm] = useState({
     empresa_nombre: "",
     empresa_razon_social: "",
@@ -120,20 +168,28 @@ export default function RegisterPage() {
     masked_phone: "",
     code: "",
   });
-  const [step, setStep] = useState(1);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [cooldownUntil, setCooldownUntil] = useState(null);
   const [secondsLeft, setSecondsLeft] = useState(0);
-  const [showPasswords, setShowPasswords] = useState(false);
 
   const recaptchaEnabled = useMemo(() => isRecaptchaEnabled(), []);
   const recaptchaConfigured = useMemo(() => hasRecaptchaSiteKey(), []);
   const selectedCountryOption = useMemo(
     () => countryOptions.find((option) => option.value === countrySelection) ?? countryOptions[0],
     [countrySelection],
+  );
+  const activeHeroStep = currentStep === STEP_VERIFY ? STEP_PLAN : currentStep;
+  const verificationPhonePreview = verification.masked_phone || `${normalizeCountryCodeInput(form.country_code)} ${cleanPhoneNumber(form.phone_number)}`.trim();
+  const currentWizardMeta = stepMeta[currentStep === STEP_VERIFY ? STEP_PLAN : currentStep];
+  const hasCompanyOptionalValues = Boolean(
+    normalizeRequiredText(form.empresa_razon_social) ||
+      normalizeRequiredText(form.empresa_rfc) ||
+      normalizeRequiredText(form.empresa_telefono) ||
+      normalizeRequiredText(form.empresa_email_contacto) ||
+      normalizeRequiredText(form.empresa_direccion),
   );
 
   useEffect(() => {
@@ -152,6 +208,22 @@ export default function RegisterPage() {
 
     return () => window.clearInterval(timer);
   }, [cooldownUntil]);
+
+  useEffect(() => {
+    if (hasCompanyOptionalValues) {
+      setShowOptionalCompanyDetails(true);
+    }
+  }, [hasCompanyOptionalValues]);
+
+  function replaceFieldErrors(fields, nextErrors) {
+    setFieldErrors((current) => {
+      const next = { ...current };
+      fields.forEach((field) => {
+        delete next[field];
+      });
+      return { ...next, ...nextErrors };
+    });
+  }
 
   function clearFieldError(field) {
     setFieldErrors((current) => {
@@ -173,16 +245,27 @@ export default function RegisterPage() {
     clearFieldError(field);
   }
 
-  function validateStartForm() {
+  function validateCompanyStep() {
     const nextErrors = {};
-    const adminEmail = normalizeRequiredText(form.email);
     const contactEmail = normalizeRequiredText(form.empresa_email_contacto);
-    const phoneDigits = cleanPhoneNumber(form.phone_number);
-    const countryCode = normalizeCountryCodeInput(form.country_code);
 
     if (!normalizeRequiredText(form.empresa_nombre)) {
       nextErrors.empresa_nombre = "Escribe el nombre comercial o de la empresa.";
     }
+    if (contactEmail && !isValidEmail(contactEmail)) {
+      nextErrors.empresa_email_contacto = "Revisa el correo. Debe tener formato nombre@dominio.com.";
+    }
+
+    replaceFieldErrors(companyValidationFields, nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }
+
+  function validateAdminStep() {
+    const nextErrors = {};
+    const adminEmail = normalizeRequiredText(form.email);
+    const phoneDigits = cleanPhoneNumber(form.phone_number);
+    const countryCode = normalizeCountryCodeInput(form.country_code);
+
     if (!normalizeRequiredText(form.nombre_completo)) {
       nextErrors.nombre_completo = "Escribe el nombre completo del administrador.";
     }
@@ -190,9 +273,6 @@ export default function RegisterPage() {
       nextErrors.email = "Escribe el correo del administrador.";
     } else if (!isValidEmail(adminEmail)) {
       nextErrors.email = "Revisa el correo. Debe tener formato nombre@dominio.com.";
-    }
-    if (contactEmail && !isValidEmail(contactEmail)) {
-      nextErrors.empresa_email_contacto = "Revisa el correo. Debe tener formato nombre@dominio.com.";
     }
     if (!countryCode) {
       nextErrors.country_code = "Escribe un código de país válido.";
@@ -214,12 +294,33 @@ export default function RegisterPage() {
     } else if (form.password !== form.confirm_password) {
       nextErrors.confirm_password = "Las contraseñas no coinciden.";
     }
+
+    replaceFieldErrors(adminValidationFields, nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }
+
+  function validatePlanStep() {
+    const nextErrors = {};
+
     if (!form.plan_code) {
       nextErrors.plan_code = "Selecciona un plan inicial.";
     }
 
-    setFieldErrors(nextErrors);
+    replaceFieldErrors(planValidationFields, nextErrors);
     return Object.keys(nextErrors).length === 0;
+  }
+
+  function validateStep(stepKey) {
+    if (stepKey === STEP_EMPRESA) {
+      return validateCompanyStep();
+    }
+    if (stepKey === STEP_ADMIN) {
+      return validateAdminStep();
+    }
+    if (stepKey === STEP_PLAN) {
+      return validatePlanStep();
+    }
+    return true;
   }
 
   function buildRegisterPayload() {
@@ -272,7 +373,7 @@ export default function RegisterPage() {
         masked_phone: response.masked_phone,
         code: "",
       });
-      setStep(2);
+      setCurrentStep(STEP_VERIFY);
       setMessage(response.message);
       setCooldownUntil(Date.now() + response.cooldown_seconds * 1000);
     } catch (submitError) {
@@ -286,14 +387,68 @@ export default function RegisterPage() {
     }
   }
 
-  async function handleStart(event) {
+  function handleStepNavigation(targetStep) {
+    if (targetStep === currentStep) {
+      return;
+    }
+
+    if (currentStep === STEP_VERIFY) {
+      setCurrentStep(targetStep);
+      setError("");
+      return;
+    }
+
+    const currentIndex = stepSequence.indexOf(currentStep);
+    const targetIndex = stepSequence.indexOf(targetStep);
+
+    if (targetIndex <= currentIndex) {
+      setCurrentStep(targetStep);
+      setError("");
+      return;
+    }
+
+    if (targetIndex === currentIndex + 1 && validateStep(currentStep)) {
+      setCurrentStep(targetStep);
+      setError("");
+      setMessage("");
+    }
+  }
+
+  function handleBack() {
+    if (currentStep === STEP_ADMIN) {
+      setCurrentStep(STEP_EMPRESA);
+    } else if (currentStep === STEP_PLAN) {
+      setCurrentStep(STEP_ADMIN);
+    }
+    setError("");
+    setMessage("");
+  }
+
+  async function handleWizardSubmit(event) {
     event.preventDefault();
     setError("");
     setMessage("");
-    if (!validateStartForm()) {
+
+    if (currentStep === STEP_EMPRESA) {
+      if (validateCompanyStep()) {
+        setCurrentStep(STEP_ADMIN);
+      }
       return;
     }
-    await submitRegisterStart();
+
+    if (currentStep === STEP_ADMIN) {
+      if (validateAdminStep()) {
+        setCurrentStep(STEP_PLAN);
+      }
+      return;
+    }
+
+    if (currentStep === STEP_PLAN) {
+      if (!validatePlanStep()) {
+        return;
+      }
+      await submitRegisterStart();
+    }
   }
 
   async function handleVerify(event) {
@@ -325,6 +480,343 @@ export default function RegisterPage() {
     await submitRegisterStart();
   }
 
+  function renderStepPills() {
+    const currentIndex = currentStep === STEP_VERIFY ? stepSequence.length - 1 : stepSequence.indexOf(currentStep);
+
+    return (
+      <div className="register-stepper" aria-label="Flujo de registro">
+        {stepSequence.map((stepKey, index) => {
+          const isActive = currentStep === STEP_VERIFY ? stepKey === STEP_PLAN : stepKey === currentStep;
+          const isComplete = currentStep === STEP_VERIFY ? index < stepSequence.length - 1 : index < currentIndex;
+          return (
+            <button
+              key={stepKey}
+              className={`register-step-pill${isActive ? " is-active" : ""}${isComplete ? " is-complete" : ""}`}
+              onClick={() => handleStepNavigation(stepKey)}
+              type="button"
+            >
+              {index + 1}. {heroSteps[index].title}
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderCompanyStep() {
+    return (
+      <>
+        <section className="register-section">
+          <div className="auth-form-section-header">
+            <h3>Datos de empresa</h3>
+            <p>Empieza con lo esencial. Los datos fiscales o de contacto pueden quedar para después.</p>
+          </div>
+
+          <label>
+            Nombre comercial / empresa
+            <input
+              onChange={(event) => updateForm("empresa_nombre", event.target.value)}
+              required
+              type="text"
+              value={form.empresa_nombre}
+            />
+            {fieldErrors.empresa_nombre ? <span className="field-error">{fieldErrors.empresa_nombre}</span> : null}
+          </label>
+
+          <label>
+            Giro / industria
+            <input onChange={(event) => updateForm("empresa_giro", event.target.value)} type="text" value={form.empresa_giro} />
+          </label>
+
+          <div className="split-fields">
+            <label>
+              País
+              <input onChange={(event) => updateForm("empresa_pais", event.target.value)} type="text" value={form.empresa_pais} />
+            </label>
+
+            <label>
+              Estado
+              <input onChange={(event) => updateForm("empresa_estado", event.target.value)} type="text" value={form.empresa_estado} />
+            </label>
+
+            <label>
+              Ciudad
+              <input onChange={(event) => updateForm("empresa_ciudad", event.target.value)} type="text" value={form.empresa_ciudad} />
+            </label>
+          </div>
+        </section>
+
+        <section className="register-optional-panel">
+          <button
+            aria-expanded={showOptionalCompanyDetails}
+            className="ghost-button register-optional-toggle"
+            onClick={() => setShowOptionalCompanyDetails((current) => !current)}
+            type="button"
+          >
+            {showOptionalCompanyDetails ? "Ocultar" : "Mostrar"} datos fiscales y de contacto opcionales
+          </button>
+
+          {showOptionalCompanyDetails ? (
+            <div className="register-optional-panel-body">
+              <div className="split-fields">
+                <label>
+                  Razón social
+                  <input
+                    onChange={(event) => updateForm("empresa_razon_social", event.target.value)}
+                    type="text"
+                    value={form.empresa_razon_social}
+                  />
+                </label>
+
+                <label>
+                  RFC
+                  <input
+                    onChange={(event) => updateForm("empresa_rfc", event.target.value.toUpperCase())}
+                    type="text"
+                    value={form.empresa_rfc}
+                  />
+                </label>
+              </div>
+
+              <div className="split-fields">
+                <label>
+                  Teléfono de empresa
+                  <input onChange={(event) => updateForm("empresa_telefono", event.target.value)} type="text" value={form.empresa_telefono} />
+                </label>
+
+                <label>
+                  Email de contacto
+                  <input
+                    autoComplete="email"
+                    onChange={(event) => updateForm("empresa_email_contacto", event.target.value)}
+                    placeholder="opcional@empresa.com"
+                    type="text"
+                    value={form.empresa_email_contacto}
+                  />
+                  <div className="field-support">
+                    {fieldErrors.empresa_email_contacto ? (
+                      <span className="field-error">{fieldErrors.empresa_email_contacto}</span>
+                    ) : (
+                      <span className="field-hint">Si lo dejas vacío, usaremos el correo del administrador.</span>
+                    )}
+                  </div>
+                </label>
+              </div>
+
+              <label>
+                Dirección
+                <textarea onChange={(event) => updateForm("empresa_direccion", event.target.value)} rows={3} value={form.empresa_direccion} />
+              </label>
+            </div>
+          ) : (
+            <p className="field-hint">Puedes completar esta información ahora o después.</p>
+          )}
+        </section>
+      </>
+    );
+  }
+
+  function renderAdminStep() {
+    return (
+      <section className="register-section">
+        <div className="auth-form-section-header">
+          <h3>Administrador principal</h3>
+          <p>Esta persona tendrá acceso completo para configurar la empresa.</p>
+        </div>
+
+        <label>
+          Nombre completo
+          <input
+            onChange={(event) => updateForm("nombre_completo", event.target.value)}
+            required
+            type="text"
+            value={form.nombre_completo}
+          />
+          {fieldErrors.nombre_completo ? <span className="field-error">{fieldErrors.nombre_completo}</span> : null}
+        </label>
+
+        <label>
+          Correo
+          <input
+            autoComplete="email"
+            onChange={(event) => updateForm("email", event.target.value)}
+            required
+            type="text"
+            value={form.email}
+          />
+          {fieldErrors.email ? <span className="field-error">{fieldErrors.email}</span> : null}
+        </label>
+
+        <div className="split-fields">
+          <label>
+            País / código de país
+            <select
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                const nextOption = countryOptions.find((option) => option.value === nextValue) ?? countryOptions[0];
+                setCountrySelection(nextValue);
+                updateForm("country_code", nextOption.countryCode);
+              }}
+              value={countrySelection}
+            >
+              {countryOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {countrySelection === "other" ? (
+            <label>
+              Código manual
+              <input
+                inputMode="tel"
+                maxLength={6}
+                onChange={(event) => updateForm("country_code", normalizeCountryCodeInput(event.target.value))}
+                placeholder="+502"
+                required
+                type="text"
+                value={form.country_code}
+              />
+              {fieldErrors.country_code ? <span className="field-error">{fieldErrors.country_code}</span> : null}
+            </label>
+          ) : null}
+        </div>
+
+        <label>
+          Teléfono
+          <input
+            autoComplete="tel-national"
+            inputMode="tel"
+            maxLength={20}
+            onChange={(event) => updateForm("phone_number", cleanPhoneNumber(event.target.value))}
+            placeholder={selectedCountryOption.placeholder}
+            required
+            type="text"
+            value={form.phone_number}
+          />
+          {fieldErrors.phone_number ? <span className="field-error">{fieldErrors.phone_number}</span> : null}
+        </label>
+
+        <div className="register-password-grid">
+          <label className="register-password-field">
+            Contraseña
+            <div className="password-field">
+              <input
+                autoComplete="new-password"
+                minLength={8}
+                onChange={(event) => updateForm("password", event.target.value)}
+                required
+                type={showPasswords ? "text" : "password"}
+                value={form.password}
+              />
+              <button className="password-toggle" onClick={() => setShowPasswords((current) => !current)} type="button">
+                {showPasswords ? "Ocultar" : "Mostrar"}
+              </button>
+            </div>
+            <div className="field-support">
+              {fieldErrors.password ? (
+                <span className="field-error">{fieldErrors.password}</span>
+              ) : (
+                <span className="field-hint">Mínimo 8 caracteres.</span>
+              )}
+            </div>
+          </label>
+
+          <label className="register-password-field">
+            Confirmar contraseña
+            <div className="password-field">
+              <input
+                autoComplete="new-password"
+                minLength={8}
+                onChange={(event) => updateForm("confirm_password", event.target.value)}
+                required
+                type={showPasswords ? "text" : "password"}
+                value={form.confirm_password}
+              />
+              <button className="password-toggle" onClick={() => setShowPasswords((current) => !current)} type="button">
+                {showPasswords ? "Ocultar" : "Mostrar"}
+              </button>
+            </div>
+            <div className="field-support">
+              {fieldErrors.confirm_password ? (
+                <span className="field-error">{fieldErrors.confirm_password}</span>
+              ) : (
+                <span className="field-hint register-placeholder-hint">Confirma la misma contraseña.</span>
+              )}
+            </div>
+          </label>
+        </div>
+      </section>
+    );
+  }
+
+  function renderPlanStep() {
+    return (
+      <section className="register-section">
+        <div className="auth-form-section-header">
+          <h3>Plan inicial y verificación</h3>
+          <p>Todos los planes inician con 15 días de prueba. Puedes cambiarlo después.</p>
+        </div>
+
+        <div className="register-plan-grid" role="radiogroup" aria-label="Plan inicial">
+          {planOptions.map((plan) => {
+            const selected = form.plan_code === plan.value;
+            return (
+              <button
+                key={plan.value}
+                aria-pressed={selected}
+                className={`register-plan-card${selected ? " is-selected" : ""}`}
+                onClick={() => updateForm("plan_code", plan.value)}
+                type="button"
+              >
+                <strong>{plan.label}</strong>
+                <span>{plan.note}</span>
+              </button>
+            );
+          })}
+        </div>
+        {fieldErrors.plan_code ? <span className="field-error">{fieldErrors.plan_code}</span> : null}
+
+        <div className="security-note">
+          <strong>Protección automática</strong>
+          <span>
+            {!recaptchaEnabled
+              ? "reCAPTCHA está desactivado temporalmente en el frontend para pruebas."
+              : recaptchaConfigured
+                ? "Validamos la solicitud antes de enviar el código SMS."
+                : "reCAPTCHA no está configurado."}
+          </span>
+        </div>
+      </section>
+    );
+  }
+
+  function renderWizardActions() {
+    return (
+      <div className="register-form-actions">
+        {currentStep !== STEP_EMPRESA ? (
+          <button className="ghost-button" onClick={handleBack} type="button">
+            Atrás
+          </button>
+        ) : (
+          <span />
+        )}
+
+        {currentStep === STEP_PLAN ? (
+          <button className="primary-button" disabled={loading} type="submit">
+            {loading ? "Enviando código..." : "Enviar código por SMS"}
+          </button>
+        ) : (
+          <button className="primary-button" type="submit">
+            Continuar
+          </button>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="auth-shell">
       <section className="auth-hero">
@@ -338,323 +830,43 @@ export default function RegisterPage() {
           <strong>La empresa se crea hasta confirmar el código SMS.</strong>
           <span>Primero validamos la solicitud y luego activamos tu acceso.</span>
         </div>
+
         <div className="auth-hero-list">
-          <div className="auth-hero-list-item">
-            <strong>Empresa</strong>
-            <span>Captura solo los datos esenciales y completa el resto después.</span>
-          </div>
-          <div className="auth-hero-list-item">
-            <strong>Administrador principal</strong>
-            <span>Esta cuenta tendrá acceso completo para configurar la empresa.</span>
-          </div>
-          <div className="auth-hero-list-item">
-            <strong>Verificación SMS</strong>
-            <span>Confirmamos tu teléfono antes de crear el trial.</span>
-          </div>
+          {heroSteps.map((item) => (
+            <div
+              key={item.key}
+              className={`auth-hero-list-item${activeHeroStep === item.key ? " is-active" : ""}${stepSequence.indexOf(activeHeroStep) > stepSequence.indexOf(item.key) ? " is-complete" : ""}`}
+            >
+              <strong>{item.title}</strong>
+              <span>{item.description}</span>
+            </div>
+          ))}
         </div>
       </section>
 
-      {step === 1 ? (
-        <form className="auth-card" onSubmit={handleStart}>
-          <div className="auth-card-header">
-            <div>
-              <h2>Crear cuenta</h2>
-              <p>Primero validaremos tu teléfono. Después podrás configurar tu primer almacén.</p>
-            </div>
-            <div className="auth-step-list" aria-label="Flujo de registro">
-              <div className="auth-step-chip is-active">1. Empresa</div>
-              <div className="auth-step-chip is-active">2. Administrador</div>
-              <div className="auth-step-chip">3. SMS</div>
-            </div>
-          </div>
-
-          <section className="auth-form-section">
-            <div className="auth-form-section-header">
-              <h3>Datos de empresa</h3>
-              <p>Empieza con el nombre comercial y agrega los datos fiscales o de contacto si ya los tienes.</p>
-            </div>
-
-            <label>
-              Nombre comercial / empresa
-              <input
-                onChange={(event) => updateForm("empresa_nombre", event.target.value)}
-                required
-                type="text"
-                value={form.empresa_nombre}
-              />
-              {fieldErrors.empresa_nombre ? <span className="field-error">{fieldErrors.empresa_nombre}</span> : null}
-            </label>
-
-            <div className="split-fields">
-              <label>
-                Razón social
-                <input
-                  onChange={(event) => updateForm("empresa_razon_social", event.target.value)}
-                  type="text"
-                  value={form.empresa_razon_social}
-                />
-              </label>
-
-              <label>
-                RFC
-                <input
-                  onChange={(event) => updateForm("empresa_rfc", event.target.value.toUpperCase())}
-                  type="text"
-                  value={form.empresa_rfc}
-                />
-              </label>
-            </div>
-
-            <div className="split-fields">
-              <label>
-                Giro / industria
-                <input
-                  onChange={(event) => updateForm("empresa_giro", event.target.value)}
-                  type="text"
-                  value={form.empresa_giro}
-                />
-              </label>
-
-              <label>
-                Teléfono de empresa
-                <input
-                  onChange={(event) => updateForm("empresa_telefono", event.target.value)}
-                  type="text"
-                  value={form.empresa_telefono}
-                />
-              </label>
-            </div>
-
-            <div className="split-fields">
-              <label>
-                Email de contacto
-                <input
-                  autoComplete="email"
-                  onChange={(event) => updateForm("empresa_email_contacto", event.target.value)}
-                  placeholder="opcional@empresa.com"
-                  type="text"
-                  value={form.empresa_email_contacto}
-                />
-                <span className="field-hint">Si lo dejas vacío, usaremos el correo del administrador.</span>
-                {fieldErrors.empresa_email_contacto ? <span className="field-error">{fieldErrors.empresa_email_contacto}</span> : null}
-              </label>
-
-              <label>
-                País
-                <input
-                  onChange={(event) => updateForm("empresa_pais", event.target.value)}
-                  type="text"
-                  value={form.empresa_pais}
-                />
-              </label>
-            </div>
-
-            <div className="split-fields">
-              <label>
-                Estado
-                <input
-                  onChange={(event) => updateForm("empresa_estado", event.target.value)}
-                  type="text"
-                  value={form.empresa_estado}
-                />
-              </label>
-
-              <label>
-                Ciudad
-                <input
-                  onChange={(event) => updateForm("empresa_ciudad", event.target.value)}
-                  type="text"
-                  value={form.empresa_ciudad}
-                />
-              </label>
-            </div>
-
-            <label>
-              Dirección
-              <textarea
-                onChange={(event) => updateForm("empresa_direccion", event.target.value)}
-                rows={2}
-                value={form.empresa_direccion}
-              />
-            </label>
-          </section>
-
-          <section className="auth-form-section">
-            <div className="auth-form-section-header">
-              <h3>Administrador principal</h3>
-              <p>Esta persona tendrá acceso completo para configurar la empresa.</p>
-            </div>
-
-            <label>
-              Nombre completo
-              <input
-                onChange={(event) => updateForm("nombre_completo", event.target.value)}
-                required
-                type="text"
-                value={form.nombre_completo}
-              />
-              {fieldErrors.nombre_completo ? <span className="field-error">{fieldErrors.nombre_completo}</span> : null}
-            </label>
-
-            <label>
-              Correo
-              <input
-                autoComplete="email"
-                onChange={(event) => updateForm("email", event.target.value)}
-                required
-                type="text"
-                value={form.email}
-              />
-              {fieldErrors.email ? <span className="field-error">{fieldErrors.email}</span> : null}
-            </label>
-
-            <div className="split-fields">
-              <label>
-                País / código de país
-                <select
-                  onChange={(event) => {
-                    const nextValue = event.target.value;
-                    const nextOption =
-                      countryOptions.find((option) => option.value === nextValue) ?? countryOptions[0];
-                    setCountrySelection(nextValue);
-                    updateForm("country_code", nextOption.countryCode);
-                  }}
-                  value={countrySelection}
-                >
-                  {countryOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {countrySelection === "other" ? (
-                <label>
-                  Código manual
-                  <input
-                    inputMode="tel"
-                    maxLength={6}
-                    onChange={(event) => updateForm("country_code", normalizeCountryCodeInput(event.target.value))}
-                    placeholder="+502"
-                    required
-                    type="text"
-                    value={form.country_code}
-                  />
-                  {fieldErrors.country_code ? <span className="field-error">{fieldErrors.country_code}</span> : null}
-                </label>
-              ) : null}
-            </div>
-
-            <label>
-              Teléfono
-              <input
-                autoComplete="tel-national"
-                inputMode="tel"
-                maxLength={20}
-                onChange={(event) => updateForm("phone_number", cleanPhoneNumber(event.target.value))}
-                placeholder={selectedCountryOption.placeholder}
-                required
-                type="text"
-                value={form.phone_number}
-              />
-              {fieldErrors.phone_number ? <span className="field-error">{fieldErrors.phone_number}</span> : null}
-            </label>
-
-            <div className="split-fields">
-              <label>
-                Contraseña
-                <div className="password-field">
-                  <input
-                    autoComplete="new-password"
-                    minLength={8}
-                    onChange={(event) => updateForm("password", event.target.value)}
-                    required
-                    type={showPasswords ? "text" : "password"}
-                    value={form.password}
-                  />
-                  <button
-                    className="password-toggle"
-                    onClick={() => setShowPasswords((current) => !current)}
-                    type="button"
-                  >
-                    {showPasswords ? "Ocultar" : "Mostrar"}
-                  </button>
-                </div>
-                <span className="field-hint">Mínimo 8 caracteres.</span>
-                {fieldErrors.password ? <span className="field-error">{fieldErrors.password}</span> : null}
-              </label>
-
-              <label>
-                Confirmar contraseña
-                <div className="password-field">
-                  <input
-                    autoComplete="new-password"
-                    minLength={8}
-                    onChange={(event) => updateForm("confirm_password", event.target.value)}
-                    required
-                    type={showPasswords ? "text" : "password"}
-                    value={form.confirm_password}
-                  />
-                </div>
-                {fieldErrors.confirm_password ? <span className="field-error">{fieldErrors.confirm_password}</span> : null}
-              </label>
-            </div>
-          </section>
-
-          <section className="auth-form-section">
-            <div className="auth-form-section-header">
-              <h3>Plan inicial y verificación</h3>
-              <p>Todos empiezan con 15 días de prueba. Podrás cambiar el plan después.</p>
-            </div>
-
-            <label>
-              Plan inicial
-              <select onChange={(event) => updateForm("plan_code", event.target.value)} value={form.plan_code}>
-                {planOptions.map((plan) => (
-                  <option key={plan.value} value={plan.value}>
-                    {plan.label} - {plan.note}
-                  </option>
-                ))}
-              </select>
-              <span className="field-hint">Puedes cambiarlo después. Todos inician con 15 días de prueba.</span>
-              {fieldErrors.plan_code ? <span className="field-error">{fieldErrors.plan_code}</span> : null}
-            </label>
-
-            <div className="security-note">
-              <strong>Protección automática</strong>
-              <span>
-                {!recaptchaEnabled
-                  ? "reCAPTCHA está desactivado temporalmente en el frontend para pruebas."
-                  : recaptchaConfigured
-                    ? "Validamos la solicitud antes de enviar el código SMS."
-                    : "reCAPTCHA no está configurado."}
-              </span>
-            </div>
-          </section>
-
-          {error ? <p className="form-error">{error}</p> : null}
-          {message ? <p className="form-success">{message}</p> : null}
-
-          <button className="primary-button" disabled={loading} type="submit">
-            {loading ? "Enviando código..." : "Enviar código por SMS"}
-          </button>
-
-          <p className="auth-link">
-            ¿Ya tienes usuario? <Link to="/login">Iniciar sesión</Link>
-          </p>
-        </form>
-      ) : (
+      {currentStep === STEP_VERIFY ? (
         <form className="auth-card" onSubmit={handleVerify}>
           <div className="auth-card-header">
             <div>
+              <p className="eyebrow">Verificación SMS</p>
               <h2>Verifica tu teléfono</h2>
-              <p>Enviamos un código SMS a {verification.masked_phone}.</p>
+              <p>Enviamos un código SMS a {verificationPhonePreview}.</p>
             </div>
-            <div className="auth-step-list" aria-label="Flujo de registro">
-              <div className="auth-step-chip is-complete">1. Empresa</div>
-              <div className="auth-step-chip is-complete">2. Administrador</div>
-              <div className="auth-step-chip is-active">3. SMS</div>
+            {renderStepPills()}
+          </div>
+
+          <div className="register-verification-summary">
+            <div className="register-summary-card">
+              <span>Empresa</span>
+              <strong>{form.empresa_nombre}</strong>
+            </div>
+            <div className="register-summary-card">
+              <span>Administrador</span>
+              <strong>{form.nombre_completo}</strong>
+            </div>
+            <div className="register-summary-card">
+              <span>Teléfono</span>
+              <strong>{verificationPhonePreview}</strong>
             </div>
           </div>
 
@@ -664,7 +876,7 @@ export default function RegisterPage() {
           </div>
 
           <label>
-            Código de 6 dígitos
+            Código de verificación
             <input
               inputMode="numeric"
               maxLength={6}
@@ -686,23 +898,25 @@ export default function RegisterPage() {
           {error ? <p className="form-error">{error}</p> : null}
           {message ? <p className="form-success">{message}</p> : null}
 
-          <button className="primary-button" disabled={loading} type="submit">
-            {loading ? "Verificando..." : "Verificar y crear empresa"}
-          </button>
+          <div className="register-form-actions">
+            <button
+              className="ghost-button"
+              disabled={loading || secondsLeft > 0}
+              onClick={handleResendCode}
+              type="button"
+            >
+              {secondsLeft > 0 ? `Reenviar código en ${secondsLeft}s` : "Reenviar código"}
+            </button>
 
-          <button
-            className="ghost-button"
-            disabled={loading || secondsLeft > 0}
-            onClick={handleResendCode}
-            type="button"
-          >
-            {secondsLeft > 0 ? `Reenviar código en ${secondsLeft}s` : "Reenviar código"}
-          </button>
+            <button className="primary-button" disabled={loading} type="submit">
+              {loading ? "Verificando..." : "Verificar y crear empresa"}
+            </button>
+          </div>
 
           <button
             className="link-button"
             onClick={() => {
-              setStep(1);
+              setCurrentStep(STEP_ADMIN);
               setError("");
               setMessage("");
             }}
@@ -710,6 +924,30 @@ export default function RegisterPage() {
           >
             Cambiar teléfono
           </button>
+        </form>
+      ) : (
+        <form className="auth-card register-card" onSubmit={handleWizardSubmit}>
+          <div className="auth-card-header">
+            <div>
+              <p className="eyebrow">Paso {currentWizardMeta.index} de 3</p>
+              <h2>{currentWizardMeta.title}</h2>
+              <p>{currentWizardMeta.description}</p>
+            </div>
+            {renderStepPills()}
+          </div>
+
+          {currentStep === STEP_EMPRESA ? renderCompanyStep() : null}
+          {currentStep === STEP_ADMIN ? renderAdminStep() : null}
+          {currentStep === STEP_PLAN ? renderPlanStep() : null}
+
+          {error ? <p className="form-error">{error}</p> : null}
+          {message ? <p className="form-success">{message}</p> : null}
+
+          {renderWizardActions()}
+
+          <p className="auth-link">
+            ¿Ya tienes usuario? <Link to="/login">Iniciar sesión</Link>
+          </p>
         </form>
       )}
     </div>
