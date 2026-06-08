@@ -408,6 +408,33 @@ export function getInventoryMovements({ token, empresaId, filters = {} }) {
 }
 
 
+export function getInventoryProjects({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/projects${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getInventoryProjectMaterials({ projectId, token, empresaId }) {
+  return apiRequest(`/inventory/projects/${projectId}/materials`, { token, empresaId });
+}
+
+
+export function getInventoryProjectMovements({ projectId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/projects/${projectId}/movements${suffix ? `?${suffix}` : ""}`, {
+    token,
+    empresaId,
+  });
+}
+
+
 export function createInventoryMovement({ token, empresaId, payload }) {
   return apiRequest("/inventory/movements", {
     method: "POST",
@@ -800,6 +827,26 @@ export function deactivatePmProjectMaterialPlan({ projectId, planId, token, empr
 
 export function createPmProjectMaterialRequisition({ projectId, token, empresaId, payload }) {
   return apiRequest(`/pm/projects/${projectId}/materials/create-requisition`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function consumePmProjectMaterial({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/materials/consume`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function returnPmProjectMaterial({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/materials/return`, {
     method: "POST",
     body: payload,
     token,

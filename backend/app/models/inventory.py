@@ -165,8 +165,12 @@ class MovimientoInventario(UUIDPrimaryKeyMixin, Base):
         index=True,
     )
     es_proyecto: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
-    proyecto_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    proyecto_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     proyecto_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    pm_tarea_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    pm_tarea_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    pm_partida_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    pm_partida_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
     costo_unitario_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     costo_promedio_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -104,7 +104,7 @@ export function toDisplayText(value, fallback = "—") {
 }
 
 
-export function safeDisplayText(value, fallback = "â€”") {
+export function safeDisplayText(value, fallback = "—") {
   if (value === null || value === undefined || value === "") {
     return fallback;
   }

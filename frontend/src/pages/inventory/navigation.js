@@ -86,7 +86,7 @@ export const inventoryNavItems = [
     key: "proyectos",
     label: "Proyectos",
     path: "/inventario/proyectos",
-    description: "Relación futura entre inventario y proyectos.",
+    description: "Consumos, devoluciones y costo real de materiales por proyecto.",
     icon: FolderKanban,
   },
   {

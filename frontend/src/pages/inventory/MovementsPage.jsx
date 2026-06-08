@@ -553,7 +553,7 @@ export default function MovementsPage() {
                 { key: "recibido", label: "Recibido / Retirado" },
                 { key: "evidencia", label: "Evidencia" },
                 { key: "estatus", label: "Estatus" },
-                { key: "proyecto", label: "Proyecto" },
+                { key: "proyecto", label: "Proyecto / contexto" },
                 { key: "acciones", label: "Acciones" },
               ]}
             >
@@ -600,7 +600,12 @@ export default function MovementsPage() {
                         {movement.estatus}
                       </StatusBadge>
                     </td>
-                    <td>{safeDisplayText(movement.proyecto_nombre_snapshot || movement.proyecto_id)}</td>
+                    <td>
+                      <div className="inventory-cell-main">{safeDisplayText(movement.proyecto_nombre_snapshot || movement.proyecto_id, "—")}</div>
+                      <div className="inventory-cell-sub">
+                        {safeDisplayText(movement.pm_tarea_nombre_snapshot, "Proyecto general")} · {safeDisplayText(movement.pm_partida_nombre_snapshot, "Sin partida")}
+                      </div>
+                    </td>
                     <td className="inventory-row-actions">
                       <button className="link-button" onClick={() => setDetailMovement(movement)} type="button">
                         Ver
@@ -1065,6 +1070,14 @@ export default function MovementsPage() {
               <div>
                 <strong>Proyecto</strong>
                 <p>{safeDisplayText(detailMovement.proyecto_nombre_snapshot || detailMovement.proyecto_id)}</p>
+              </div>
+              <div>
+                <strong>Tarea</strong>
+                <p>{safeDisplayText(detailMovement.pm_tarea_nombre_snapshot, "Proyecto general")}</p>
+              </div>
+              <div>
+                <strong>Partida</strong>
+                <p>{safeDisplayText(detailMovement.pm_partida_nombre_snapshot, "Sin partida")}</p>
               </div>
             </div>
             <div className="table-note">{safeDisplayText(detailMovement.notas, "Sin notas adicionales.")}</div>

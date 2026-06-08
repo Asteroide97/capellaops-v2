@@ -473,7 +473,7 @@ export default function KardexPage() {
                   { key: "costo_promedio", label: "Costo promedio" },
                   { key: "valor", label: "Valor inventario" },
                   { key: "usuario", label: "Usuario" },
-                  { key: "proyecto", label: "Proyecto" },
+                  { key: "proyecto", label: "Proyecto / contexto" },
                 ]}
               >
                 <tbody>
@@ -512,7 +512,12 @@ export default function KardexPage() {
                       </td>
                       <td>{movement.valor_inventario != null ? formatMoney(movement.valor_inventario) : "—"}</td>
                       <td>{safeDisplayText(movement.created_by_nombre || movement.created_by)}</td>
-                      <td>{safeDisplayText(movement.proyecto_nombre_snapshot || movement.proyecto_id)}</td>
+                      <td>
+                        <div className="inventory-cell-main">{safeDisplayText(movement.proyecto_nombre_snapshot || movement.proyecto_id, "—")}</div>
+                        <div className="inventory-cell-sub">
+                          {safeDisplayText(movement.pm_tarea_nombre_snapshot, "Proyecto general")} · {safeDisplayText(movement.pm_partida_nombre_snapshot, "Sin partida")}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

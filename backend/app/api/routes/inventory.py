@@ -20,6 +20,8 @@ from app.schemas.inventory import (
     CountResponse,
     InventoryBulkMovementCreateRequest,
     InventoryBulkMovementResponse,
+    InventoryProjectListResponse,
+    InventoryProjectMaterialsResponse,
     InventorySummaryResponse,
     CountUpdateRequest,
     InventoryMovementCreateRequest,
@@ -50,6 +52,8 @@ from app.services.inventory import (
     apply_inventory_movement,
     apply_bulk_inventory_movement,
     build_inventory_summary,
+    get_inventory_project_materials,
+    get_inventory_project_movements,
     count_active_warehouses,
     create_warehouse_record,
     dump_image_urls,
@@ -57,6 +61,7 @@ from app.services.inventory import (
     get_material_for_company,
     get_material_item_for_company,
     get_warehouse_for_company,
+    list_inventory_projects,
     lookup_material_by_code,
     list_materials,
     list_recent_movements,
@@ -735,6 +740,10 @@ def create_inventory_movement(
             es_proyecto=payload.es_proyecto,
             proyecto_id=payload.proyecto_id,
             proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
+            pm_tarea_id=payload.pm_tarea_id,
+            pm_tarea_nombre_snapshot=payload.pm_tarea_nombre_snapshot,
+            pm_partida_id=payload.pm_partida_id,
+            pm_partida_nombre_snapshot=payload.pm_partida_nombre_snapshot,
             costo_unitario=payload.costo_unitario,
         )
 
@@ -766,11 +775,60 @@ def create_inventory_movement_bulk(
             es_proyecto=payload.es_proyecto,
             proyecto_id=payload.proyecto_id,
             proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
+            pm_tarea_id=payload.pm_tarea_id,
+            pm_tarea_nombre_snapshot=payload.pm_tarea_nombre_snapshot,
+            pm_partida_id=payload.pm_partida_id,
+            pm_partida_nombre_snapshot=payload.pm_partida_nombre_snapshot,
             notas=payload.notas,
             ip_address=request.client.host if request.client else None,
         )
 
     return run_inventory_write(db, "create_inventory_movement_bulk", operation)
+
+
+@router.get("/projects", response_model=InventoryProjectListResponse)
+def get_inventory_projects(
+    q: str | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> InventoryProjectListResponse:
+    total, items = list_inventory_projects(
+        db,
+        context.empresa.id,
+        q=q,
+        limit=limit,
+        offset=offset,
+    )
+    return InventoryProjectListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/projects/{project_id}/materials", response_model=InventoryProjectMaterialsResponse)
+def get_inventory_project_materials_endpoint(
+    project_id: str,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> InventoryProjectMaterialsResponse:
+    return get_inventory_project_materials(db, empresa_id=context.empresa.id, project_id=project_id)
+
+
+@router.get("/projects/{project_id}/movements", response_model=MovementListResponse)
+def get_inventory_project_movements_endpoint(
+    project_id: str,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> MovementListResponse:
+    total, items = get_inventory_project_movements(
+        db,
+        empresa_id=context.empresa.id,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+    )
+    return MovementListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/transfers", response_model=TransferListResponse)

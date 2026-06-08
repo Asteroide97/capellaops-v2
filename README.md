@@ -1227,6 +1227,45 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - validar que los modales cierran correctamente en éxito
   - validar que el portal externo no expone costos ni información interna
 
+## Inventario-PM Fase 1 - Materiales, consumos y Kardex por proyecto
+
+- Inventario ya es la fuente de verdad para:
+  - materiales
+  - almacenes
+  - existencias
+  - movimientos
+  - kardex
+  - costos de material
+- PM ahora usa Inventario para:
+  - planear materiales por proyecto y tarea
+  - consumir materiales reales desde un almacén
+  - devolver materiales al almacén
+  - mostrar planeado vs consumido
+  - recalcular costo real de materiales del proyecto
+- Cada consumo desde PM:
+  - crea un movimiento de inventario
+  - descuenta stock
+  - queda visible en Kardex
+  - se vincula con proyecto, tarea y partida cuando aplica
+  - actualiza el costo real de materiales en PM
+- Cada devolución desde PM:
+  - crea un movimiento de entrada con referencia de devolución de proyecto
+  - repone stock
+  - mantiene trazabilidad operativa
+  - ajusta el costo real neto del proyecto
+- Inventario ya incluye una vista `Inventario por proyecto` para consultar:
+  - materiales consumidos
+  - devoluciones
+  - costo real de materiales
+  - movimientos ligados a proyectos
+- Pendientes explícitos de esta fase:
+  - reservas de material
+  - requisiciones más avanzadas
+  - órdenes de compra desde PM
+  - recepción parcial
+  - proveedores avanzados
+  - lotes y series
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.

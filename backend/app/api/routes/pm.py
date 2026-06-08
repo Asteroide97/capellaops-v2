@@ -76,6 +76,8 @@ from app.schemas.pm import (
     PMPresupuestoPartidaUpdate,
     PMPresupuestoUpdate,
     PMProyectoMaterialPlanCreate,
+    PMProjectMaterialConsumeRequest,
+    PMProjectMaterialReturnRequest,
     PMProyectoMaterialPlanOut,
     PMProyectoMaterialPlanUpdate,
     PMProyectoMaterialesOut,
@@ -138,6 +140,7 @@ from app.services.pm import (
     create_portal_comment,
     create_project_budget,
     create_project_approval,
+    consume_project_material_from_inventory,
     create_project_material_requisition,
     create_checklist_item,
     create_project,
@@ -203,6 +206,7 @@ from app.services.pm import (
     refresh_project_total_costs,
     reject_project_change,
     reject_estimation,
+    return_project_material_to_inventory,
     return_estimation_to_draft,
     resolve_pm_alert,
     serialize_pm_config,
@@ -497,6 +501,58 @@ def create_project_material_requisition_endpoint(
             project_id=project_id,
             almacen_destino_id=payload.almacen_destino_id,
             items=[{"plan_id": item.plan_id, "cantidad_solicitada": item.cantidad_solicitada} for item in payload.items],
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/projects/{project_id}/materials/consume", response_model=PMProyectoMaterialesOut)
+def consume_project_material_endpoint(
+    project_id: str,
+    payload: PMProjectMaterialConsumeRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoMaterialesOut:
+    return run_pm_write(
+        db,
+        "consume_project_material",
+        lambda: consume_project_material_from_inventory(
+            db,
+            pm_context,
+            project_id=project_id,
+            material_id=payload.material_id,
+            almacen_id=payload.almacen_id,
+            cantidad=payload.cantidad,
+            tarea_id=payload.tarea_id,
+            partida_id=payload.partida_id,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/projects/{project_id}/materials/return", response_model=PMProyectoMaterialesOut)
+def return_project_material_endpoint(
+    project_id: str,
+    payload: PMProjectMaterialReturnRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoMaterialesOut:
+    return run_pm_write(
+        db,
+        "return_project_material",
+        lambda: return_project_material_to_inventory(
+            db,
+            pm_context,
+            project_id=project_id,
+            material_id=payload.material_id,
+            almacen_id=payload.almacen_id,
+            cantidad=payload.cantidad,
+            tarea_id=payload.tarea_id,
+            partida_id=payload.partida_id,
             notas=payload.notas,
             ip_address=request.client.host if request.client else None,
         ),

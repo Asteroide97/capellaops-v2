@@ -11,10 +11,15 @@ from sqlalchemy.orm import Session
 
 from app.models import AuditLog, Empresa, Usuario
 from app.models.inventory import Almacen, Existencia, Material, MovimientoInventario
+from app.models.pm import PMPresupuestoPartida, PMProyecto, PMTarea
 from app.models.procurement import OrdenCompra, Proveedor, Requisicion
 from app.schemas.inventory import (
     InventoryBulkMovementLineCreateRequest,
     InventoryBulkMovementResponse,
+    InventoryProjectListResponse,
+    InventoryProjectMaterialItem,
+    InventoryProjectMaterialsResponse,
+    InventoryProjectSummaryItem,
     MaterialLookupItem,
     MaterialLookupResponse,
     MaterialLookupWarehouseStockItem,
@@ -29,6 +34,7 @@ from app.schemas.inventory import (
     KardexStockItem,
     MaterialItem,
     MovementItem,
+    MovementListResponse,
     StockItem,
     WarehouseItem,
 )
@@ -558,6 +564,66 @@ def get_material_item_for_company(db: Session, empresa_id: str, material_id: str
     )
 
 
+def get_project_for_company_inventory(db: Session, empresa_id: str, project_id: str) -> PMProyecto:
+    project = db.scalar(
+        select(PMProyecto).where(
+            PMProyecto.id == project_id,
+            PMProyecto.empresa_id == empresa_id,
+        )
+    )
+    if not project:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no encontrado.")
+    return project
+
+
+def get_project_task_for_company_inventory(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    task_id: str | None,
+) -> PMTarea | None:
+    normalized_task_id = normalize_optional_text(task_id)
+    if not normalized_task_id:
+        return None
+    task = db.scalar(
+        select(PMTarea).where(
+            PMTarea.id == normalized_task_id,
+            PMTarea.empresa_id == empresa_id,
+        )
+    )
+    if not task or task.proyecto_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La tarea indicada no pertenece al proyecto seleccionado.",
+        )
+    return task
+
+
+def get_budget_item_for_company_inventory(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    item_id: str | None,
+) -> PMPresupuestoPartida | None:
+    normalized_item_id = normalize_optional_text(item_id)
+    if not normalized_item_id:
+        return None
+    item = db.scalar(
+        select(PMPresupuestoPartida).where(
+            PMPresupuestoPartida.id == normalized_item_id,
+            PMPresupuestoPartida.empresa_id == empresa_id,
+        )
+    )
+    if not item or item.proyecto_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La partida indicada no pertenece al proyecto seleccionado.",
+        )
+    return item
+
+
 def lookup_material_by_code(db: Session, empresa_id: str, code: str) -> MaterialLookupResponse:
     raw_code = normalize_optional_text(code)
     if not raw_code:
@@ -697,6 +763,9 @@ def build_movement_item(
     user: Usuario | None = None,
 ) -> MovementItem:
     cost_basis = decimal_or_zero(movement.costo_promedio_snapshot or movement.costo_unitario_snapshot)
+    movement_cost = decimal_or_zero(movement.cantidad) * decimal_or_zero(
+        movement.costo_unitario_snapshot or movement.costo_promedio_snapshot
+    )
     return MovementItem(
         id=movement.id,
         empresa_id=movement.empresa_id,
@@ -721,8 +790,13 @@ def build_movement_item(
         es_proyecto=movement.es_proyecto,
         proyecto_id=movement.proyecto_id,
         proyecto_nombre_snapshot=movement.proyecto_nombre_snapshot,
+        pm_tarea_id=movement.pm_tarea_id,
+        pm_tarea_nombre_snapshot=movement.pm_tarea_nombre_snapshot,
+        pm_partida_id=movement.pm_partida_id,
+        pm_partida_nombre_snapshot=movement.pm_partida_nombre_snapshot,
         costo_unitario_snapshot=movement.costo_unitario_snapshot,
         costo_promedio_snapshot=movement.costo_promedio_snapshot,
+        costo_total_snapshot=movement_cost,
         valor_inventario=decimal_or_zero(movement.cantidad_nueva) * cost_basis if cost_basis else ZERO,
         notas=movement.notas,
         created_by=movement.created_by,
@@ -754,6 +828,10 @@ def apply_inventory_movement(
     es_proyecto: bool = False,
     proyecto_id: str | None = None,
     proyecto_nombre_snapshot: str | None = None,
+    pm_tarea_id: str | None = None,
+    pm_tarea_nombre_snapshot: str | None = None,
+    pm_partida_id: str | None = None,
+    pm_partida_nombre_snapshot: str | None = None,
     costo_unitario: Decimal | None = None,
 ) -> MovementItem:
     validate_inventory_access(user, empresa)
@@ -779,7 +857,7 @@ def apply_inventory_movement(
             )
         movement_quantity = Decimal(cantidad)
         if previous_quantity < movement_quantity:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stock insuficiente.")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No hay stock suficiente en este almacén.")
         next_quantity = previous_quantity - movement_quantity
     elif tipo == "ajuste":
         if cantidad_nueva is None:
@@ -830,6 +908,10 @@ def apply_inventory_movement(
         es_proyecto=bool(es_proyecto),
         proyecto_id=normalize_optional_text(proyecto_id),
         proyecto_nombre_snapshot=normalize_optional_text(proyecto_nombre_snapshot),
+        pm_tarea_id=normalize_optional_text(pm_tarea_id),
+        pm_tarea_nombre_snapshot=normalize_optional_text(pm_tarea_nombre_snapshot),
+        pm_partida_id=normalize_optional_text(pm_partida_id),
+        pm_partida_nombre_snapshot=normalize_optional_text(pm_partida_nombre_snapshot),
         costo_unitario_snapshot=override_cost if override_cost is not None else decimal_or_zero(material.costo_unitario),
         costo_promedio_snapshot=cost_basis,
         notas=normalize_optional_text(notas),
@@ -880,6 +962,10 @@ def apply_bulk_inventory_movement(
     es_proyecto: bool,
     proyecto_id: str | None,
     proyecto_nombre_snapshot: str | None,
+    pm_tarea_id: str | None,
+    pm_tarea_nombre_snapshot: str | None,
+    pm_partida_id: str | None,
+    pm_partida_nombre_snapshot: str | None,
     notas: str | None,
     ip_address: str | None,
 ) -> InventoryBulkMovementResponse:
@@ -914,6 +1000,10 @@ def apply_bulk_inventory_movement(
             es_proyecto=es_proyecto,
             proyecto_id=proyecto_id,
             proyecto_nombre_snapshot=proyecto_nombre_snapshot,
+            pm_tarea_id=pm_tarea_id,
+            pm_tarea_nombre_snapshot=pm_tarea_nombre_snapshot,
+            pm_partida_id=pm_partida_id,
+            pm_partida_nombre_snapshot=pm_partida_nombre_snapshot,
             costo_unitario=item.costo_unitario,
         )
         movements.append(movement)
@@ -925,6 +1015,7 @@ def apply_bulk_inventory_movement(
                 empresa_id=empresa.id,
                 movement_id=movement.id,
                 project_id=normalize_optional_text(proyecto_id),
+                tarea_id=normalize_optional_text(pm_tarea_id),
                 origen="movimiento_manual",
             )
 
@@ -935,6 +1026,353 @@ def apply_bulk_inventory_movement(
         movement_count=len(movements),
         items=movements,
     )
+
+
+def project_movement_cost_total(movement: MovimientoInventario) -> Decimal:
+    unit_cost = decimal_or_zero(movement.costo_unitario_snapshot or movement.costo_promedio_snapshot)
+    return decimal_or_zero(movement.cantidad) * unit_cost
+
+
+def project_movement_sign(movement: MovimientoInventario) -> Decimal:
+    if movement.tipo == "salida":
+        return Decimal("1")
+    if movement.tipo == "entrada" and normalize_optional_text(movement.referencia_tipo) == "DEVOLUCION_PROYECTO":
+        return Decimal("-1")
+    return ZERO
+
+
+def list_project_inventory_movement_rows(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> list[tuple[MovimientoInventario, Almacen, Material, Usuario]]:
+    return db.execute(
+        select(MovimientoInventario, Almacen, Material, Usuario)
+        .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
+        .join(Material, MovimientoInventario.material_id == Material.id)
+        .join(Usuario, MovimientoInventario.created_by == Usuario.id)
+        .where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.es_proyecto == True,
+            MovimientoInventario.proyecto_id == project_id,
+            MovimientoInventario.estatus == "confirmado",
+            or_(
+                MovimientoInventario.tipo == "salida",
+                and_(
+                    MovimientoInventario.tipo == "entrada",
+                    MovimientoInventario.referencia_tipo == "DEVOLUCION_PROYECTO",
+                ),
+            ),
+        )
+        .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
+    ).all()
+
+
+def get_project_material_net_quantity(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    material_id: str,
+    task_id: str | None = None,
+    partida_id: str | None = None,
+) -> Decimal:
+    rows = db.scalars(
+        select(MovimientoInventario).where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.es_proyecto == True,
+            MovimientoInventario.proyecto_id == project_id,
+            MovimientoInventario.material_id == material_id,
+            MovimientoInventario.estatus == "confirmado",
+            or_(
+                MovimientoInventario.tipo == "salida",
+                and_(
+                    MovimientoInventario.tipo == "entrada",
+                    MovimientoInventario.referencia_tipo == "DEVOLUCION_PROYECTO",
+                ),
+            ),
+        )
+    ).all()
+    total = ZERO
+    normalized_task_id = normalize_optional_text(task_id)
+    normalized_partida_id = normalize_optional_text(partida_id)
+    for movement in rows:
+        if normalized_task_id and movement.pm_tarea_id != normalized_task_id:
+            continue
+        if normalized_partida_id and movement.pm_partida_id != normalized_partida_id:
+            continue
+        total += project_movement_sign(movement) * decimal_or_zero(movement.cantidad)
+    return total
+
+
+def consume_material_for_project(
+    db: Session,
+    *,
+    empresa_id: str,
+    proyecto_id: str,
+    material_id: str,
+    almacen_id: str,
+    cantidad: Decimal,
+    tarea_id: str | None = None,
+    partida_id: str | None = None,
+    notas: str | None = None,
+    usuario_id: str | None = None,
+    user: Usuario,
+    empresa: Empresa,
+    ip_address: str | None,
+) -> MovementItem:
+    validate_inventory_access(user, empresa)
+    if empresa.id != empresa_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Empresa inválida para el consumo.")
+    quantity = decimal_or_zero(cantidad)
+    if quantity <= ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad debe ser mayor a cero.")
+
+    project = get_project_for_company_inventory(db, empresa_id, proyecto_id)
+    if not project.activo or str(project.estatus or "").lower() != "activo":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No puedes consumir material de un proyecto inactivo.",
+        )
+    material = get_material_for_company(db, empresa_id, material_id)
+    warehouse = get_warehouse_for_company(db, empresa_id, almacen_id)
+    task = get_project_task_for_company_inventory(db, empresa_id=empresa_id, project_id=project.id, task_id=tarea_id)
+    budget_item = get_budget_item_for_company_inventory(db, empresa_id=empresa_id, project_id=project.id, item_id=partida_id)
+
+    movement = apply_inventory_movement(
+        db,
+        user=user,
+        empresa=empresa,
+        almacen_id=warehouse.id,
+        material_id=material.id,
+        tipo="salida",
+        cantidad=quantity,
+        cantidad_nueva=None,
+        referencia_tipo="CONSUMO_PROYECTO",
+        referencia_id=budget_item.id if budget_item else task.id if task else project.id,
+        notas=notas,
+        ip_address=ip_address,
+        motivo="Consumo para proyecto",
+        entregado_por=user.full_name,
+        es_proyecto=True,
+        proyecto_id=project.id,
+        proyecto_nombre_snapshot=project.nombre,
+        pm_tarea_id=task.id if task else None,
+        pm_tarea_nombre_snapshot=task.titulo if task else None,
+        pm_partida_id=budget_item.id if budget_item else None,
+        pm_partida_nombre_snapshot=budget_item.nombre if budget_item else None,
+        costo_unitario=None,
+    )
+
+    from app.services.pm import create_project_material_consumption_from_movement, refresh_project_material_costs
+
+    create_project_material_consumption_from_movement(
+        db,
+        empresa_id=empresa_id,
+        movement_id=movement.id,
+        project_id=project.id,
+        tarea_id=task.id if task else None,
+        origen="movimiento_manual",
+    )
+    refresh_project_material_costs(db, empresa_id=empresa_id, project_id=project.id)
+    return movement
+
+
+def return_material_from_project(
+    db: Session,
+    *,
+    empresa_id: str,
+    proyecto_id: str,
+    material_id: str,
+    almacen_id: str,
+    cantidad: Decimal,
+    tarea_id: str | None = None,
+    partida_id: str | None = None,
+    notas: str | None = None,
+    usuario_id: str | None = None,
+    user: Usuario,
+    empresa: Empresa,
+    ip_address: str | None,
+) -> MovementItem:
+    validate_inventory_access(user, empresa)
+    if empresa.id != empresa_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Empresa inválida para la devolución.")
+    quantity = decimal_or_zero(cantidad)
+    if quantity <= ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad debe ser mayor a cero.")
+
+    project = get_project_for_company_inventory(db, empresa_id, proyecto_id)
+    if not project.activo or str(project.estatus or "").lower() != "activo":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No puedes devolver material de un proyecto inactivo.",
+        )
+    material = get_material_for_company(db, empresa_id, material_id)
+    warehouse = get_warehouse_for_company(db, empresa_id, almacen_id)
+    task = get_project_task_for_company_inventory(db, empresa_id=empresa_id, project_id=project.id, task_id=tarea_id)
+    budget_item = get_budget_item_for_company_inventory(db, empresa_id=empresa_id, project_id=project.id, item_id=partida_id)
+    net_quantity = get_project_material_net_quantity(
+        db,
+        empresa_id=empresa_id,
+        project_id=project.id,
+        material_id=material.id,
+        task_id=task.id if task else None,
+        partida_id=budget_item.id if budget_item else None,
+    )
+    if net_quantity < quantity:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La devolución excede el material consumido para este proyecto.",
+        )
+
+    movement = apply_inventory_movement(
+        db,
+        user=user,
+        empresa=empresa,
+        almacen_id=warehouse.id,
+        material_id=material.id,
+        tipo="entrada",
+        cantidad=quantity,
+        cantidad_nueva=None,
+        referencia_tipo="DEVOLUCION_PROYECTO",
+        referencia_id=budget_item.id if budget_item else task.id if task else project.id,
+        notas=notas,
+        ip_address=ip_address,
+        motivo="Devolución desde proyecto",
+        recibido_por=user.full_name,
+        es_proyecto=True,
+        proyecto_id=project.id,
+        proyecto_nombre_snapshot=project.nombre,
+        pm_tarea_id=task.id if task else None,
+        pm_tarea_nombre_snapshot=task.titulo if task else None,
+        pm_partida_id=budget_item.id if budget_item else None,
+        pm_partida_nombre_snapshot=budget_item.nombre if budget_item else None,
+        costo_unitario=None,
+    )
+
+    from app.services.pm import refresh_project_material_costs
+
+    refresh_project_material_costs(db, empresa_id=empresa_id, project_id=project.id)
+    return movement
+
+
+def list_inventory_projects(
+    db: Session,
+    empresa_id: str,
+    *,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[int, list[InventoryProjectSummaryItem]]:
+    projects = db.scalars(
+        select(PMProyecto)
+        .where(PMProyecto.empresa_id == empresa_id)
+        .order_by(PMProyecto.nombre.asc(), PMProyecto.created_at.desc())
+    ).all()
+    normalized_query = normalize_query_text(q)
+    items: list[InventoryProjectSummaryItem] = []
+    for project in projects:
+        if normalized_query and normalized_query not in f"{project.nombre} {project.codigo or ''}".lower():
+            continue
+        rows = list_project_inventory_movement_rows(db, empresa_id=empresa_id, project_id=project.id)
+        if not rows:
+            continue
+        total_qty = ZERO
+        total_cost = ZERO
+        last_movement_at = None
+        for movement, _warehouse, _material, _user in rows:
+            sign = project_movement_sign(movement)
+            total_qty += sign * decimal_or_zero(movement.cantidad)
+            total_cost += sign * project_movement_cost_total(movement)
+            if last_movement_at is None or movement.created_at > last_movement_at:
+                last_movement_at = movement.created_at
+        items.append(
+            InventoryProjectSummaryItem(
+                project_id=project.id,
+                nombre=project.nombre,
+                codigo=project.codigo,
+                estatus=project.estatus,
+                total_materiales_consumidos=total_qty,
+                costo_materiales_real=total_cost,
+                movimientos_count=len(rows),
+                ultimo_movimiento_at=last_movement_at,
+            )
+        )
+    total = len(items)
+    return total, items[offset : offset + limit]
+
+
+def get_inventory_project_materials(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> InventoryProjectMaterialsResponse:
+    get_project_for_company_inventory(db, empresa_id, project_id)
+    rows = list_project_inventory_movement_rows(db, empresa_id=empresa_id, project_id=project_id)
+    grouped: dict[str, dict[str, object]] = {}
+    for movement, warehouse, material, _user in rows:
+        bucket = grouped.setdefault(
+            material.id,
+            {
+                "material_id": material.id,
+                "material_sku": material.sku,
+                "material_nombre": material.nombre,
+                "unidad": material.unidad,
+                "cantidad_consumida": ZERO,
+                "costo_total": ZERO,
+                "almacenes_involucrados": set(),
+                "ultima_salida_at": None,
+                "tarea_titulos": set(),
+                "partida_titulos": set(),
+            },
+        )
+        sign = project_movement_sign(movement)
+        bucket["cantidad_consumida"] = decimal_or_zero(bucket["cantidad_consumida"]) + (sign * decimal_or_zero(movement.cantidad))
+        bucket["costo_total"] = decimal_or_zero(bucket["costo_total"]) + (sign * project_movement_cost_total(movement))
+        bucket["almacenes_involucrados"].add(warehouse.nombre)
+        if movement.tipo == "salida":
+            current_last = bucket["ultima_salida_at"]
+            if current_last is None or movement.created_at > current_last:
+                bucket["ultima_salida_at"] = movement.created_at
+        if movement.pm_tarea_nombre_snapshot:
+            bucket["tarea_titulos"].add(movement.pm_tarea_nombre_snapshot)
+        if movement.pm_partida_nombre_snapshot:
+            bucket["partida_titulos"].add(movement.pm_partida_nombre_snapshot)
+
+    items = [
+        InventoryProjectMaterialItem(
+            material_id=str(bucket["material_id"]),
+            material_sku=str(bucket["material_sku"]),
+            material_nombre=str(bucket["material_nombre"]),
+            unidad=str(bucket["unidad"]),
+            cantidad_consumida=decimal_or_zero(bucket["cantidad_consumida"]),
+            costo_total=decimal_or_zero(bucket["costo_total"]),
+            almacenes_involucrados=sorted(str(name) for name in bucket["almacenes_involucrados"]),
+            ultima_salida_at=bucket["ultima_salida_at"],
+            tarea_titulos=sorted(str(name) for name in bucket["tarea_titulos"]),
+            partida_titulos=sorted(str(name) for name in bucket["partida_titulos"]),
+        )
+        for bucket in grouped.values()
+    ]
+    items.sort(key=lambda item: (item.material_nombre.lower(), item.material_sku.lower()))
+    return InventoryProjectMaterialsResponse(project_id=project_id, items=items)
+
+
+def get_inventory_project_movements(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    limit: int = 100,
+    offset: int = 0,
+) -> tuple[int, list[MovementItem]]:
+    get_project_for_company_inventory(db, empresa_id, project_id)
+    rows = list_project_inventory_movement_rows(db, empresa_id=empresa_id, project_id=project_id)
+    total = len(rows)
+    sliced_rows = rows[offset : offset + limit]
+    return total, [build_movement_item(movement, warehouse, material, user) for movement, warehouse, material, user in sliced_rows]
 
 
 def list_warehouses(

@@ -1259,6 +1259,7 @@ class PMProyectoMaterialPlanOut(BaseModel):
     cantidad_consumida_real: Decimal = Decimal("0")
     cantidad_pendiente: Decimal = Decimal("0")
     unidad: str
+    almacen_principal_nombre: str | None = None
     costo_unitario_estimado: Decimal = Decimal("0")
     costo_total_estimado: Decimal = Decimal("0")
     estatus: str
@@ -1276,10 +1277,14 @@ class PMProyectoMaterialConsumoOut(BaseModel):
     proyecto_id: str
     tarea_id: str | None = None
     tarea_titulo: str | None = None
+    partida_id: str | None = None
+    partida_nombre: str | None = None
     material_id: str
     material_nombre_snapshot: str
     material_sku_snapshot: str
     movimiento_id: str | None = None
+    almacen_id: str | None = None
+    almacen_nombre: str | None = None
     requisicion_id: str | None = None
     requisicion_detalle_id: str | None = None
     cantidad_consumida: Decimal
@@ -1312,6 +1317,24 @@ class PMProyectoMaterialesOut(BaseModel):
     summary: PMProyectoMaterialSummaryOut
     plans: list[PMProyectoMaterialPlanOut] = Field(default_factory=list)
     consumptions: list[PMProyectoMaterialConsumoOut] = Field(default_factory=list)
+
+
+class PMProjectMaterialConsumeRequest(BaseModel):
+    material_id: str
+    almacen_id: str
+    cantidad: Decimal = Field(gt=0)
+    tarea_id: str | None = None
+    partida_id: str | None = None
+    notas: str | None = None
+
+
+class PMProjectMaterialReturnRequest(BaseModel):
+    material_id: str
+    almacen_id: str
+    cantidad: Decimal = Field(gt=0)
+    tarea_id: str | None = None
+    partida_id: str | None = None
+    notas: str | None = None
 
 
 class PMCreateProjectRequisitionItem(BaseModel):

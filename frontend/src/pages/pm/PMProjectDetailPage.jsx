@@ -1740,7 +1740,16 @@ export default function PMProjectDetailPage() {
       ) : null}
 
       {activeView === "materiales" ? (
-        <PMProjectMaterialsTab empresaId={empresaId} project={project} projectId={id} token={token} />
+        <PMProjectMaterialsTab
+          canEdit={canEditProjectUi}
+          canManage={canManagePmUi}
+          empresaId={empresaId}
+          onChanged={() => loadProjectBundle({ background: true })}
+          projectEditable={projectEditable}
+          project={project}
+          projectId={id}
+          token={token}
+        />
       ) : null}
 
       {activeView === "presupuesto" ? (

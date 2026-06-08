@@ -245,6 +245,10 @@ class InventoryMovementCreateRequest(BaseModel):
     es_proyecto: bool = False
     proyecto_id: str | None = Field(default=None, max_length=64)
     proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    pm_tarea_id: str | None = Field(default=None, max_length=64)
+    pm_tarea_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    pm_partida_id: str | None = Field(default=None, max_length=64)
+    pm_partida_nombre_snapshot: str | None = Field(default=None, max_length=180)
     costo_unitario: Decimal | None = Field(default=None, ge=0)
     notas: str | None = Field(default=None, max_length=2000)
 
@@ -270,6 +274,10 @@ class InventoryBulkMovementCreateRequest(BaseModel):
     es_proyecto: bool = False
     proyecto_id: str | None = Field(default=None, max_length=64)
     proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    pm_tarea_id: str | None = Field(default=None, max_length=64)
+    pm_tarea_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    pm_partida_id: str | None = Field(default=None, max_length=64)
+    pm_partida_nombre_snapshot: str | None = Field(default=None, max_length=180)
     notas: str | None = Field(default=None, max_length=2000)
     items: list[InventoryBulkMovementLineCreateRequest] = Field(min_length=1, max_length=100)
 
@@ -298,8 +306,13 @@ class MovementItem(BaseModel):
     es_proyecto: bool = False
     proyecto_id: str | None = None
     proyecto_nombre_snapshot: str | None = None
+    pm_tarea_id: str | None = None
+    pm_tarea_nombre_snapshot: str | None = None
+    pm_partida_id: str | None = None
+    pm_partida_nombre_snapshot: str | None = None
     costo_unitario_snapshot: Decimal | None = None
     costo_promedio_snapshot: Decimal | None = None
+    costo_total_snapshot: Decimal | None = None
     valor_inventario: Decimal | None = None
     notas: str | None = None
     created_by: str
@@ -334,6 +347,42 @@ class KardexResponse(BaseModel):
     existencia_total: Decimal
     stock_por_almacen: list[KardexStockItem]
     movements: list[MovementItem]
+
+
+class InventoryProjectSummaryItem(BaseModel):
+    project_id: str
+    nombre: str
+    codigo: str | None = None
+    estatus: str
+    total_materiales_consumidos: Decimal = Decimal("0")
+    costo_materiales_real: Decimal = Decimal("0")
+    movimientos_count: int = 0
+    ultimo_movimiento_at: datetime | None = None
+
+
+class InventoryProjectListResponse(BaseModel):
+    items: list[InventoryProjectSummaryItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class InventoryProjectMaterialItem(BaseModel):
+    material_id: str
+    material_sku: str
+    material_nombre: str
+    unidad: str
+    cantidad_consumida: Decimal = Decimal("0")
+    costo_total: Decimal = Decimal("0")
+    almacenes_involucrados: list[str] = Field(default_factory=list)
+    ultima_salida_at: datetime | None = None
+    tarea_titulos: list[str] = Field(default_factory=list)
+    partida_titulos: list[str] = Field(default_factory=list)
+
+
+class InventoryProjectMaterialsResponse(BaseModel):
+    project_id: str
+    items: list[InventoryProjectMaterialItem] = Field(default_factory=list)
 
 
 class TransferDetailCreateRequest(BaseModel):

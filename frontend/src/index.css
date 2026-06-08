@@ -1813,6 +1813,16 @@ textarea {
   font-size: 0.88rem;
 }
 
+.inventory-row-selected {
+  background: rgba(24, 78, 58, 0.08);
+}
+
+.inventory-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 1rem 0;
+}
+
 .inventory-badge-stack {
   display: grid;
   gap: 0.45rem;

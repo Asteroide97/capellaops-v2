@@ -13,7 +13,7 @@ from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.api.deps import TenantContext
-from app.models import AuditLog, EmpresaModulo, EmpresaUsuario, Material, MovimientoInventario, Requisicion, RequisicionDetalle, Usuario
+from app.models import Almacen, AuditLog, Empresa, EmpresaModulo, EmpresaUsuario, Material, MovimientoInventario, Requisicion, RequisicionDetalle, Usuario
 from app.models.pm import (
     EmpresaPMConfig,
     PMAprobacion,
@@ -3879,17 +3879,83 @@ def calculate_material_consumed_quantity(
     material_id: str,
     task_id: str | None,
 ) -> Decimal:
+    movement_rows = db.scalars(
+        select(MovimientoInventario).where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.es_proyecto == True,
+            MovimientoInventario.proyecto_id == project_id,
+            MovimientoInventario.material_id == material_id,
+            MovimientoInventario.estatus == "confirmado",
+            or_(
+                MovimientoInventario.tipo == "salida",
+                and_(
+                    MovimientoInventario.tipo == "entrada",
+                    MovimientoInventario.referencia_tipo == "DEVOLUCION_PROYECTO",
+                ),
+            ),
+        )
+    ).all()
+    total = ZERO
+    normalized_task_id = normalize_optional_text(task_id)
+    for movement in movement_rows:
+        movement_task_id = normalize_optional_text(movement.pm_tarea_id)
+        if normalized_task_id:
+            if movement_task_id != normalized_task_id:
+                continue
+        elif movement_task_id is not None:
+            continue
+        sign = Decimal("1") if movement.tipo == "salida" else Decimal("-1")
+        total += sign * decimal_or_zero(movement.cantidad)
+
     query = select(func.coalesce(func.sum(PMProyectoMaterialConsumo.cantidad_consumida), 0)).where(
         PMProyectoMaterialConsumo.empresa_id == empresa_id,
         PMProyectoMaterialConsumo.proyecto_id == project_id,
         PMProyectoMaterialConsumo.material_id == material_id,
         PMProyectoMaterialConsumo.activo == True,
+        PMProyectoMaterialConsumo.movimiento_id.is_(None),
     )
     if task_id:
         query = query.where(PMProyectoMaterialConsumo.tarea_id == task_id)
     else:
         query = query.where(PMProyectoMaterialConsumo.tarea_id.is_(None))
-    return decimal_or_zero(db.scalar(query))
+    return total + decimal_or_zero(db.scalar(query))
+
+
+def build_project_material_usage_map(
+    movement_rows: list[tuple[MovimientoInventario, str]],
+    manual_consumptions: list[PMProyectoMaterialConsumo],
+) -> dict[tuple[str, str | None], dict[str, Decimal | str | None]]:
+    usage: dict[tuple[str, str | None], dict[str, Decimal | str | None]] = {}
+    for movement, warehouse_name in movement_rows:
+        key = (movement.material_id, normalize_optional_text(movement.pm_tarea_id))
+        bucket = usage.setdefault(
+            key,
+            {
+                "cantidad": ZERO,
+                "almacen_principal_nombre": None,
+                "updated_at": None,
+            },
+        )
+        sign = Decimal("1") if movement.tipo == "salida" else Decimal("-1")
+        bucket["cantidad"] = decimal_or_zero(bucket["cantidad"]) + (sign * decimal_or_zero(movement.cantidad))
+        updated_at = bucket["updated_at"]
+        if updated_at is None or movement.created_at > updated_at:
+            bucket["updated_at"] = movement.created_at
+            bucket["almacen_principal_nombre"] = warehouse_name
+
+    for consumption in manual_consumptions:
+        key = (consumption.material_id, normalize_optional_text(consumption.tarea_id))
+        bucket = usage.setdefault(
+            key,
+            {
+                "cantidad": ZERO,
+                "almacen_principal_nombre": None,
+                "updated_at": None,
+            },
+        )
+        bucket["cantidad"] = decimal_or_zero(bucket["cantidad"]) + decimal_or_zero(consumption.cantidad_consumida)
+
+    return usage
 
 
 def resolve_material_plan_status(
@@ -3907,8 +3973,13 @@ def resolve_material_plan_status(
     return "planeado"
 
 
-def serialize_project_material_plan(db: Session, plan: PMProyectoMaterialPlan) -> PMProyectoMaterialPlanOut:
-    consumed = calculate_material_consumed_quantity(
+def serialize_project_material_plan(
+    db: Session,
+    plan: PMProyectoMaterialPlan,
+    usage_map: dict[tuple[str, str | None], dict[str, Decimal | str | None]] | None = None,
+) -> PMProyectoMaterialPlanOut:
+    usage = (usage_map or {}).get((plan.material_id, normalize_optional_text(plan.tarea_id)))
+    consumed = decimal_or_zero(usage["cantidad"]) if usage else calculate_material_consumed_quantity(
         db,
         empresa_id=plan.empresa_id,
         project_id=plan.proyecto_id,
@@ -3935,6 +4006,7 @@ def serialize_project_material_plan(db: Session, plan: PMProyectoMaterialPlan) -
         cantidad_consumida_real=consumed,
         cantidad_pendiente=pending,
         unidad=plan.unidad,
+        almacen_principal_nombre=usage["almacen_principal_nombre"] if usage else None,
         costo_unitario_estimado=decimal_or_zero(plan.costo_unitario_estimado),
         costo_total_estimado=decimal_or_zero(plan.costo_total_estimado),
         estatus=resolve_material_plan_status(
@@ -3964,10 +4036,14 @@ def serialize_project_material_consumption(
         proyecto_id=consumption.proyecto_id,
         tarea_id=consumption.tarea_id,
         tarea_titulo=task_title,
+        partida_id=None,
+        partida_nombre=None,
         material_id=consumption.material_id,
         material_nombre_snapshot=consumption.material_nombre_snapshot,
         material_sku_snapshot=consumption.material_sku_snapshot,
         movimiento_id=consumption.movimiento_id,
+        almacen_id=None,
+        almacen_nombre=None,
         requisicion_id=consumption.requisicion_id,
         requisicion_detalle_id=consumption.requisicion_detalle_id,
         cantidad_consumida=decimal_or_zero(consumption.cantidad_consumida),
@@ -3981,6 +4057,57 @@ def serialize_project_material_consumption(
         created_by=consumption.created_by,
         created_at=consumption.created_at,
         updated_at=consumption.updated_at,
+    )
+
+
+def serialize_project_material_movement_event(
+    movement: MovimientoInventario,
+    *,
+    warehouse_name: str,
+    material_name: str,
+    material_sku: str,
+    material_unit: str,
+) -> PMProyectoMaterialConsumoOut:
+    unit_cost = decimal_or_zero(
+        movement.costo_promedio_snapshot or movement.costo_unitario_snapshot
+    )
+    quantity = decimal_or_zero(movement.cantidad)
+    is_return = movement.tipo == "entrada" and normalize_optional_text(movement.referencia_tipo) == "DEVOLUCION_PROYECTO"
+    signed_quantity = -quantity if is_return else quantity
+    signed_total = -(quantity * unit_cost) if is_return else quantity * unit_cost
+    if is_return:
+        origin = "devolucion_proyecto"
+    elif normalize_optional_text(movement.referencia_tipo) == "requisition_fulfill":
+        origin = "requisicion_surtida"
+    else:
+        origin = "movimiento_manual"
+    return PMProyectoMaterialConsumoOut(
+        id=movement.id,
+        empresa_id=movement.empresa_id,
+        proyecto_id=normalize_optional_text(movement.proyecto_id) or "",
+        tarea_id=movement.pm_tarea_id,
+        tarea_titulo=movement.pm_tarea_nombre_snapshot,
+        partida_id=movement.pm_partida_id,
+        partida_nombre=movement.pm_partida_nombre_snapshot,
+        material_id=movement.material_id,
+        material_nombre_snapshot=material_name,
+        material_sku_snapshot=material_sku,
+        movimiento_id=movement.id,
+        almacen_id=movement.almacen_id,
+        almacen_nombre=warehouse_name,
+        requisicion_id=movement.referencia_id if normalize_optional_text(movement.referencia_tipo) == "requisition_fulfill" else None,
+        requisicion_detalle_id=None,
+        cantidad_consumida=signed_quantity,
+        unidad=material_unit,
+        costo_unitario_snapshot=unit_cost,
+        costo_total_snapshot=signed_total,
+        origen=origin,
+        documento_referencia=movement.documento_referencia,
+        notas=movement.notas,
+        activo=movement.estatus != "cancelado",
+        created_by=movement.created_by,
+        created_at=movement.created_at,
+        updated_at=movement.created_at,
     )
 
 
@@ -4034,13 +4161,35 @@ def refresh_project_material_costs(
             PMProyectoMaterialPlan.activo == True,
         )
     ).all()
-    consumptions = db.scalars(
+    manual_consumptions = db.scalars(
         select(PMProyectoMaterialConsumo).where(
             PMProyectoMaterialConsumo.empresa_id == empresa_id,
             PMProyectoMaterialConsumo.proyecto_id == project_id,
             PMProyectoMaterialConsumo.activo == True,
+            PMProyectoMaterialConsumo.movimiento_id.is_(None),
         )
     ).all()
+    movement_rows = db.execute(
+        select(MovimientoInventario, Almacen.nombre)
+        .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
+        .where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.es_proyecto == True,
+            MovimientoInventario.proyecto_id == project_id,
+            MovimientoInventario.estatus == "confirmado",
+            or_(
+                MovimientoInventario.tipo == "salida",
+                and_(
+                    MovimientoInventario.tipo == "entrada",
+                    MovimientoInventario.referencia_tipo == "DEVOLUCION_PROYECTO",
+                ),
+            ),
+        )
+    ).all()
+    usage_map = build_project_material_usage_map(
+        [(movement, warehouse_name) for movement, warehouse_name in movement_rows],
+        manual_consumptions,
+    )
 
     total_estimated_cost = ZERO
     total_real_cost = ZERO
@@ -4051,13 +4200,8 @@ def refresh_project_material_costs(
 
     for plan in plans:
         planned_qty = decimal_or_zero(plan.cantidad_planificada)
-        consumed_qty = calculate_material_consumed_quantity(
-            db,
-            empresa_id=empresa_id,
-            project_id=project_id,
-            material_id=plan.material_id,
-            task_id=plan.tarea_id,
-        )
+        usage = usage_map.get((plan.material_id, normalize_optional_text(plan.tarea_id)))
+        consumed_qty = decimal_or_zero(usage["cantidad"]) if usage else ZERO
         status_name = resolve_material_plan_status(
             cantidad_planificada=planned_qty,
             cantidad_consumida=consumed_qty,
@@ -4073,7 +4217,15 @@ def refresh_project_material_costs(
         total_estimated_cost += decimal_or_zero(plan.costo_total_estimado)
         total_planned_quantity += planned_qty
 
-    for consumption in consumptions:
+    for movement, _warehouse_name in movement_rows:
+        sign = Decimal("1") if movement.tipo == "salida" else Decimal("-1")
+        total_real_cost += sign * (
+            decimal_or_zero(movement.cantidad)
+            * decimal_or_zero(movement.costo_promedio_snapshot or movement.costo_unitario_snapshot)
+        )
+        total_consumed_quantity += sign * decimal_or_zero(movement.cantidad)
+
+    for consumption in manual_consumptions:
         total_real_cost += decimal_or_zero(consumption.costo_total_snapshot)
         total_consumed_quantity += decimal_or_zero(consumption.cantidad_consumida)
 
@@ -4100,7 +4252,7 @@ def refresh_project_material_costs(
         total_materiales_planeados=total_planned_quantity,
         total_materiales_consumidos=total_consumed_quantity,
         planes_count=len(plans),
-        consumos_count=len(consumptions),
+        consumos_count=len(movement_rows) + len(manual_consumptions),
     )
 
 
@@ -4121,20 +4273,134 @@ def list_project_material_plan(
         )
         .order_by(PMProyectoMaterialPlan.created_at.asc(), PMProyectoMaterialPlan.id.asc())
     ).all()
-    consumptions = db.scalars(
+    movement_rows = db.execute(
+        select(MovimientoInventario, Almacen.nombre, Material.nombre, Material.sku, Material.unidad)
+        .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
+        .join(Material, MovimientoInventario.material_id == Material.id)
+        .where(
+            MovimientoInventario.empresa_id == pm_context.empresa_id,
+            MovimientoInventario.es_proyecto == True,
+            MovimientoInventario.proyecto_id == project_id,
+            MovimientoInventario.estatus == "confirmado",
+            or_(
+                MovimientoInventario.tipo == "salida",
+                and_(
+                    MovimientoInventario.tipo == "entrada",
+                    MovimientoInventario.referencia_tipo == "DEVOLUCION_PROYECTO",
+                ),
+            ),
+        )
+        .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
+    ).all()
+    manual_consumptions = db.scalars(
         select(PMProyectoMaterialConsumo)
         .where(
             PMProyectoMaterialConsumo.empresa_id == pm_context.empresa_id,
             PMProyectoMaterialConsumo.proyecto_id == project_id,
             PMProyectoMaterialConsumo.activo == True,
+            PMProyectoMaterialConsumo.movimiento_id.is_(None),
         )
         .order_by(desc(PMProyectoMaterialConsumo.created_at), desc(PMProyectoMaterialConsumo.id))
     ).all()
+    usage_map = build_project_material_usage_map(
+        [(movement, warehouse_name) for movement, warehouse_name, _material_name, _material_sku, _unit in movement_rows],
+        manual_consumptions,
+    )
+    consumption_events = [
+        serialize_project_material_movement_event(
+            movement,
+            warehouse_name=warehouse_name,
+            material_name=material_name,
+            material_sku=material_sku,
+            material_unit=unit,
+        )
+        for movement, warehouse_name, material_name, material_sku, unit in movement_rows
+    ]
+    consumption_events.extend(serialize_project_material_consumption(db, item) for item in manual_consumptions)
+    consumption_events.sort(key=lambda item: item.created_at, reverse=True)
     return PMProyectoMaterialesOut(
         summary=summary,
-        plans=[serialize_project_material_plan(db, plan) for plan in plans],
-        consumptions=[serialize_project_material_consumption(db, item) for item in consumptions],
+        plans=[serialize_project_material_plan(db, plan, usage_map) for plan in plans],
+        consumptions=consumption_events,
     )
+
+
+def consume_project_material_from_inventory(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    material_id: str,
+    almacen_id: str,
+    cantidad: Decimal,
+    tarea_id: str | None,
+    partida_id: str | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMProyectoMaterialesOut:
+    ensure_pm_materials_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para consumir materiales de este proyecto PM.")
+    company = db.scalar(select(Empresa).where(Empresa.id == pm_context.empresa_id))
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no encontrada.")
+
+    from app.services.inventory import consume_material_for_project
+
+    consume_material_for_project(
+        db,
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project_id,
+        material_id=material_id,
+        almacen_id=almacen_id,
+        cantidad=cantidad,
+        tarea_id=tarea_id,
+        partida_id=partida_id,
+        notas=notas,
+        usuario_id=pm_context.user.id,
+        user=pm_context.user,
+        empresa=company,
+        ip_address=ip_address,
+    )
+    return list_project_material_plan(db, pm_context, project_id)
+
+
+def return_project_material_to_inventory(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    material_id: str,
+    almacen_id: str,
+    cantidad: Decimal,
+    tarea_id: str | None,
+    partida_id: str | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> PMProyectoMaterialesOut:
+    ensure_pm_materials_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para devolver materiales de este proyecto PM.")
+    company = db.scalar(select(Empresa).where(Empresa.id == pm_context.empresa_id))
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Empresa no encontrada.")
+
+    from app.services.inventory import return_material_from_project
+
+    return_material_from_project(
+        db,
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project_id,
+        material_id=material_id,
+        almacen_id=almacen_id,
+        cantidad=cantidad,
+        tarea_id=tarea_id,
+        partida_id=partida_id,
+        notas=notas,
+        usuario_id=pm_context.user.id,
+        user=pm_context.user,
+        empresa=company,
+        ip_address=ip_address,
+    )
+    return list_project_material_plan(db, pm_context, project_id)
 
 
 def add_project_material_plan(
@@ -4344,7 +4610,7 @@ def create_project_material_consumption_from_movement(
         return None
 
     project = get_project_for_company(db, empresa_id, resolved_project_id)
-    task = resolve_project_task(db, empresa_id, project.id, tarea_id)
+    task = resolve_project_task(db, empresa_id, project.id, tarea_id or movement.pm_tarea_id)
     material = get_material_for_company_pm(db, empresa_id, movement.material_id)
     normalized_origin = normalize_material_consumption_origin(origen)
     quantity = decimal_or_zero(movement.cantidad)
