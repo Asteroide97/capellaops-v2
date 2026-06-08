@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import TenantContext, get_tenant_context
 from app.db.session import get_db
 from app.schemas.procurement import (
+    RequisitionApproveRequest,
     PurchaseOrderCreateRequest,
     PurchaseOrderDetailCreateRequest,
     PurchaseOrderDetailUpdateRequest,
@@ -22,6 +23,7 @@ from app.schemas.procurement import (
     RequisitionDetailUpdateRequest,
     RequisitionFulfillRequest,
     RequisitionListResponse,
+    RequisitionRejectRequest,
     RequisitionResponse,
     RequisitionUpdateRequest,
     SupplierCreateRequest,
@@ -33,8 +35,9 @@ from app.services.inventory import get_warehouse_for_company, validate_inventory
 from app.services.procurement import (
     add_purchase_order_detail,
     add_requisition_detail,
+    approve_requisition,
     cancel_purchase_order,
-    change_requisition_status,
+    cancel_requisition,
     create_purchase_order,
     create_purchase_order_from_requisition,
     create_requisition,
@@ -49,9 +52,11 @@ from app.services.procurement import (
     list_purchase_orders,
     list_requisitions,
     list_suppliers,
+    reject_requisition,
     receive_purchase_order,
     serialize_purchase_order_response,
     serialize_requisition_response,
+    submit_requisition,
     serialize_supplier,
     update_purchase_order,
     update_purchase_order_detail,
@@ -69,6 +74,15 @@ T = TypeVar("T")
 def get_inventory_context(context: TenantContext = Depends(get_tenant_context)) -> TenantContext:
     validate_inventory_access(context.user, context.empresa)
     return context
+
+
+def can_manage_inventory_requisitions(context: TenantContext) -> bool:
+    return bool(getattr(context.user, "is_superadmin", False) or context.membership.role in {"owner", "admin"})
+
+
+def ensure_inventory_requisition_manager(context: TenantContext, detail: str) -> None:
+    if not can_manage_inventory_requisitions(context):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 
 def run_inventory_write(db: Session, action: str, operation: Callable[[], T]) -> T:
@@ -189,6 +203,9 @@ def get_requisitions(
     estatus: str | None = None,
     proveedor_sugerido_id: str | None = None,
     proyecto: str | None = None,
+    proyecto_id: str | None = None,
+    material_id: str | None = None,
+    es_proyecto: bool | None = None,
     fecha_desde: date | None = None,
     fecha_hasta: date | None = None,
     limit: int = Query(default=25, ge=1, le=100),
@@ -205,6 +222,9 @@ def get_requisitions(
         estatus=estatus,
         proveedor_sugerido_id=proveedor_sugerido_id,
         proyecto=proyecto,
+        proyecto_id=proyecto_id,
+        material_id=material_id,
+        es_proyecto=es_proyecto,
         fecha_desde=fecha_desde,
         fecha_hasta=fecha_hasta,
         limit=limit,
@@ -233,6 +253,9 @@ def create_requisition_endpoint(
             es_proyecto=payload.es_proyecto,
             proyecto_id=payload.proyecto_id,
             proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
+            prioridad=payload.prioridad,
+            tarea_id=payload.tarea_id,
+            partida_id=payload.partida_id,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -270,6 +293,9 @@ def update_requisition_endpoint(
             es_proyecto=payload.es_proyecto,
             proyecto_id=payload.proyecto_id,
             proyecto_nombre_snapshot=payload.proyecto_nombre_snapshot,
+            prioridad=payload.prioridad,
+            tarea_id=payload.tarea_id,
+            partida_id=payload.partida_id,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -357,14 +383,11 @@ def submit_requisition_endpoint(
     return run_inventory_write(
         db,
         "submit_requisition",
-        lambda: change_requisition_status(
+        lambda: submit_requisition(
             db,
             empresa=context.empresa,
             user=context.user,
             requisition_id=requisition_id,
-            next_status="enviada",
-            allowed_current_statuses={"borrador"},
-            action="inventory.requisition.submit",
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -373,21 +396,21 @@ def submit_requisition_endpoint(
 @router.post("/requisitions/{requisition_id}/approve", response_model=RequisitionResponse)
 def approve_requisition_endpoint(
     requisition_id: str,
+    payload: RequisitionApproveRequest,
     request: Request,
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> RequisitionResponse:
+    ensure_inventory_requisition_manager(context, "No tienes permiso para aprobar requisiciones.")
     return run_inventory_write(
         db,
         "approve_requisition",
-        lambda: change_requisition_status(
+        lambda: approve_requisition(
             db,
             empresa=context.empresa,
             user=context.user,
             requisition_id=requisition_id,
-            next_status="aprobada",
-            allowed_current_statuses={"enviada"},
-            action="inventory.requisition.approve",
+            items=payload.items,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -396,21 +419,21 @@ def approve_requisition_endpoint(
 @router.post("/requisitions/{requisition_id}/reject", response_model=RequisitionResponse)
 def reject_requisition_endpoint(
     requisition_id: str,
+    payload: RequisitionRejectRequest,
     request: Request,
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> RequisitionResponse:
+    ensure_inventory_requisition_manager(context, "No tienes permiso para rechazar requisiciones.")
     return run_inventory_write(
         db,
         "reject_requisition",
-        lambda: change_requisition_status(
+        lambda: reject_requisition(
             db,
             empresa=context.empresa,
             user=context.user,
             requisition_id=requisition_id,
-            next_status="rechazada",
-            allowed_current_statuses={"enviada"},
-            action="inventory.requisition.reject",
+            motivo_rechazo=payload.motivo_rechazo,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -423,17 +446,22 @@ def cancel_requisition_endpoint(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> RequisitionResponse:
+    requisition = get_requisition_for_company(db, context.empresa.id, requisition_id)
+    if requisition.estatus == "aprobada":
+        ensure_inventory_requisition_manager(context, "No tienes permiso para cancelar requisiciones aprobadas.")
+    elif not can_manage_inventory_requisitions(context) and requisition.solicitante_user_id != context.user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para cancelar esta requisición.",
+        )
     return run_inventory_write(
         db,
         "cancel_requisition",
-        lambda: change_requisition_status(
+        lambda: cancel_requisition(
             db,
             empresa=context.empresa,
             user=context.user,
             requisition_id=requisition_id,
-            next_status="cancelada",
-            allowed_current_statuses={"borrador", "enviada", "aprobada"},
-            action="inventory.requisition.cancel",
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -447,6 +475,7 @@ def fulfill_requisition_endpoint(
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> RequisitionResponse:
+    ensure_inventory_requisition_manager(context, "No tienes permiso para surtir requisiciones.")
     get_warehouse_for_company(db, context.empresa.id, payload.almacen_id)
     return run_inventory_write(
         db,

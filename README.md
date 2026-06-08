@@ -1266,6 +1266,39 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - proveedores avanzados
   - lotes y series
 
+## Inventario-PM Fase 2 - Requisiciones desde PM
+
+- PM ya puede crear requisiciones de materiales ligadas a:
+  - proyecto
+  - tarea
+  - partida
+- La requisición vive sobre el flujo real de Inventario y ya soporta:
+  - borrador
+  - envío
+  - aprobación
+  - rechazo
+  - cancelación
+  - surtido total
+  - surtido parcial
+- Inventario ahora revisa las requisiciones de proyecto desde `Inventario > Requisiciones` y puede:
+  - aprobar cantidades por línea
+  - rechazar con motivo
+  - surtir desde almacén
+  - dejar pendiente lo faltante cuando no hay stock suficiente
+- Al surtir una requisición de proyecto:
+  - se reutiliza la lógica de consumo real de Inventario-PM Fase 1
+  - se crea movimiento `CONSUMO_PROYECTO`
+  - baja el stock del almacén
+  - Kardex refleja la salida ligada a requisición, proyecto, tarea y partida
+  - `Inventario > Proyectos` muestra el consumo resultante
+  - PM actualiza consumido real y costo real de materiales del proyecto
+- Pendientes explícitos de esta fase:
+  - conversión automática a orden de compra para requisiciones de proyecto
+  - reservas de material
+  - continuidad completa con compras avanzadas
+  - proveedores avanzados
+  - lotes, series y caducidades
+
 ## Inventario Fase 1.2
 
 - Todo dato de inventario se guarda con `empresa_id`.

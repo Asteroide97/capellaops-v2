@@ -59,6 +59,9 @@ class RequisitionCreateRequest(BaseModel):
     es_proyecto: bool = False
     proyecto_id: str | None = Field(default=None, max_length=64)
     proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    prioridad: str = Field(default="normal", min_length=4, max_length=20)
+    tarea_id: str | None = Field(default=None, max_length=64)
+    partida_id: str | None = Field(default=None, max_length=64)
 
 
 class RequisitionUpdateRequest(BaseModel):
@@ -68,6 +71,9 @@ class RequisitionUpdateRequest(BaseModel):
     es_proyecto: bool | None = None
     proyecto_id: str | None = Field(default=None, max_length=64)
     proyecto_nombre_snapshot: str | None = Field(default=None, max_length=180)
+    prioridad: str | None = Field(default=None, min_length=4, max_length=20)
+    tarea_id: str | None = Field(default=None, max_length=64)
+    partida_id: str | None = Field(default=None, max_length=64)
 
 
 class RequisitionDetailCreateRequest(BaseModel):
@@ -96,6 +102,7 @@ class RequisitionDetailItem(BaseModel):
     material_nombre: str
     material_unidad: str
     cantidad: Decimal
+    cantidad_aprobada: Decimal
     cantidad_surtida: Decimal
     cantidad_pendiente: Decimal
     estado_linea: str
@@ -120,6 +127,8 @@ class RequisitionMovementTraceItem(BaseModel):
     notas: str | None = None
     proyecto_id: str | None = None
     proyecto_nombre_snapshot: str | None = None
+    tarea_nombre_snapshot: str | None = None
+    partida_nombre_snapshot: str | None = None
     created_by_nombre: str | None = None
 
 
@@ -136,12 +145,25 @@ class RequisitionItem(BaseModel):
     es_proyecto: bool = False
     proyecto_id: str | None = None
     proyecto_nombre_snapshot: str | None = None
+    prioridad: str = "normal"
+    tarea_id: str | None = None
+    tarea_nombre_snapshot: str | None = None
+    partida_id: str | None = None
+    partida_nombre_snapshot: str | None = None
+    aprobador_user_id: str | None = None
     estatus: str
     total_renglones: int
     cantidad_total_solicitada: Decimal
+    cantidad_total_aprobada: Decimal
     cantidad_total_surtida: Decimal
     cantidad_total_pendiente: Decimal
     notas: str | None = None
+    motivo_rechazo: str | None = None
+    submitted_at: datetime | None = None
+    approved_at: datetime | None = None
+    rejected_at: datetime | None = None
+    fulfilled_at: datetime | None = None
+    cancelled_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     details_count: int
@@ -168,6 +190,19 @@ class RequisitionCreatePurchaseOrderRequest(BaseModel):
 class RequisitionFulfillLineRequest(BaseModel):
     detail_id: str = Field(min_length=1, max_length=64)
     cantidad_surtir: Decimal = Field(gt=0)
+
+
+class RequisitionApproveLineRequest(BaseModel):
+    detail_id: str = Field(min_length=1, max_length=64)
+    cantidad_aprobada: Decimal = Field(gt=0)
+
+
+class RequisitionApproveRequest(BaseModel):
+    items: list[RequisitionApproveLineRequest] = Field(default_factory=list)
+
+
+class RequisitionRejectRequest(BaseModel):
+    motivo_rechazo: str = Field(min_length=3, max_length=2000)
 
 
 class RequisitionFulfillRequest(BaseModel):

@@ -5,7 +5,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -15,11 +15,13 @@ from app.models import (
     OrdenCompra,
     OrdenCompraDetalle,
     PMProyecto,
+    PMProyectoMaterialConsumo,
     Proveedor,
     Requisicion,
     RequisicionDetalle,
     Usuario,
 )
+from app.models.pm import PMPresupuestoPartida, PMTarea
 from app.models.inventory import Existencia, Material, MovimientoInventario
 from app.schemas.procurement import (
     PurchaseOrderDetailItem,
@@ -44,6 +46,7 @@ from app.services.inventory import (
     normalize_code,
     normalize_optional_text,
     normalize_required_text,
+    resolve_inventory_unit_cost,
 )
 
 
@@ -53,6 +56,9 @@ def generate_procurement_folio(prefix: str) -> str:
     return f"{prefix}-{timestamp}-{suffix}"
 
 
+ALLOWED_REQUISITION_PRIORITY = {"baja", "normal", "alta", "urgente"}
+
+
 def normalize_optional_folio(value: str | None, prefix: str) -> str:
     if value is None:
         return generate_procurement_folio(prefix)
@@ -60,6 +66,17 @@ def normalize_optional_folio(value: str | None, prefix: str) -> str:
     if not cleaned:
         return generate_procurement_folio(prefix)
     return normalize_code(cleaned, "Folio")
+
+
+def normalize_requisition_priority(value: str | None) -> str:
+    normalized = normalize_optional_text(value) or "normal"
+    normalized = normalized.lower()
+    if normalized not in ALLOWED_REQUISITION_PRIORITY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prioridad inválida. Usa baja, normal, alta o urgente.",
+        )
+    return normalized
 
 
 def create_audit_log(
@@ -281,8 +298,15 @@ def get_requisition_detail(db: Session, requisition_id: str, detail_id: str) -> 
     return detail
 
 
+def get_requisition_detail_approved_quantity(detail: RequisicionDetalle) -> Decimal:
+    approved = decimal_or_zero(detail.cantidad_aprobada)
+    if approved > ZERO:
+        return approved
+    return decimal_or_zero(detail.cantidad)
+
+
 def get_requisition_detail_pending_quantity(detail: RequisicionDetalle) -> Decimal:
-    requested = decimal_or_zero(detail.cantidad)
+    requested = get_requisition_detail_approved_quantity(detail)
     fulfilled = decimal_or_zero(detail.cantidad_surtida)
     pending = requested - fulfilled
     return pending if pending > ZERO else ZERO
@@ -332,6 +356,7 @@ def serialize_requisition_detail(db: Session, empresa_id: str, detail: Requisici
         material_nombre=detail.material.nombre,
         material_unidad=detail.material.unidad,
         cantidad=detail.cantidad,
+        cantidad_aprobada=get_requisition_detail_approved_quantity(detail),
         cantidad_surtida=decimal_or_zero(detail.cantidad_surtida),
         cantidad_pendiente=get_requisition_detail_pending_quantity(detail),
         estado_linea=get_requisition_line_state(detail),
@@ -359,11 +384,13 @@ def build_requisition_item(
     details_count: int,
     *,
     cantidad_total_solicitada: Decimal = ZERO,
+    cantidad_total_aprobada: Decimal = ZERO,
     cantidad_total_surtida: Decimal = ZERO,
     proveedor_sugerido_nombre: str | None = None,
     orden_compra_folio: str | None = None,
 ) -> RequisitionItem:
-    cantidad_pendiente = cantidad_total_solicitada - cantidad_total_surtida
+    approved_total = decimal_or_zero(cantidad_total_aprobada) or decimal_or_zero(cantidad_total_solicitada)
+    cantidad_pendiente = approved_total - cantidad_total_surtida
     if cantidad_pendiente < ZERO:
         cantidad_pendiente = ZERO
     return RequisitionItem(
@@ -385,12 +412,25 @@ def build_requisition_item(
         es_proyecto=bool(requisition.es_proyecto),
         proyecto_id=requisition.proyecto_id,
         proyecto_nombre_snapshot=requisition.proyecto_nombre_snapshot,
+        prioridad=requisition.prioridad or "normal",
+        tarea_id=requisition.tarea_id,
+        tarea_nombre_snapshot=requisition.tarea_nombre_snapshot,
+        partida_id=requisition.partida_id,
+        partida_nombre_snapshot=requisition.partida_nombre_snapshot,
+        aprobador_user_id=requisition.aprobador_user_id,
         estatus=requisition.estatus,
         total_renglones=details_count,
         cantidad_total_solicitada=decimal_or_zero(cantidad_total_solicitada),
+        cantidad_total_aprobada=approved_total,
         cantidad_total_surtida=decimal_or_zero(cantidad_total_surtida),
         cantidad_total_pendiente=decimal_or_zero(cantidad_pendiente),
         notas=requisition.notas,
+        motivo_rechazo=requisition.motivo_rechazo,
+        submitted_at=requisition.submitted_at,
+        approved_at=requisition.approved_at,
+        rejected_at=requisition.rejected_at,
+        fulfilled_at=requisition.fulfilled_at,
+        cancelled_at=requisition.cancelled_at,
         created_at=requisition.created_at,
         updated_at=requisition.updated_at,
         details_count=details_count,
@@ -417,6 +457,8 @@ def build_requisition_movement_trace_item(
         notas=movement.notas,
         proyecto_id=movement.proyecto_id,
         proyecto_nombre_snapshot=movement.proyecto_nombre_snapshot,
+        tarea_nombre_snapshot=movement.pm_tarea_nombre_snapshot,
+        partida_nombre_snapshot=movement.pm_partida_nombre_snapshot,
         created_by_nombre=created_by.full_name if created_by else None,
     )
 
@@ -431,10 +473,22 @@ def list_requisition_movements(
         .join(Almacen, Almacen.id == MovimientoInventario.almacen_id)
         .join(Material, Material.id == MovimientoInventario.material_id)
         .join(Usuario, Usuario.id == MovimientoInventario.created_by)
+        .outerjoin(
+            PMProyectoMaterialConsumo,
+            and_(
+                PMProyectoMaterialConsumo.movimiento_id == MovimientoInventario.id,
+                PMProyectoMaterialConsumo.empresa_id == empresa_id,
+            ),
+        )
         .where(
             MovimientoInventario.empresa_id == empresa_id,
-            MovimientoInventario.referencia_tipo == "requisition_fulfill",
-            MovimientoInventario.referencia_id == requisition_id,
+            or_(
+                and_(
+                    MovimientoInventario.referencia_tipo == "requisition_fulfill",
+                    MovimientoInventario.referencia_id == requisition_id,
+                ),
+                PMProyectoMaterialConsumo.requisicion_id == requisition_id,
+            ),
         )
         .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
     ).all()
@@ -454,6 +508,7 @@ def serialize_requisition_response(db: Session, requisition: Requisicion) -> Req
         requisition,
         len(details),
         cantidad_total_solicitada=sum((decimal_or_zero(item.cantidad) for item in details), ZERO),
+        cantidad_total_aprobada=sum((get_requisition_detail_approved_quantity(item) for item in details), ZERO),
         cantidad_total_surtida=sum((decimal_or_zero(item.cantidad_surtida) for item in details), ZERO),
         proveedor_sugerido_nombre=requisition.proveedor_sugerido.nombre if requisition.proveedor_sugerido else None,
         orden_compra_folio=requisition.orden_compra.folio if requisition.orden_compra else None,
@@ -473,23 +528,47 @@ def list_requisitions(
     estatus: str | None = None,
     proveedor_sugerido_id: str | None = None,
     proyecto: str | None = None,
+    proyecto_id: str | None = None,
+    material_id: str | None = None,
+    es_proyecto: bool | None = None,
     fecha_desde: date | None = None,
     fecha_hasta: date | None = None,
     limit: int = 25,
     offset: int = 0,
 ) -> tuple[int, list[RequisitionItem]]:
     id_query = select(Requisicion.id).where(Requisicion.empresa_id == empresa_id)
-    id_query = apply_text_search(id_query, q, Requisicion.folio, Requisicion.notas)
+    needs_detail_join = bool(material_id or q)
+    if needs_detail_join:
+        id_query = id_query.join(RequisicionDetalle, RequisicionDetalle.requisicion_id == Requisicion.id)
+        id_query = id_query.join(Material, Material.id == RequisicionDetalle.material_id)
+    if q:
+        id_query = apply_text_search(
+            id_query,
+            q,
+            Requisicion.folio,
+            Requisicion.notas,
+            Requisicion.proyecto_nombre_snapshot,
+            Material.nombre if needs_detail_join else Requisicion.folio,
+            Material.sku if needs_detail_join else Requisicion.folio,
+        )
     if estatus:
         id_query = id_query.where(Requisicion.estatus == estatus)
     if proveedor_sugerido_id:
         id_query = id_query.where(Requisicion.proveedor_sugerido_id == proveedor_sugerido_id)
     if proyecto:
         id_query = apply_text_search(id_query, proyecto, Requisicion.proyecto_nombre_snapshot, Requisicion.proyecto_id)
+    if proyecto_id:
+        id_query = id_query.where(Requisicion.proyecto_id == proyecto_id)
+    if material_id:
+        id_query = id_query.where(RequisicionDetalle.material_id == material_id)
+    if es_proyecto is not None:
+        id_query = id_query.where(Requisicion.es_proyecto == es_proyecto)
     if fecha_desde:
         id_query = id_query.where(Requisicion.created_at >= to_start_of_day(fecha_desde))
     if fecha_hasta:
         id_query = id_query.where(Requisicion.created_at <= to_end_of_day(fecha_hasta))
+
+    id_query = id_query.distinct()
 
     total = count_rows(db, id_query)
     page_ids = db.scalars(
@@ -503,6 +582,7 @@ def list_requisitions(
             RequisicionDetalle.requisicion_id.label("requisicion_id"),
             func.count(RequisicionDetalle.id).label("detail_count"),
             func.coalesce(func.sum(RequisicionDetalle.cantidad), 0).label("requested_quantity"),
+            func.coalesce(func.sum(func.coalesce(RequisicionDetalle.cantidad_aprobada, RequisicionDetalle.cantidad)), 0).label("approved_quantity"),
             func.coalesce(func.sum(RequisicionDetalle.cantidad_surtida), 0).label("fulfilled_quantity"),
         )
         .where(RequisicionDetalle.requisicion_id.in_(page_ids))
@@ -517,6 +597,7 @@ def list_requisitions(
             OrdenCompra.folio.label("orden_compra_folio"),
             func.coalesce(details_count_subquery.c.detail_count, 0).label("detail_count"),
             func.coalesce(details_count_subquery.c.requested_quantity, 0).label("requested_quantity"),
+            func.coalesce(details_count_subquery.c.approved_quantity, 0).label("approved_quantity"),
             func.coalesce(details_count_subquery.c.fulfilled_quantity, 0).label("fulfilled_quantity"),
         )
         .outerjoin(Proveedor, Proveedor.id == Requisicion.proveedor_sugerido_id)
@@ -530,11 +611,12 @@ def list_requisitions(
             item,
             int(detail_count),
             cantidad_total_solicitada=Decimal(requested_quantity or ZERO),
+            cantidad_total_aprobada=Decimal(approved_quantity or ZERO),
             cantidad_total_surtida=Decimal(fulfilled_quantity or ZERO),
             proveedor_sugerido_nombre=proveedor_sugerido_nombre,
             orden_compra_folio=orden_compra_folio,
         )
-        for item, proveedor_sugerido_nombre, orden_compra_folio, detail_count, requested_quantity, fulfilled_quantity in rows
+        for item, proveedor_sugerido_nombre, orden_compra_folio, detail_count, requested_quantity, approved_quantity, fulfilled_quantity in rows
     ]
 
 
@@ -618,6 +700,68 @@ def resolve_requisition_project_context(
     return True, None, normalized_project_name
 
 
+def resolve_requisition_task_context(
+    db: Session,
+    empresa_id: str,
+    *,
+    project_id: str | None,
+    task_id: str | None,
+) -> tuple[str | None, str | None]:
+    normalized_task_id = normalize_optional_text(task_id)
+    if not normalized_task_id:
+        return None, None
+    if not project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La requisición necesita un proyecto para asociar una tarea.",
+        )
+    task = db.scalar(
+        select(PMTarea).where(
+            PMTarea.id == normalized_task_id,
+            PMTarea.empresa_id == empresa_id,
+            PMTarea.proyecto_id == project_id,
+            PMTarea.activo == True,
+        )
+    )
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="La tarea no pertenece a este proyecto.",
+        )
+    return task.id, task.titulo
+
+
+def resolve_requisition_budget_item_context(
+    db: Session,
+    empresa_id: str,
+    *,
+    project_id: str | None,
+    partida_id: str | None,
+) -> tuple[str | None, str | None]:
+    normalized_partida_id = normalize_optional_text(partida_id)
+    if not normalized_partida_id:
+        return None, None
+    if not project_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La requisición necesita un proyecto para asociar una partida.",
+        )
+    item = db.scalar(
+        select(PMPresupuestoPartida).where(
+            PMPresupuestoPartida.id == normalized_partida_id,
+            PMPresupuestoPartida.empresa_id == empresa_id,
+            PMPresupuestoPartida.proyecto_id == project_id,
+            PMPresupuestoPartida.activo == True,
+        )
+    )
+    if not item or str(item.tipo or "").lower() != "partida":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="La partida no pertenece a este proyecto.",
+        )
+    return item.id, item.nombre
+
+
 def create_requisition(
     db: Session,
     *,
@@ -629,6 +773,9 @@ def create_requisition(
     es_proyecto: bool = False,
     proyecto_id: str | None = None,
     proyecto_nombre_snapshot: str | None = None,
+    prioridad: str | None = None,
+    tarea_id: str | None = None,
+    partida_id: str | None = None,
     ip_address: str | None,
 ) -> RequisitionResponse:
     next_folio = normalize_optional_folio(folio, "REQ")
@@ -645,6 +792,18 @@ def create_requisition(
         proyecto_id=proyecto_id,
         proyecto_nombre_snapshot=proyecto_nombre_snapshot,
     )
+    next_tarea_id, next_tarea_nombre = resolve_requisition_task_context(
+        db,
+        empresa.id,
+        project_id=next_proyecto_id,
+        task_id=tarea_id,
+    )
+    next_partida_id, next_partida_nombre = resolve_requisition_budget_item_context(
+        db,
+        empresa.id,
+        project_id=next_proyecto_id,
+        partida_id=partida_id,
+    )
 
     requisition = Requisicion(
         empresa_id=empresa.id,
@@ -654,6 +813,11 @@ def create_requisition(
         es_proyecto=next_es_proyecto,
         proyecto_id=next_proyecto_id,
         proyecto_nombre_snapshot=next_proyecto_nombre,
+        prioridad=normalize_requisition_priority(prioridad),
+        tarea_id=next_tarea_id,
+        tarea_nombre_snapshot=next_tarea_nombre,
+        partida_id=next_partida_id,
+        partida_nombre_snapshot=next_partida_nombre,
         estatus="borrador",
         notas=normalize_optional_text(notas),
     )
@@ -671,6 +835,7 @@ def create_requisition(
             "folio": requisition.folio,
             "es_proyecto": requisition.es_proyecto,
             "proveedor_sugerido_id": requisition.proveedor_sugerido_id,
+            "prioridad": requisition.prioridad,
         },
     )
     return serialize_requisition_response(db, requisition)
@@ -753,6 +918,9 @@ def update_requisition(
     es_proyecto: bool | None,
     proyecto_id: str | None,
     proyecto_nombre_snapshot: str | None,
+    prioridad: str | None,
+    tarea_id: str | None,
+    partida_id: str | None,
     ip_address: str | None,
 ) -> RequisitionResponse:
     requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
@@ -770,6 +938,8 @@ def update_requisition(
             if normalize_optional_text(proveedor_sugerido_id)
             else None
         )
+    if prioridad is not None:
+        requisition.prioridad = normalize_requisition_priority(prioridad)
     if es_proyecto is not None or proyecto_id is not None or proyecto_nombre_snapshot is not None:
         next_es_proyecto, next_proyecto_id, next_proyecto_nombre = resolve_requisition_project_context(
             db,
@@ -781,6 +951,26 @@ def update_requisition(
         requisition.es_proyecto = next_es_proyecto
         requisition.proyecto_id = next_proyecto_id
         requisition.proyecto_nombre_snapshot = next_proyecto_nombre
+    target_project_id = requisition.proyecto_id if requisition.es_proyecto else None
+    if tarea_id is not None:
+        requisition.tarea_id, requisition.tarea_nombre_snapshot = resolve_requisition_task_context(
+            db,
+            empresa.id,
+            project_id=target_project_id,
+            task_id=tarea_id,
+        )
+    if partida_id is not None:
+        requisition.partida_id, requisition.partida_nombre_snapshot = resolve_requisition_budget_item_context(
+            db,
+            empresa.id,
+            project_id=target_project_id,
+            partida_id=partida_id,
+        )
+    if not requisition.es_proyecto:
+        requisition.tarea_id = None
+        requisition.tarea_nombre_snapshot = None
+        requisition.partida_id = None
+        requisition.partida_nombre_snapshot = None
 
     create_audit_log(
         db,
@@ -794,6 +984,7 @@ def update_requisition(
             "folio": requisition.folio,
             "es_proyecto": requisition.es_proyecto,
             "proveedor_sugerido_id": requisition.proveedor_sugerido_id,
+            "prioridad": requisition.prioridad,
         },
     )
     db.flush()
@@ -965,6 +1156,196 @@ def change_requisition_status(
     return serialize_requisition_response(db, requisition)
 
 
+def submit_requisition(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    requisition_id: str,
+    ip_address: str | None,
+) -> RequisitionResponse:
+    requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
+    if requisition.estatus != "borrador":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo las requisiciones en borrador pueden enviarse.",
+        )
+    details = db.scalars(
+        select(RequisicionDetalle).where(RequisicionDetalle.requisicion_id == requisition.id)
+    ).all()
+    if not details:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La requisición necesita al menos un material.",
+        )
+    requisition.estatus = "enviada"
+    requisition.submitted_at = datetime.now(timezone.utc)
+    requisition.motivo_rechazo = None
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="inventory.requisition.submit",
+        entity_name="requisicion",
+        entity_id=requisition.id,
+        ip_address=ip_address,
+        metadata_json={"estatus": requisition.estatus},
+    )
+    db.flush()
+    db.refresh(requisition)
+    return serialize_requisition_response(db, requisition)
+
+
+def approve_requisition(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    requisition_id: str,
+    items: list,
+    ip_address: str | None,
+) -> RequisitionResponse:
+    requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
+    if requisition.estatus != "enviada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo las requisiciones enviadas pueden aprobarse.",
+        )
+    details = db.scalars(
+        select(RequisicionDetalle)
+        .where(RequisicionDetalle.requisicion_id == requisition.id)
+        .with_for_update()
+    ).all()
+    if not details:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La requisición necesita al menos un material.",
+        )
+    approved_map = {item.detail_id: Decimal(item.cantidad_aprobada) for item in items or []}
+    for detail in details:
+        next_approved = approved_map.get(detail.id, Decimal(detail.cantidad))
+        if next_approved <= ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La cantidad aprobada debe ser mayor a cero.",
+            )
+        if next_approved > Decimal(detail.cantidad):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La cantidad aprobada no puede exceder la cantidad solicitada.",
+            )
+        detail.cantidad_aprobada = next_approved
+    requisition.estatus = "aprobada"
+    requisition.approved_at = datetime.now(timezone.utc)
+    requisition.aprobador_user_id = user.id
+    requisition.motivo_rechazo = None
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="inventory.requisition.approve",
+        entity_name="requisicion",
+        entity_id=requisition.id,
+        ip_address=ip_address,
+        metadata_json={"estatus": requisition.estatus},
+    )
+    db.flush()
+    db.refresh(requisition)
+    return serialize_requisition_response(db, requisition)
+
+
+def reject_requisition(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    requisition_id: str,
+    motivo_rechazo: str,
+    ip_address: str | None,
+) -> RequisitionResponse:
+    requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
+    if requisition.estatus not in {"enviada", "aprobada"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo las requisiciones enviadas o aprobadas pueden rechazarse.",
+        )
+    fulfilled_lines = db.scalar(
+        select(func.count(RequisicionDetalle.id)).where(
+            RequisicionDetalle.requisicion_id == requisition.id,
+            RequisicionDetalle.cantidad_surtida > ZERO,
+        )
+    ) or 0
+    if fulfilled_lines > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No puedes rechazar una requisición que ya tiene surtidos registrados.",
+        )
+    requisition.estatus = "rechazada"
+    requisition.rejected_at = datetime.now(timezone.utc)
+    requisition.aprobador_user_id = user.id
+    requisition.motivo_rechazo = normalize_required_text(motivo_rechazo, "Motivo de rechazo")
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="inventory.requisition.reject",
+        entity_name="requisicion",
+        entity_id=requisition.id,
+        ip_address=ip_address,
+        metadata_json={"estatus": requisition.estatus},
+    )
+    db.flush()
+    db.refresh(requisition)
+    return serialize_requisition_response(db, requisition)
+
+
+def cancel_requisition(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    requisition_id: str,
+    ip_address: str | None,
+) -> RequisitionResponse:
+    requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
+    if requisition.estatus not in {"borrador", "enviada", "aprobada"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La requisición no puede cancelarse en su estatus actual.",
+        )
+    if requisition.orden_compra_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La requisición ya está vinculada a una orden de compra.",
+        )
+    fulfilled_lines = db.scalar(
+        select(func.count(RequisicionDetalle.id)).where(
+            RequisicionDetalle.requisicion_id == requisition.id,
+            RequisicionDetalle.cantidad_surtida > ZERO,
+        )
+    ) or 0
+    if fulfilled_lines > 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se puede cancelar una requisición que ya tiene surtidos aplicados.",
+        )
+    requisition.estatus = "cancelada"
+    requisition.cancelled_at = datetime.now(timezone.utc)
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="inventory.requisition.cancel",
+        entity_name="requisicion",
+        entity_id=requisition.id,
+        ip_address=ip_address,
+        metadata_json={"estatus": requisition.estatus},
+    )
+    db.flush()
+    db.refresh(requisition)
+    return serialize_requisition_response(db, requisition)
+
+
 def fulfill_requisition(
     db: Session,
     *,
@@ -1017,6 +1398,7 @@ def fulfill_requisition(
             else requisition.proyecto_nombre_snapshot
         ),
     )
+    from app.services.inventory import consume_material_for_project
 
     applied_any = False
     seen_detail_ids: set[str] = set()
@@ -1044,6 +1426,20 @@ def fulfill_requisition(
             )
         if fulfill_quantity <= ZERO:
             continue
+        available_stock = decimal_or_zero(
+            db.scalar(
+                select(Existencia.cantidad).where(
+                    Existencia.empresa_id == empresa.id,
+                    Existencia.almacen_id == warehouse.id,
+                    Existencia.material_id == detail.material_id,
+                )
+            )
+        )
+        if fulfill_quantity > available_stock:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No hay stock suficiente para surtir esta cantidad.",
+            )
 
         movement_notes = "\n".join(
             part
@@ -1053,27 +1449,47 @@ def fulfill_requisition(
             ]
             if part
         )
-        movement = apply_inventory_movement(
-            db,
-            user=user,
-            empresa=empresa,
-            almacen_id=warehouse.id,
-            material_id=detail.material_id,
-            tipo="salida",
-            cantidad=fulfill_quantity,
-            cantidad_nueva=None,
-            referencia_tipo="requisition_fulfill",
-            referencia_id=requisition.id,
-            notas=movement_notes or None,
-            ip_address=ip_address,
-            motivo="Surtido de requisicion",
-            entregado_por=user.full_name,
-            documento_referencia=documento_referencia,
-            es_proyecto=movement_is_project,
-            proyecto_id=movement_project_id,
-            proyecto_nombre_snapshot=movement_project_name,
-        )
         if movement_project_id:
+            movement = consume_material_for_project(
+                db,
+                empresa_id=empresa.id,
+                proyecto_id=movement_project_id,
+                material_id=detail.material_id,
+                almacen_id=warehouse.id,
+                cantidad=fulfill_quantity,
+                tarea_id=requisition.tarea_id,
+                partida_id=requisition.partida_id,
+                notas=movement_notes or None,
+                usuario_id=user.id,
+                user=user,
+                empresa=empresa,
+                ip_address=ip_address,
+                documento_referencia=documento_referencia,
+                requisition_id=requisition.id,
+                requisition_detail_id=detail.id,
+                origin="requisicion_surtida",
+            )
+        else:
+            movement = apply_inventory_movement(
+                db,
+                user=user,
+                empresa=empresa,
+                almacen_id=warehouse.id,
+                material_id=detail.material_id,
+                tipo="salida",
+                cantidad=fulfill_quantity,
+                cantidad_nueva=None,
+                referencia_tipo="requisition_fulfill",
+                referencia_id=requisition.id,
+                notas=movement_notes or None,
+                ip_address=ip_address,
+                motivo="Surtido de requisicion",
+                entregado_por=user.full_name,
+                documento_referencia=documento_referencia,
+                es_proyecto=movement_is_project,
+                proyecto_id=movement_project_id,
+                proyecto_nombre_snapshot=movement_project_name,
+            )
             from app.services.pm import create_project_material_consumption_from_movement
 
             create_project_material_consumption_from_movement(
@@ -1102,6 +1518,7 @@ def fulfill_requisition(
     details = list(detail_map.values())
     if all(get_requisition_detail_pending_quantity(detail) <= ZERO for detail in details):
         requisition.estatus = "surtida"
+        requisition.fulfilled_at = datetime.now(timezone.utc)
     else:
         requisition.estatus = "parcial"
 

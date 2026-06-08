@@ -1340,10 +1340,13 @@ class PMProjectMaterialReturnRequest(BaseModel):
 class PMCreateProjectRequisitionItem(BaseModel):
     plan_id: str
     cantidad_solicitada: Decimal = Field(gt=0)
+    notas: str | None = None
 
 
 class PMCreateProjectRequisitionRequest(BaseModel):
-    almacen_destino_id: str
+    tarea_id: str | None = None
+    partida_id: str | None = None
+    prioridad: str = Field(default="normal", min_length=4, max_length=20)
     items: list[PMCreateProjectRequisitionItem] = Field(min_length=1)
     notas: str | None = None
 

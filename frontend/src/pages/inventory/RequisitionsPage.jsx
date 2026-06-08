@@ -61,6 +61,7 @@ const defaultFilters = {
   estatus: "",
   proveedor_sugerido_id: "",
   proyecto: "",
+  material_id: "",
   fecha_desde: "",
   fecha_hasta: "",
   limit: DEFAULT_PAGE_SIZE,
@@ -158,6 +159,24 @@ function getRequisitionStatusLabel(status) {
   return labels[status] ?? safeDisplayText(status);
 }
 
+function getPriorityLabel(priority) {
+  const labels = {
+    baja: "Baja",
+    normal: "Normal",
+    alta: "Alta",
+    urgente: "Urgente",
+  };
+  return labels[String(priority ?? "").toLowerCase()] ?? safeDisplayText(priority, "Normal");
+}
+
+function getPriorityTone(priority) {
+  const normalized = String(priority ?? "").toLowerCase();
+  if (normalized === "urgente") return "danger";
+  if (normalized === "alta") return "warning";
+  if (normalized === "baja") return "neutral";
+  return "info";
+}
+
 
 function getLineStateLabel(status) {
   const labels = {
@@ -185,7 +204,7 @@ function canApproveRequisition(requisition) {
 
 
 function canRejectRequisition(requisition) {
-  return requisition?.estatus === "enviada";
+  return ["enviada", "aprobada"].includes(requisition?.estatus) && Number(requisition?.cantidad_total_surtida ?? 0) <= 0;
 }
 
 
@@ -212,6 +231,9 @@ function canFulfillRequisition(requisition) {
 
 function canCreatePurchaseOrder(requisition) {
   if (!requisition) {
+    return false;
+  }
+  if (requisition.es_proyecto) {
     return false;
   }
   return ["aprobada", "parcial"].includes(requisition.estatus) && !requisition.orden_compra_id && Number(requisition.cantidad_total_pendiente ?? 0) > 0;
@@ -632,13 +654,28 @@ export default function RequisitionsPage() {
     setSaving(true);
     resetFeedback();
     try {
-      const handlers = {
-        submit: submitRequisition,
-        approve: approveRequisition,
-        reject: rejectRequisition,
-        cancel: cancelRequisition,
-      };
-      const response = await handlers[action]({ requisitionId, token, empresaId });
+      let response;
+      if (action === "submit") {
+        response = await submitRequisition({ requisitionId, token, empresaId });
+      } else if (action === "approve") {
+        response = await approveRequisition({ requisitionId, token, empresaId, payload: { items: [] } });
+      } else if (action === "reject") {
+        const motivoRechazo = window.prompt("Indica el motivo del rechazo.");
+        if (!motivoRechazo || !motivoRechazo.trim()) {
+          setSaving(false);
+          return null;
+        }
+        response = await rejectRequisition({
+          requisitionId,
+          token,
+          empresaId,
+          payload: { motivo_rechazo: motivoRechazo.trim() },
+        });
+      } else if (action === "cancel") {
+        response = await cancelRequisition({ requisitionId, token, empresaId });
+      } else {
+        throw new Error("Acción de requisición no soportada.");
+      }
       setSelectedRequisition(response);
       if (detailOpen && selectedRequisition?.id === requisitionId) {
         setSelectedRequisition(response);
@@ -646,16 +683,16 @@ export default function RequisitionsPage() {
       await loadRequisitionList(filters);
       setSuccess(
         action === "submit"
-          ? "Requisicion enviada."
+          ? "Requisición enviada."
           : action === "approve"
-            ? "Requisicion aprobada."
+            ? "Requisición aprobada."
             : action === "reject"
-              ? "Requisicion rechazada."
-              : "Requisicion cancelada.",
+              ? "Requisición rechazada."
+              : "Requisición cancelada.",
       );
       return response;
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cambiar el estatus de la requisicion.");
+      setError(requestError.message || "No se pudo cambiar el estatus de la requisición.");
       return null;
     } finally {
       setSaving(false);
@@ -853,7 +890,7 @@ export default function RequisitionsPage() {
       <PageHeader
         eyebrow="Inventario operativo"
         title="Requisiciones"
-        subtitle="Solicitudes internas de materiales para surtido o compra."
+        subtitle="Solicitudes de materiales vinculadas a proyectos."
         actions={
           <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateEditor} tone="primary" type="button">
             Nueva requisicion
@@ -863,22 +900,22 @@ export default function RequisitionsPage() {
 
       {(error || success) && (
         <div className={`inventory-form-note ${error ? "inventory-form-note-danger" : "inventory-form-note-success"}`}>
-          <strong>{error ? "No se pudo completar la operacion" : "Operacion completada"}</strong>
+          <strong>{error ? "No se pudo completar la operación" : "Operación completada"}</strong>
           <p className="table-note">{error || success}</p>
         </div>
       )}
 
       <section className="inventory-metric-grid inventory-metric-grid-4">
-        <MetricCard icon={<ClipboardListIcon />} label="Borradores" meta="Pendientes de enviar" tone="neutral" value={requisitionCounts.borrador} />
-        <MetricCard icon={<Send size={18} strokeWidth={1.9} />} label="Pendientes de aprobacion" meta="Enviadas" tone="info" value={requisitionCounts.enviada} />
-        <MetricCard icon={<CheckCircle2 size={18} strokeWidth={1.9} />} label="Aprobadas" meta="Listas para surtir u OC" tone="success" value={requisitionCounts.aprobada} />
-        <MetricCard icon={<PackageCheck size={18} strokeWidth={1.9} />} label="Parciales" meta="Surtido parcial" tone="warning" value={requisitionCounts.parcial} />
-        <MetricCard icon={<Boxes size={18} strokeWidth={1.9} />} label="Surtidas" meta="Cerradas desde inventario" tone="success" value={requisitionCounts.surtida} />
-        <MetricCard icon={<ShoppingCart size={18} strokeWidth={1.9} />} label="Convertidas a OC" meta="Con compra vinculada" tone="info" value={requisitionCounts.convertida_a_oc} />
-        <MetricCard icon={<Boxes size={18} strokeWidth={1.9} />} label="Pendiente" meta="Unidades aun sin surtir" tone="warning" value={formatCompactNumber(totalPending)} />
+        <MetricCard icon={<Send size={18} strokeWidth={1.9} />} label="Pendientes" meta="Enviadas para revisión" tone="info" value={requisitionCounts.enviada} />
+        <MetricCard icon={<CheckCircle2 size={18} strokeWidth={1.9} />} label="Aprobadas" meta="Listas para surtir" tone="success" value={requisitionCounts.aprobada} />
+        <MetricCard icon={<PackageCheck size={18} strokeWidth={1.9} />} label="Surtidas parcial" meta="Con faltantes por surtir" tone="warning" value={requisitionCounts.parcial} />
+        <MetricCard icon={<Boxes size={18} strokeWidth={1.9} />} label="Surtidas" meta="Completadas desde inventario" tone="success" value={requisitionCounts.surtida} />
+        <MetricCard icon={<ClipboardListIcon />} label="Borradores" meta="Aún sin enviar" tone="neutral" value={requisitionCounts.borrador} />
+        <MetricCard icon={<ShoppingCart size={18} strokeWidth={1.9} />} label="Convertidas a OC" meta="Solo requisiciones generales" tone="info" value={requisitionCounts.convertida_a_oc} />
+        <MetricCard icon={<Boxes size={18} strokeWidth={1.9} />} label="Pendiente" meta="Unidades aún sin surtir" tone="warning" value={formatCompactNumber(totalPending)} />
       </section>
 
-      <FilterCard title="Filtros" subtitle="Busqueda operativa de solicitudes.">
+      <FilterCard title="Filtros" subtitle="Búsqueda operativa de solicitudes.">
         <form className="inventory-filter-toolbar" onSubmit={handleFilterSubmit}>
           <div className="inventory-toolbar-grid">
             <SearchInput
@@ -906,6 +943,27 @@ export default function RequisitionsPage() {
                 ))}
               </select>
             </Field>
+            <Field label="Proyecto">
+              <input
+                onChange={(event) => setFilters((current) => ({ ...current, proyecto: event.target.value }))}
+                placeholder="Nombre o referencia"
+                type="text"
+                value={filters.proyecto}
+              />
+            </Field>
+            <Field label="Material">
+              <select
+                onChange={(event) => setFilters((current) => ({ ...current, material_id: event.target.value }))}
+                value={filters.material_id}
+              >
+                <option value="">Todos</option>
+                {materials.map((material) => (
+                  <option key={material.id} value={material.id}>
+                    {safeDisplayText(material.nombre)}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Field label="Proveedor sugerido">
               <select
                 onChange={(event) => setFilters((current) => ({ ...current, proveedor_sugerido_id: event.target.value }))}
@@ -918,14 +976,6 @@ export default function RequisitionsPage() {
                   </option>
                 ))}
               </select>
-            </Field>
-            <Field label="Proyecto">
-              <input
-                onChange={(event) => setFilters((current) => ({ ...current, proyecto: event.target.value }))}
-                placeholder="Nombre o referencia"
-                type="text"
-                value={filters.proyecto}
-              />
             </Field>
             <Field label="Fecha desde">
               <input
@@ -960,7 +1010,7 @@ export default function RequisitionsPage() {
         </form>
       </FilterCard>
 
-      <DataCard subtitle="Solicitudes internas registradas por empresa." title="Requisiciones">
+      <DataCard subtitle="Solicitudes de materiales vinculadas a proyectos." title="Requisiciones">
         <ResultMeta label="requisiciones" loaded={requisitions.length} total={meta.total} />
         {requisitions.length === 0 ? (
           <EmptyState
@@ -969,12 +1019,12 @@ export default function RequisitionsPage() {
                 Nueva requisicion
               </ActionButton>
             }
-            note="Crea la primera solicitud para comenzar el flujo de surtido o compra."
+            note="No hay requisiciones registradas todavía. Las solicitudes creadas desde PM aparecerán aquí para aprobación y surtido."
             title="No hay requisiciones."
           />
         ) : (
           <>
-            <DataTable columns={["Folio", "Tipo", "Proyecto", "Estatus", "Renglones", "Solicitado", "Surtido", "Pendiente", "OC vinculada", "Fecha", "Acciones"]}>
+            <DataTable columns={["Folio", "Proyecto", "Solicitante", "Prioridad", "Estatus", "Materiales", "Fecha", "Acciones"]}>
               <tbody>
                 {requisitions.map((requisition) => (
                   <tr key={requisition.id}>
@@ -982,28 +1032,19 @@ export default function RequisitionsPage() {
                       <div className="inventory-cell-main">{safeDisplayText(requisition.folio)}</div>
                       <div className="inventory-cell-sub">{safeDisplayText(requisition.notas, "Sin notas")}</div>
                     </td>
+                    <td>{safeDisplayText(requisition.proyecto_nombre_snapshot, "—")}</td>
+                    <td>{safeDisplayText(requisition.solicitante_nombre, "—")}</td>
                     <td>
-                      <StatusBadge tone={requisition.es_proyecto ? "info" : "neutral"}>
-                        {requisition.es_proyecto ? "Proyecto" : "General"}
+                      <StatusBadge tone={getPriorityTone(requisition.prioridad)}>
+                        {getPriorityLabel(requisition.prioridad)}
                       </StatusBadge>
                     </td>
-                    <td>{safeDisplayText(requisition.proyecto_nombre_snapshot, "—")}</td>
                     <td>
                       <StatusBadge tone={getRequisitionStatusTone(requisition.estatus)}>
                         {getRequisitionStatusLabel(requisition.estatus)}
                       </StatusBadge>
                     </td>
                     <td>{formatCompactNumber(requisition.total_renglones ?? requisition.details_count ?? 0)}</td>
-                    <td>{formatCompactNumber(requisition.cantidad_total_solicitada)}</td>
-                    <td>{formatCompactNumber(requisition.cantidad_total_surtida)}</td>
-                    <td>{formatCompactNumber(requisition.cantidad_total_pendiente)}</td>
-                    <td>
-                      {requisition.orden_compra_folio ? (
-                        <StatusBadge tone="info">{requisition.orden_compra_folio}</StatusBadge>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
                     <td>{formatDateTime(requisition.created_at)}</td>
                     <td>
                       <div className="inventory-actions">
@@ -1286,8 +1327,8 @@ export default function RequisitionsPage() {
         onClose={closeDetail}
         open={detailOpen}
         size="xl"
-        subtitle="Detalle operativo de la solicitud, su surtido y el vinculo con compras."
-        title={selectedRequisition ? `Requisicion ${selectedRequisition.folio}` : "Detalle de requisicion"}
+        subtitle="Detalle operativo de la solicitud y su surtido desde inventario."
+        title={selectedRequisition ? `Requisición ${selectedRequisition.folio}` : "Detalle de requisición"}
       >
         {selectedRequisition ? (
           <div className="inventory-modal-form">
@@ -1309,6 +1350,14 @@ export default function RequisitionsPage() {
                 <p className="table-note">{safeDisplayText(selectedRequisition.proyecto_nombre_snapshot, "—")}</p>
               </div>
               <div className="inventory-form-note">
+                <strong>Tarea</strong>
+                <p className="table-note">{safeDisplayText(selectedRequisition.tarea_nombre_snapshot, "Proyecto general")}</p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Partida</strong>
+                <p className="table-note">{safeDisplayText(selectedRequisition.partida_nombre_snapshot, "Sin partida")}</p>
+              </div>
+              <div className="inventory-form-note">
                 <strong>Proveedor sugerido</strong>
                 <p className="table-note">{safeDisplayText(selectedRequisition.proveedor_sugerido_nombre, "—")}</p>
               </div>
@@ -1326,16 +1375,24 @@ export default function RequisitionsPage() {
               </div>
             </div>
 
+            {selectedRequisition.motivo_rechazo ? (
+              <div className="inventory-form-note inventory-form-note-danger">
+                <strong>Motivo de rechazo</strong>
+                <p className="table-note">{safeDisplayText(selectedRequisition.motivo_rechazo)}</p>
+              </div>
+            ) : null}
+
             <div className="inventory-metric-grid inventory-metric-grid-4">
               <MetricCard label="Renglones" tone="neutral" value={formatCompactNumber(selectedRequisition.total_renglones)} />
               <MetricCard label="Solicitado" tone="info" value={formatCompactNumber(selectedRequisition.cantidad_total_solicitada)} />
+              <MetricCard label="Aprobado" tone="info" value={formatCompactNumber(selectedRequisition.cantidad_total_aprobada ?? 0)} />
               <MetricCard label="Surtido" tone="success" value={formatCompactNumber(selectedRequisition.cantidad_total_surtida)} />
               <MetricCard label="Pendiente" tone="warning" value={formatCompactNumber(selectedRequisition.cantidad_total_pendiente)} />
             </div>
 
             <DataCard subtitle={selectedRequisition.notas || "Sin notas adicionales."} title="Renglones">
               {selectedRequisition.details?.length ? (
-                <DataTable columns={["Material", "Solicitado", "Surtido", "Pendiente", "Stock total", "Proveedor", "Estado"]}>
+                <DataTable columns={["Material", "Solicitado", "Aprobado", "Surtido", "Pendiente", "Stock total", "Proveedor", "Estado"]}>
                   <tbody>
                     {selectedRequisition.details.map((detail) => (
                       <tr key={detail.id}>
@@ -1344,6 +1401,7 @@ export default function RequisitionsPage() {
                           <div className="inventory-cell-sub">{safeDisplayText(detail.material_sku)} · {safeDisplayText(detail.material_unidad)}</div>
                         </td>
                         <td>{formatCompactNumber(detail.cantidad)}</td>
+                        <td>{formatCompactNumber(detail.cantidad_aprobada ?? detail.cantidad)}</td>
                         <td>{formatCompactNumber(detail.cantidad_surtida)}</td>
                         <td>{formatCompactNumber(detail.cantidad_pendiente)}</td>
                         <td>{formatCompactNumber(detail.stock_total)}</td>
@@ -1452,18 +1510,21 @@ export default function RequisitionsPage() {
                 </Field>
                 {selectedRequisition.es_proyecto ? (
                   <>
-                    <Field label="Proyecto ID">
-                      <input
-                        onChange={(event) => setFulfillForm((current) => ({ ...current, proyecto_id: event.target.value }))}
-                        type="text"
-                        value={fulfillForm.proyecto_id}
-                      />
-                    </Field>
                     <Field label="Proyecto">
+                      <input readOnly type="text" value={fulfillForm.proyecto_nombre_snapshot || fulfillForm.proyecto_id} />
+                    </Field>
+                    <Field label="Contexto PM">
                       <input
-                        onChange={(event) => setFulfillForm((current) => ({ ...current, proyecto_nombre_snapshot: event.target.value }))}
+                        readOnly
                         type="text"
-                        value={fulfillForm.proyecto_nombre_snapshot}
+                        value={
+                          [
+                            safeDisplayText(selectedRequisition.tarea_nombre_snapshot, ""),
+                            safeDisplayText(selectedRequisition.partida_nombre_snapshot, ""),
+                          ]
+                            .filter(Boolean)
+                            .join(" · ") || "Proyecto general"
+                        }
                       />
                     </Field>
                   </>

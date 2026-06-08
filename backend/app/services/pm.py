@@ -4067,6 +4067,7 @@ def serialize_project_material_movement_event(
     material_name: str,
     material_sku: str,
     material_unit: str,
+    linked_consumption: PMProyectoMaterialConsumo | None = None,
 ) -> PMProyectoMaterialConsumoOut:
     unit_cost = decimal_or_zero(
         movement.costo_promedio_snapshot or movement.costo_unitario_snapshot
@@ -4077,6 +4078,8 @@ def serialize_project_material_movement_event(
     signed_total = -(quantity * unit_cost) if is_return else quantity * unit_cost
     if is_return:
         origin = "devolucion_proyecto"
+    elif linked_consumption and normalize_optional_text(linked_consumption.origen) == "requisicion_surtida":
+        origin = "requisicion_surtida"
     elif normalize_optional_text(movement.referencia_tipo) == "requisition_fulfill":
         origin = "requisicion_surtida"
     else:
@@ -4095,8 +4098,8 @@ def serialize_project_material_movement_event(
         movimiento_id=movement.id,
         almacen_id=movement.almacen_id,
         almacen_nombre=warehouse_name,
-        requisicion_id=movement.referencia_id if normalize_optional_text(movement.referencia_tipo) == "requisition_fulfill" else None,
-        requisicion_detalle_id=None,
+        requisicion_id=linked_consumption.requisicion_id if linked_consumption else movement.referencia_id if normalize_optional_text(movement.referencia_tipo) == "requisition_fulfill" else None,
+        requisicion_detalle_id=linked_consumption.requisicion_detalle_id if linked_consumption else None,
         cantidad_consumida=signed_quantity,
         unidad=material_unit,
         costo_unitario_snapshot=unit_cost,
@@ -4274,9 +4277,24 @@ def list_project_material_plan(
         .order_by(PMProyectoMaterialPlan.created_at.asc(), PMProyectoMaterialPlan.id.asc())
     ).all()
     movement_rows = db.execute(
-        select(MovimientoInventario, Almacen.nombre, Material.nombre, Material.sku, Material.unidad)
+        select(
+            MovimientoInventario,
+            Almacen.nombre,
+            Material.nombre,
+            Material.sku,
+            Material.unidad,
+            PMProyectoMaterialConsumo,
+        )
         .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
         .join(Material, MovimientoInventario.material_id == Material.id)
+        .outerjoin(
+            PMProyectoMaterialConsumo,
+            and_(
+                PMProyectoMaterialConsumo.movimiento_id == MovimientoInventario.id,
+                PMProyectoMaterialConsumo.empresa_id == pm_context.empresa_id,
+                PMProyectoMaterialConsumo.proyecto_id == project_id,
+            ),
+        )
         .where(
             MovimientoInventario.empresa_id == pm_context.empresa_id,
             MovimientoInventario.es_proyecto == True,
@@ -4303,7 +4321,10 @@ def list_project_material_plan(
         .order_by(desc(PMProyectoMaterialConsumo.created_at), desc(PMProyectoMaterialConsumo.id))
     ).all()
     usage_map = build_project_material_usage_map(
-        [(movement, warehouse_name) for movement, warehouse_name, _material_name, _material_sku, _unit in movement_rows],
+        [
+            (movement, warehouse_name)
+            for movement, warehouse_name, _material_name, _material_sku, _unit, _linked_consumption in movement_rows
+        ],
         manual_consumptions,
     )
     consumption_events = [
@@ -4313,8 +4334,9 @@ def list_project_material_plan(
             material_name=material_name,
             material_sku=material_sku,
             material_unit=unit,
+            linked_consumption=linked_consumption,
         )
-        for movement, warehouse_name, material_name, material_sku, unit in movement_rows
+        for movement, warehouse_name, material_name, material_sku, unit, linked_consumption in movement_rows
     ]
     consumption_events.extend(serialize_project_material_consumption(db, item) for item in manual_consumptions)
     consumption_events.sort(key=lambda item: item.created_at, reverse=True)
@@ -4730,17 +4752,19 @@ def create_project_material_requisition(
     pm_context: PMContext,
     *,
     project_id: str,
-    almacen_destino_id: str,
     items: list[dict[str, Decimal | str]],
+    tarea_id: str | None,
+    partida_id: str | None,
+    prioridad: str | None,
     notas: str | None,
     ip_address: str | None,
 ) -> object:
     ensure_pm_materials_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para crear requisiciones en este proyecto PM.")
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
-    from app.services.inventory import get_warehouse_for_company
+    ensure_project_is_operable(project)
     from app.services.procurement import add_requisition_detail, create_requisition
 
-    get_warehouse_for_company(db, pm_context.empresa_id, almacen_destino_id)
     if not items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Debes seleccionar al menos un material.")
 
@@ -4766,6 +4790,9 @@ def create_project_material_requisition(
         es_proyecto=True,
         proyecto_id=project.id,
         proyecto_nombre_snapshot=project.nombre,
+        prioridad=prioridad,
+        tarea_id=tarea_id,
+        partida_id=partida_id,
         ip_address=ip_address,
     )
     db.flush()
@@ -4788,7 +4815,7 @@ def create_project_material_requisition(
             requisition_id=requisition_response.id,
             material_id=plan.material_id,
             cantidad=requested_qty,
-            notas=f"Proyecto: {project.nombre}",
+            notas=normalize_optional_text(str(item.get("notas") or "")) or f"Proyecto: {project.nombre}",
             ip_address=ip_address,
         )
 
@@ -4800,7 +4827,7 @@ def create_project_material_requisition(
             entity_name="requisicion",
             entity_id=requisition_response.id,
             ip_address=ip_address,
-            metadata_json={"project_id": project.id, "almacen_destino_id": almacen_destino_id},
+            metadata_json={"project_id": project.id, "prioridad": prioridad or "normal"},
         )
     )
     db.flush()
@@ -4809,6 +4836,106 @@ def create_project_material_requisition(
     return serialize_requisition_response(
         db,
         get_requisition_for_company(db, pm_context.empresa_id, requisition_response.id),
+    )
+
+
+def list_project_requisitions(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    limit: int = 50,
+    offset: int = 0,
+):
+    ensure_pm_materials_enabled(pm_context)
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    from app.services.procurement import list_requisitions
+
+    total, items = list_requisitions(
+        db,
+        pm_context.empresa_id,
+        proyecto_id=project_id,
+        es_proyecto=True,
+        limit=limit,
+        offset=offset,
+    )
+    return total, items
+
+
+def get_project_requisition(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    requisition_id: str,
+):
+    ensure_pm_materials_enabled(pm_context)
+    from app.services.procurement import get_requisition_for_company, serialize_requisition_response
+
+    requisition = get_requisition_for_company(db, pm_context.empresa_id, requisition_id)
+    if not requisition.es_proyecto or not requisition.proyecto_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Requisición de proyecto no encontrada.")
+    get_project_for_company(db, pm_context.empresa_id, requisition.proyecto_id)
+    return serialize_requisition_response(db, requisition)
+
+
+def submit_project_requisition(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    requisition_id: str,
+    ip_address: str | None,
+):
+    ensure_pm_materials_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para enviar requisiciones de este proyecto PM.")
+    from app.services.procurement import get_requisition_for_company, submit_requisition
+
+    requisition = get_requisition_for_company(db, pm_context.empresa_id, requisition_id)
+    if not requisition.es_proyecto or not requisition.proyecto_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Requisición de proyecto no encontrada.")
+    project = get_project_for_company(db, pm_context.empresa_id, requisition.proyecto_id)
+    ensure_project_is_operable(project)
+    return submit_requisition(
+        db,
+        empresa=type("EmpresaProxy", (), {"id": pm_context.empresa_id})(),
+        user=pm_context.user,
+        requisition_id=requisition_id,
+        ip_address=ip_address,
+    )
+
+
+def cancel_project_requisition(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    requisition_id: str,
+    ip_address: str | None,
+):
+    ensure_pm_materials_enabled(pm_context)
+    from app.services.procurement import cancel_requisition, get_requisition_for_company
+
+    requisition = get_requisition_for_company(db, pm_context.empresa_id, requisition_id)
+    if not requisition.es_proyecto or not requisition.proyecto_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Requisición de proyecto no encontrada.")
+    project = get_project_for_company(db, pm_context.empresa_id, requisition.proyecto_id)
+    ensure_project_is_operable(project)
+    is_manager = can_manage_pm(pm_context)
+    is_owner = requisition.solicitante_user_id == pm_context.user.id
+    if not is_manager and not is_owner:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para cancelar esta requisición del proyecto.",
+        )
+    if requisition.estatus == "aprobada" and not is_manager:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo un administrador puede cancelar una requisición aprobada.",
+        )
+    return cancel_requisition(
+        db,
+        empresa=type("EmpresaProxy", (), {"id": pm_context.empresa_id})(),
+        user=pm_context.user,
+        requisition_id=requisition_id,
+        ip_address=ip_address,
     )
 
 

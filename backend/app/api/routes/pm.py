@@ -180,6 +180,7 @@ from app.services.pm import (
     get_project_change,
     get_project_estimation,
     get_project_estimations_summary,
+    get_project_requisition,
     get_project,
     get_project_costs,
     get_task,
@@ -193,6 +194,7 @@ from app.services.pm import (
     list_project_documents,
     list_project_external_invites,
     list_project_portal_access_logs,
+    list_project_requisitions,
     list_project_time_entries,
     list_project_material_plan,
     list_project_members,
@@ -206,6 +208,7 @@ from app.services.pm import (
     refresh_project_total_costs,
     reject_project_change,
     reject_estimation,
+    cancel_project_requisition,
     return_project_material_to_inventory,
     return_estimation_to_draft,
     resolve_pm_alert,
@@ -239,10 +242,11 @@ from app.services.pm import (
     archive_project_baseline,
     mark_estimation_collected,
     mark_estimation_sent,
+    submit_project_requisition,
     submit_project_change,
     submit_estimation,
 )
-from app.schemas.procurement import RequisitionResponse
+from app.schemas.procurement import RequisitionListResponse, RequisitionResponse
 from app.services.storage import StorageConfigurationError
 
 
@@ -484,6 +488,103 @@ def deactivate_project_material_plan_endpoint(
     )
 
 
+@router.get("/projects/{project_id}/requisitions", response_model=RequisitionListResponse)
+def list_project_requisitions_endpoint(
+    project_id: str,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> RequisitionListResponse:
+    total, items = list_project_requisitions(
+        db,
+        pm_context,
+        project_id=project_id,
+        limit=limit,
+        offset=offset,
+    )
+    return RequisitionListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.post("/projects/{project_id}/requisitions", response_model=RequisitionResponse, status_code=status.HTTP_201_CREATED)
+def create_project_requisition_endpoint(
+    project_id: str,
+    payload: PMCreateProjectRequisitionRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> RequisitionResponse:
+    return run_pm_write(
+        db,
+        "create_project_material_requisition",
+        lambda: create_project_material_requisition(
+            db,
+            pm_context,
+            project_id=project_id,
+            tarea_id=payload.tarea_id,
+            partida_id=payload.partida_id,
+            prioridad=payload.prioridad,
+            items=[
+                {
+                    "plan_id": item.plan_id,
+                    "cantidad_solicitada": item.cantidad_solicitada,
+                    "notas": item.notas,
+                }
+                for item in payload.items
+            ],
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/requisitions/{requisition_id}", response_model=RequisitionResponse)
+def get_project_requisition_endpoint(
+    requisition_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> RequisitionResponse:
+    return get_project_requisition(db, pm_context, requisition_id=requisition_id)
+
+
+@router.post("/requisitions/{requisition_id}/submit", response_model=RequisitionResponse)
+def submit_project_requisition_endpoint(
+    requisition_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> RequisitionResponse:
+    return run_pm_write(
+        db,
+        "submit_project_requisition",
+        lambda: submit_project_requisition(
+            db,
+            pm_context,
+            requisition_id=requisition_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/requisitions/{requisition_id}/cancel", response_model=RequisitionResponse)
+def cancel_project_requisition_endpoint(
+    requisition_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> RequisitionResponse:
+    return run_pm_write(
+        db,
+        "cancel_project_requisition",
+        lambda: cancel_project_requisition(
+            db,
+            pm_context,
+            requisition_id=requisition_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
 @router.post("/projects/{project_id}/materials/create-requisition", response_model=RequisitionResponse, status_code=status.HTTP_201_CREATED)
 def create_project_material_requisition_endpoint(
     project_id: str,
@@ -499,8 +600,17 @@ def create_project_material_requisition_endpoint(
             db,
             pm_context,
             project_id=project_id,
-            almacen_destino_id=payload.almacen_destino_id,
-            items=[{"plan_id": item.plan_id, "cantidad_solicitada": item.cantidad_solicitada} for item in payload.items],
+            tarea_id=payload.tarea_id,
+            partida_id=payload.partida_id,
+            prioridad=payload.prioridad,
+            items=[
+                {
+                    "plan_id": item.plan_id,
+                    "cantidad_solicitada": item.cantidad_solicitada,
+                    "notas": item.notas,
+                }
+                for item in payload.items
+            ],
             notas=payload.notas,
             ip_address=request.client.host if request.client else None,
         ),

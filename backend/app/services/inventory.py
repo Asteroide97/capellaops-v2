@@ -1205,6 +1205,10 @@ def consume_material_for_project(
     user: Usuario,
     empresa: Empresa,
     ip_address: str | None,
+    documento_referencia: str | None = None,
+    requisition_id: str | None = None,
+    requisition_detail_id: str | None = None,
+    origin: str = "movimiento_manual",
 ) -> MovementItem:
     validate_inventory_access(user, empresa)
     if empresa.id != empresa_id:
@@ -1239,6 +1243,7 @@ def consume_material_for_project(
         ip_address=ip_address,
         motivo="Consumo para proyecto",
         entregado_por=user.full_name,
+        documento_referencia=documento_referencia,
         es_proyecto=True,
         proyecto_id=project.id,
         proyecto_nombre_snapshot=project.nombre,
@@ -1257,7 +1262,9 @@ def consume_material_for_project(
         movement_id=movement.id,
         project_id=project.id,
         tarea_id=task.id if task else None,
-        origen="movimiento_manual",
+        requisition_id=requisition_id,
+        requisition_detail_id=requisition_detail_id,
+        origen=origin,
     )
     refresh_project_material_costs(db, empresa_id=empresa_id, project_id=project.id)
     return movement

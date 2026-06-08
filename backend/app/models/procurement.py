@@ -1,8 +1,10 @@
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Numeric,
     String,
@@ -51,6 +53,18 @@ class Requisicion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     es_proyecto: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     proyecto_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     proyecto_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    prioridad: Mapped[str] = mapped_column(String(20), nullable=False, default="normal", server_default="normal", index=True)
+    tarea_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    tarea_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    partida_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    partida_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    aprobador_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    motivo_rechazo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fulfilled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     estatus: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -77,6 +91,7 @@ class RequisicionDetalle(UUIDPrimaryKeyMixin, Base):
     requisicion_id: Mapped[str] = mapped_column(ForeignKey("requisiciones.id"), nullable=False, index=True)
     material_id: Mapped[str] = mapped_column(ForeignKey("materiales.id"), nullable=False, index=True)
     cantidad: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    cantidad_aprobada: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     cantidad_surtida: Mapped[Decimal] = mapped_column(
         Numeric(18, 4),
         nullable=False,

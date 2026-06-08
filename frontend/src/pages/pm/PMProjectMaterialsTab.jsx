@@ -2,18 +2,22 @@ import { useEffect, useMemo, useState } from "react";
 import { ClipboardList, Factory, PackageMinus, PackageOpen, RotateCcw, ScrollText, Plus } from "lucide-react";
 
 import {
+  cancelPmProjectRequisition,
   addPmProjectMaterialPlan,
   consumePmProjectMaterial,
   createPmProjectMaterialRequisition,
   deactivatePmProjectMaterialPlan,
+  getPmProjectRequisition,
   getMaterialKardex,
   getMaterials,
   getPmProjectBudget,
   getPmProjectMaterials,
   getStock,
   getWarehouses,
+  listPmProjectRequisitions,
   listPmTasks,
   returnPmProjectMaterial,
+  submitPmProjectRequisition,
   updatePmProjectMaterialPlan,
 } from "../../api/client";
 import {
@@ -55,7 +59,9 @@ const defaultMovementForm = {
 };
 
 const defaultRequisitionForm = {
-  almacen_destino_id: "",
+  tarea_id: "",
+  partida_id: "",
+  prioridad: "normal",
   notas: "",
   items: {},
 };
@@ -65,6 +71,7 @@ function buildDefaultRequisitionItems(plans) {
     accumulator[plan.id] = {
       selected: Number(plan.cantidad_pendiente || 0) > 0,
       cantidad_solicitada: Number(plan.cantidad_pendiente || 0) > 0 ? String(plan.cantidad_pendiente) : "0",
+      notas: "",
     };
     return accumulator;
   }, {});
@@ -108,6 +115,72 @@ function getMovementOriginTone(origin) {
     return "info";
   }
   return "neutral";
+}
+
+function getRequisitionStatusTone(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "surtida") {
+    return "success";
+  }
+  if (normalized === "aprobada" || normalized === "enviada") {
+    return "info";
+  }
+  if (normalized === "parcial") {
+    return "warning";
+  }
+  if (normalized === "rechazada" || normalized === "cancelada") {
+    return "danger";
+  }
+  return "neutral";
+}
+
+function getRequisitionStatusLabel(status) {
+  const labels = {
+    borrador: "Borrador",
+    enviada: "Enviada",
+    aprobada: "Aprobada",
+    rechazada: "Rechazada",
+    cancelada: "Cancelada",
+    parcial: "Surtida parcial",
+    surtida: "Surtida",
+  };
+  return labels[String(status || "").toLowerCase()] || safeDisplayText(status, "Sin estatus");
+}
+
+function getPriorityLabel(priority) {
+  const labels = {
+    baja: "Baja",
+    normal: "Normal",
+    alta: "Alta",
+    urgente: "Urgente",
+  };
+  return labels[String(priority || "").toLowerCase()] || safeDisplayText(priority, "Normal");
+}
+
+function getPriorityTone(priority) {
+  const normalized = String(priority || "").toLowerCase();
+  if (normalized === "urgente") {
+    return "danger";
+  }
+  if (normalized === "alta") {
+    return "warning";
+  }
+  if (normalized === "baja") {
+    return "neutral";
+  }
+  return "info";
+}
+
+function canSubmitProjectRequisition(requisition) {
+  return String(requisition?.estatus || "").toLowerCase() === "borrador";
+}
+
+function canCancelProjectRequisition(requisition, canManageProject = false) {
+  const status = String(requisition?.estatus || "").toLowerCase();
+  if (status === "aprobada") {
+    return canManageProject;
+  }
+  return ["borrador", "enviada"].includes(status);
 }
 
 function buildMovementSeed(plan = null, movement = null) {
@@ -172,6 +245,7 @@ export default function PMProjectMaterialsTab({
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [materialsResponse, setMaterialsResponse] = useState(null);
+  const [projectRequisitions, setProjectRequisitions] = useState([]);
   const [inventoryMaterials, setInventoryMaterials] = useState([]);
   const [warehouses, setWarehouses] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -184,6 +258,12 @@ export default function PMProjectMaterialsTab({
   const [showPlanCostOptions, setShowPlanCostOptions] = useState(false);
   const [requisitionModalOpen, setRequisitionModalOpen] = useState(false);
   const [requisitionForm, setRequisitionForm] = useState(defaultRequisitionForm);
+  const [requisitionDetailModal, setRequisitionDetailModal] = useState({
+    open: false,
+    loading: false,
+    error: "",
+    data: null,
+  });
   const [movementModalState, setMovementModalState] = useState({ open: false, mode: "consume", seed: defaultMovementForm });
   const [movementForm, setMovementForm] = useState(defaultMovementForm);
   const [kardexModal, setKardexModal] = useState({ open: false, loading: false, error: "", data: null, materialName: "" });
@@ -191,6 +271,8 @@ export default function PMProjectMaterialsTab({
   const plans = materialsResponse?.plans ?? [];
   const consumptions = materialsResponse?.consumptions ?? [];
   const summary = materialsResponse?.summary;
+  const requisitions = projectRequisitions ?? [];
+  const requisitionDetail = requisitionDetailModal.data;
   const canOperate = canEdit && projectEditable;
   const stockMap = useMemo(() => buildMaterialStockMap(stockItems), [stockItems]);
 
@@ -248,9 +330,10 @@ export default function PMProjectMaterialsTab({
     }
     setError("");
     try {
-      const [projectMaterialsResponse, materialsCatalogResponse, warehousesResponse, tasksResponse, budgetResponse, stockResponse] =
+      const [projectMaterialsResponse, requisitionsResponse, materialsCatalogResponse, warehousesResponse, tasksResponse, budgetResponse, stockResponse] =
         await Promise.all([
           getPmProjectMaterials({ projectId, token, empresaId }),
+          listPmProjectRequisitions({ projectId, token, empresaId, filters: { limit: 100, offset: 0 } }),
           getMaterials({ token, empresaId, filters: { activo: true, limit: 300, offset: 0 } }),
           getWarehouses({ token, empresaId, filters: { activo: true, limit: 100, offset: 0 } }),
           listPmTasks({ projectId, token, empresaId, filters: { activo: true, limit: 200, offset: 0 } }),
@@ -258,15 +341,12 @@ export default function PMProjectMaterialsTab({
           getStock({ token, empresaId, filters: { limit: 1000, offset: 0 } }),
         ]);
       setMaterialsResponse(projectMaterialsResponse);
+      setProjectRequisitions(requisitionsResponse.items ?? []);
       setInventoryMaterials(materialsCatalogResponse.items ?? []);
       setWarehouses(warehousesResponse.items ?? []);
       setTasks(tasksResponse.items ?? []);
       setBudgetItems(buildBudgetItemOptions(budgetResponse));
       setStockItems(stockResponse.items ?? []);
-      setRequisitionForm((current) => ({
-        ...current,
-        almacen_destino_id: current.almacen_destino_id || warehousesResponse.items?.[0]?.id || "",
-      }));
     } catch (requestError) {
       setError(requestError.message || "No se pudieron cargar los materiales del proyecto.");
     } finally {
@@ -313,8 +393,11 @@ export default function PMProjectMaterialsTab({
 
   function openRequisitionModal(initialPlans = pendingPlans) {
     const availablePlans = initialPlans.filter((plan) => Number(plan.cantidad_pendiente || 0) > 0 && plan.activo);
+    const seedPlan = availablePlans.length === 1 ? availablePlans[0] : null;
     setRequisitionForm({
-      almacen_destino_id: warehouses[0]?.id ?? "",
+      tarea_id: seedPlan?.tarea_id ?? "",
+      partida_id: "",
+      prioridad: "normal",
       notas: "",
       items: buildDefaultRequisitionItems(availablePlans),
     });
@@ -361,6 +444,28 @@ export default function PMProjectMaterialsTab({
         error: requestError.message || "No se pudo cargar el kardex del material.",
         data: null,
         materialName,
+      });
+    }
+  }
+
+  function closeRequisitionDetailModal() {
+    if (saving) {
+      return;
+    }
+    setRequisitionDetailModal({ open: false, loading: false, error: "", data: null });
+  }
+
+  async function openRequisitionDetailModal(requisitionId) {
+    setRequisitionDetailModal({ open: true, loading: true, error: "", data: null });
+    try {
+      const response = await getPmProjectRequisition({ requisitionId, token, empresaId });
+      setRequisitionDetailModal({ open: true, loading: false, error: "", data: response });
+    } catch (requestError) {
+      setRequisitionDetailModal({
+        open: true,
+        loading: false,
+        error: requestError.message || "No se pudo cargar el detalle de la requisición.",
+        data: null,
       });
     }
   }
@@ -428,11 +533,13 @@ export default function PMProjectMaterialsTab({
           plan_id: plan.id,
           selected: Boolean(requisitionForm.items?.[plan.id]?.selected),
           cantidad_solicitada: Number(requisitionForm.items?.[plan.id]?.cantidad_solicitada || 0),
+          notas: requisitionForm.items?.[plan.id]?.notas || "",
         }))
         .filter((item) => item.selected && item.cantidad_solicitada > 0)
         .map((item) => ({
           plan_id: item.plan_id,
           cantidad_solicitada: item.cantidad_solicitada,
+          notas: item.notas.trim() || null,
         }));
 
       if (items.length === 0) {
@@ -444,7 +551,9 @@ export default function PMProjectMaterialsTab({
         token,
         empresaId,
         payload: {
-          almacen_destino_id: requisitionForm.almacen_destino_id,
+          tarea_id: requisitionForm.tarea_id || null,
+          partida_id: requisitionForm.partida_id || null,
+          prioridad: requisitionForm.prioridad,
           notas: requisitionForm.notas.trim() || null,
           items,
         },
@@ -452,8 +561,48 @@ export default function PMProjectMaterialsTab({
       setSuccess(`Requisición ${safeDisplayText(response.folio)} creada como borrador.`);
       await loadMaterialsTab();
       closeRequisitionModal(true);
+      setRequisitionDetailModal({ open: true, loading: false, error: "", data: response });
     } catch (requestError) {
       setError(requestError.message || "No se pudo crear la requisición del proyecto.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSubmitRequisition(requisitionId) {
+    setSaving(true);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await submitPmProjectRequisition({ requisitionId, token, empresaId });
+      await loadMaterialsTab();
+      setRequisitionDetailModal({ open: true, loading: false, error: "", data: response });
+      setSuccess("Requisición enviada a Inventario.");
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo enviar la requisición.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleCancelRequisition(requisition) {
+    if (!window.confirm(`La requisición ${safeDisplayText(requisition?.folio, "")} se cancelará. ¿Continuar?`)) {
+      return;
+    }
+    setSaving(true);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await cancelPmProjectRequisition({ requisitionId: requisition.id, token, empresaId });
+      setSuccess("Requisición cancelada.");
+      setRequisitionDetailModal((current) =>
+        current.open && current.data?.id === requisition.id
+          ? { open: true, loading: false, error: "", data: response }
+          : current,
+      );
+      await loadMaterialsTab();
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo cancelar la requisición.");
     } finally {
       setSaving(false);
     }
@@ -690,6 +839,67 @@ export default function PMProjectMaterialsTab({
                   </tr>
                 );
               })}
+            </tbody>
+          </DataTable>
+        )}
+      </DataCard>
+
+      <DataCard
+        subtitle="Solicitudes de materiales vinculadas al proyecto para revisión y surtido desde Inventario."
+        title="Requisiciones del proyecto"
+      >
+        <ResultMeta label="requisiciones" loaded={requisitions.length} total={requisitions.length} />
+        {requisitions.length === 0 ? (
+          <EmptyState
+            compact
+            note="Crea una requisición cuando necesites surtir materiales pendientes desde almacén."
+            title="Sin requisiciones"
+          />
+        ) : (
+          <DataTable
+            columns={["Folio", "Estatus", "Prioridad", "Materiales", "Solicitada", "Surtida", "Pendiente", "Fecha", "Acciones"]}
+          >
+            <tbody>
+              {requisitions.map((requisition) => (
+                <tr key={requisition.id}>
+                  <td>
+                    <div className="inventory-cell-main">{safeDisplayText(requisition.folio)}</div>
+                    <div className="inventory-cell-sub">{safeDisplayText(requisition.tarea_nombre_snapshot, "Proyecto general")}</div>
+                  </td>
+                  <td>
+                    <StatusBadge tone={getRequisitionStatusTone(requisition.estatus)}>
+                      {getRequisitionStatusLabel(requisition.estatus)}
+                    </StatusBadge>
+                  </td>
+                  <td>
+                    <StatusBadge tone={getPriorityTone(requisition.prioridad)}>
+                      {getPriorityLabel(requisition.prioridad)}
+                    </StatusBadge>
+                  </td>
+                  <td>{formatNumber(requisition.details_count || requisition.total_renglones || 0)}</td>
+                  <td>{formatNumber(requisition.cantidad_total_solicitada || 0)}</td>
+                  <td>{formatNumber(requisition.cantidad_total_surtida || 0)}</td>
+                  <td>{formatNumber(requisition.cantidad_total_pendiente || 0)}</td>
+                  <td>{safeDisplayText(formatDate(requisition.created_at), "—")}</td>
+                  <td>
+                    <div className="table-actions">
+                      <ActionButton onClick={() => openRequisitionDetailModal(requisition.id)} size="sm" type="button">
+                        Ver detalle
+                      </ActionButton>
+                      {canOperate && canSubmitProjectRequisition(requisition) ? (
+                        <ActionButton onClick={() => handleSubmitRequisition(requisition.id)} size="sm" type="button">
+                          Enviar
+                        </ActionButton>
+                      ) : null}
+                      {canOperate && canCancelProjectRequisition(requisition, canManage) ? (
+                        <ActionButton onClick={() => handleCancelRequisition(requisition)} size="sm" tone="danger" type="button">
+                          Cancelar
+                        </ActionButton>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </DataTable>
         )}
@@ -1005,18 +1215,41 @@ export default function PMProjectMaterialsTab({
       >
         <form className="inventory-modal-form" id="pm-project-material-requisition-form" onSubmit={handleCreateRequisition}>
           <FormGrid>
-            <Field label="Almacén destino">
+            <Field hint="Opcional" label="Tarea asociada">
               <select
-                onChange={(event) => setRequisitionForm((current) => ({ ...current, almacen_destino_id: event.target.value }))}
-                required
-                value={requisitionForm.almacen_destino_id}
+                onChange={(event) => setRequisitionForm((current) => ({ ...current, tarea_id: event.target.value }))}
+                value={requisitionForm.tarea_id}
               >
-                <option value="">Selecciona un almacén</option>
-                {warehouses.map((warehouse) => (
-                  <option key={warehouse.id} value={warehouse.id}>
-                    {safeDisplayText(warehouse.nombre)} ({safeDisplayText(warehouse.codigo)})
+                <option value="">Proyecto general</option>
+                {tasks.map((task) => (
+                  <option key={task.id} value={task.id}>
+                    {safeDisplayText(task.nombre)}
                   </option>
                 ))}
+              </select>
+            </Field>
+            <Field hint="Opcional" label="Partida asociada">
+              <select
+                onChange={(event) => setRequisitionForm((current) => ({ ...current, partida_id: event.target.value }))}
+                value={requisitionForm.partida_id}
+              >
+                <option value="">Sin partida</option>
+                {budgetItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {safeDisplayText(item.codigo, "Sin código")} · {safeDisplayText(item.nombre)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Prioridad">
+              <select
+                onChange={(event) => setRequisitionForm((current) => ({ ...current, prioridad: event.target.value }))}
+                value={requisitionForm.prioridad}
+              >
+                <option value="baja">Baja</option>
+                <option value="normal">Normal</option>
+                <option value="alta">Alta</option>
+                <option value="urgente">Urgente</option>
               </select>
             </Field>
             <Field label="Notas" span={2}>
@@ -1027,17 +1260,24 @@ export default function PMProjectMaterialsTab({
               />
             </Field>
           </FormGrid>
+          <div className="inventory-form-note">
+            <strong>Flujo de surtido</strong>
+            <p className="table-note">
+              Al surtirse, la requisición generará consumo real de inventario y actualizará el costo real del proyecto.
+            </p>
+          </div>
 
           <SectionTitle subtitle="Incluye solo materiales con pendiente real." title="Materiales a solicitar" />
           {pendingPlans.length === 0 ? (
             <EmptyState compact note="No hay materiales pendientes para solicitar." title="Sin pendientes" />
           ) : (
-            <DataTable columns={["Material", "Pendiente", "Solicitar", "Seleccionar"]}>
+            <DataTable columns={["Material", "Pendiente", "Solicitar", "Notas", "Seleccionar"]}>
               <tbody>
                 {pendingPlans.map((plan) => {
                   const currentItem = requisitionForm.items?.[plan.id] ?? {
                     selected: false,
                     cantidad_solicitada: "0",
+                    notas: "",
                   };
                   return (
                     <tr key={plan.id}>
@@ -1068,6 +1308,25 @@ export default function PMProjectMaterialsTab({
                         />
                       </td>
                       <td>
+                        <input
+                          onChange={(event) =>
+                            setRequisitionForm((current) => ({
+                              ...current,
+                              items: {
+                                ...current.items,
+                                [plan.id]: {
+                                  ...current.items?.[plan.id],
+                                  notas: event.target.value,
+                                },
+                              },
+                            }))
+                          }
+                          placeholder="Notas del material"
+                          type="text"
+                          value={currentItem.notas ?? ""}
+                        />
+                      </td>
+                      <td>
                         <label className="inventory-inline-checkbox">
                           <input
                             checked={Boolean(currentItem.selected)}
@@ -1095,6 +1354,127 @@ export default function PMProjectMaterialsTab({
             </DataTable>
           )}
         </form>
+      </ModalShell>
+
+      <ModalShell
+        footer={
+          <div className="inventory-actions inventory-actions-wrap">
+            {canOperate && requisitionDetail && canSubmitProjectRequisition(requisitionDetail) ? (
+              <ActionButton disabled={saving} onClick={() => handleSubmitRequisition(requisitionDetail.id)} type="button">
+                Enviar
+              </ActionButton>
+            ) : null}
+            {canOperate && requisitionDetail && canCancelProjectRequisition(requisitionDetail, canManage) ? (
+              <ActionButton disabled={saving} onClick={() => handleCancelRequisition(requisitionDetail)} tone="danger" type="button">
+                Cancelar
+              </ActionButton>
+            ) : null}
+            <ActionButton onClick={closeRequisitionDetailModal} type="button">
+              Cerrar
+            </ActionButton>
+          </div>
+        }
+        onClose={closeRequisitionDetailModal}
+        open={requisitionDetailModal.open}
+        size="large"
+        subtitle="Seguimiento de la solicitud y su surtido desde Inventario."
+        title={requisitionDetail ? `Requisición ${safeDisplayText(requisitionDetail.folio)}` : "Detalle de requisición"}
+      >
+        {requisitionDetailModal.loading ? (
+          <div className="screen-center">Cargando requisición...</div>
+        ) : requisitionDetailModal.error ? (
+          <div className="inventory-form-note inventory-form-note-danger">
+            <strong>No se pudo cargar la requisición</strong>
+            <p className="table-note">{requisitionDetailModal.error}</p>
+          </div>
+        ) : requisitionDetail ? (
+          <div className="inventory-modal-form">
+            <div className="inventory-detail-grid">
+              <div className="inventory-form-note">
+                <strong>Estatus</strong>
+                <p className="table-note">
+                  <StatusBadge tone={getRequisitionStatusTone(requisitionDetail.estatus)}>
+                    {getRequisitionStatusLabel(requisitionDetail.estatus)}
+                  </StatusBadge>
+                </p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Prioridad</strong>
+                <p className="table-note">
+                  <StatusBadge tone={getPriorityTone(requisitionDetail.prioridad)}>
+                    {getPriorityLabel(requisitionDetail.prioridad)}
+                  </StatusBadge>
+                </p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Tarea</strong>
+                <p className="table-note">{safeDisplayText(requisitionDetail.tarea_nombre_snapshot, "Proyecto general")}</p>
+              </div>
+              <div className="inventory-form-note">
+                <strong>Partida</strong>
+                <p className="table-note">{safeDisplayText(requisitionDetail.partida_nombre_snapshot, "Sin partida")}</p>
+              </div>
+            </div>
+
+            <div className="inventory-metric-grid inventory-metric-grid-4">
+              <MetricCard label="Materiales" tone="neutral" value={formatNumber(requisitionDetail.total_renglones ?? 0)} />
+              <MetricCard label="Solicitada" tone="info" value={formatNumber(requisitionDetail.cantidad_total_solicitada ?? 0)} />
+              <MetricCard label="Surtida" tone="success" value={formatNumber(requisitionDetail.cantidad_total_surtida ?? 0)} />
+              <MetricCard label="Pendiente" tone="warning" value={formatNumber(requisitionDetail.cantidad_total_pendiente ?? 0)} />
+            </div>
+
+            <DataCard subtitle={safeDisplayText(requisitionDetail.notas, "Sin notas adicionales.")} title="Materiales solicitados">
+              {requisitionDetail.details?.length ? (
+                <DataTable columns={["Material", "Solicitada", "Aprobada", "Surtida", "Pendiente", "Notas"]}>
+                  <tbody>
+                    {requisitionDetail.details.map((detail) => (
+                      <tr key={detail.id}>
+                        <td>
+                          <div className="inventory-cell-main">{safeDisplayText(detail.material_nombre)}</div>
+                          <div className="inventory-cell-sub">
+                            {safeDisplayText(detail.material_sku, "Sin SKU")} · {safeDisplayText(detail.material_unidad, "Sin unidad")}
+                          </div>
+                        </td>
+                        <td>{formatNumber(detail.cantidad ?? 0)}</td>
+                        <td>{formatNumber(detail.cantidad_aprobada ?? detail.cantidad ?? 0)}</td>
+                        <td>{formatNumber(detail.cantidad_surtida ?? 0)}</td>
+                        <td>{formatNumber(detail.cantidad_pendiente ?? 0)}</td>
+                        <td>{safeDisplayText(detail.notas, "—")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </DataTable>
+              ) : (
+                <EmptyState compact note="La requisición todavía no tiene materiales." title="Sin materiales" />
+              )}
+            </DataCard>
+
+            <DataCard title="Movimientos generados">
+              {requisitionDetail.movements?.length ? (
+                <DataTable columns={["Fecha", "Almacén", "Material", "Cantidad", "Tarea", "Partida", "Documento"]}>
+                  <tbody>
+                    {requisitionDetail.movements.map((movement) => (
+                      <tr key={movement.id}>
+                        <td>{safeDisplayText(formatDateTime(movement.created_at), "—")}</td>
+                        <td>{safeDisplayText(movement.almacen_nombre, "—")}</td>
+                        <td>
+                          <div className="inventory-cell-main">{safeDisplayText(movement.material_nombre)}</div>
+                          <div className="inventory-cell-sub">{safeDisplayText(movement.material_sku, "—")}</div>
+                        </td>
+                        <td>{formatNumber(movement.cantidad ?? 0)}</td>
+                        <td>{safeDisplayText(movement.tarea_nombre_snapshot, "Proyecto general")}</td>
+                        <td>{safeDisplayText(movement.partida_nombre_snapshot, "—")}</td>
+                        <td>{safeDisplayText(movement.documento_referencia, "—")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </DataTable>
+              ) : (
+                <EmptyState compact note="Los surtidos aparecerán aquí cuando Inventario procese la requisición." title="Sin movimientos" />
+              )}
+            </DataCard>
+          </div>
+        ) : null}
       </ModalShell>
 
       <ModalShell

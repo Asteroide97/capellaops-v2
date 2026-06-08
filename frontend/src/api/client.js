@@ -826,9 +826,41 @@ export function deactivatePmProjectMaterialPlan({ projectId, planId, token, empr
 
 
 export function createPmProjectMaterialRequisition({ projectId, token, empresaId, payload }) {
-  return apiRequest(`/pm/projects/${projectId}/materials/create-requisition`, {
+  return apiRequest(`/pm/projects/${projectId}/requisitions`, {
     method: "POST",
     body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmProjectRequisitions({ projectId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pm/projects/${projectId}/requisitions${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getPmProjectRequisition({ requisitionId, token, empresaId }) {
+  return apiRequest(`/pm/requisitions/${requisitionId}`, { token, empresaId });
+}
+
+
+export function submitPmProjectRequisition({ requisitionId, token, empresaId }) {
+  return apiRequest(`/pm/requisitions/${requisitionId}/submit`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelPmProjectRequisition({ requisitionId, token, empresaId }) {
+  return apiRequest(`/pm/requisitions/${requisitionId}/cancel`, {
+    method: "POST",
     token,
     empresaId,
   });
@@ -1884,6 +1916,9 @@ export function getRequisitions({ token, empresaId, filters = {} }) {
   appendQueryValue(query, "estatus", filters.estatus);
   appendQueryValue(query, "proveedor_sugerido_id", filters.proveedor_sugerido_id);
   appendQueryValue(query, "proyecto", filters.proyecto);
+  appendQueryValue(query, "proyecto_id", filters.proyecto_id);
+  appendQueryValue(query, "material_id", filters.material_id);
+  appendQueryValue(query, "es_proyecto", filters.es_proyecto);
   appendQueryValue(query, "fecha_desde", filters.fecha_desde);
   appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
   appendQueryValue(query, "limit", filters.limit);
@@ -1961,18 +1996,20 @@ export function submitRequisition({ requisitionId, token, empresaId }) {
 }
 
 
-export function approveRequisition({ requisitionId, token, empresaId }) {
+export function approveRequisition({ requisitionId, token, empresaId, payload = { items: [] } }) {
   return apiRequest(`/inventory/requisitions/${requisitionId}/approve`, {
     method: "POST",
+    body: payload,
     token,
     empresaId,
   });
 }
 
 
-export function rejectRequisition({ requisitionId, token, empresaId }) {
+export function rejectRequisition({ requisitionId, token, empresaId, payload }) {
   return apiRequest(`/inventory/requisitions/${requisitionId}/reject`, {
     method: "POST",
+    body: payload,
     token,
     empresaId,
   });
