@@ -1,6 +1,9 @@
 const SITE_KEY = import.meta.env.VITE_RECAPTCHA_SITE_KEY ?? "";
+const RECAPTCHA_ENABLED = String(import.meta.env.VITE_RECAPTCHA_ENABLED ?? "true").trim().toLowerCase() !== "false";
 const SCRIPT_SELECTOR = "script[data-recaptcha-script='true']";
 const DEV = import.meta.env.DEV;
+const SCRIPT_TIMEOUT_MS = 10000;
+const EXECUTE_TIMEOUT_MS = 12000;
 
 let loadPromise;
 
@@ -10,11 +13,30 @@ function logRecaptchaDebug(label, value) {
     return;
   }
 
-  console.info(`[recaptcha] ${label}=${value}`);
+  console.warn(`[recaptcha] ${label}`, value);
 }
 
 
-function waitForGrecaptcha(timeoutMs = 8000) {
+function withTimeout(promise, timeoutMs, timeoutMessage) {
+  return new Promise((resolve, reject) => {
+    const timeoutId = window.setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        window.clearTimeout(timeoutId);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timeoutId);
+        reject(error);
+      });
+  });
+}
+
+
+function waitForGrecaptcha(timeoutMs = SCRIPT_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
 
@@ -27,7 +49,7 @@ function waitForGrecaptcha(timeoutMs = 8000) {
 
       if (Date.now() - startedAt >= timeoutMs) {
         logRecaptchaDebug("grecaptcha_loaded", false);
-        reject(new Error("No se pudo cargar reCAPTCHA."));
+        reject(new Error("No se pudo cargar Google reCAPTCHA. Revisa bloqueadores del navegador o dominios permitidos."));
         return;
       }
 
@@ -62,12 +84,15 @@ function appendRecaptchaScript() {
         const grecaptcha = await waitForGrecaptcha();
         resolve(grecaptcha);
       } catch (error) {
+        logRecaptchaDebug("grecaptcha_wait_failed", error);
         reject(error);
       }
     };
 
     const handleError = () => {
-      reject(new Error("No se pudo cargar reCAPTCHA."));
+      const nextError = new Error("No se pudo cargar Google reCAPTCHA. Revisa bloqueadores del navegador o dominios permitidos.");
+      logRecaptchaDebug("grecaptcha_script_failed", nextError.message);
+      reject(nextError);
     };
 
     script.addEventListener("load", handleLoad, { once: true });
@@ -89,10 +114,15 @@ function appendRecaptchaScript() {
 
 
 async function ensureRecaptchaLoaded() {
+  logRecaptchaDebug("recaptcha_enabled", RECAPTCHA_ENABLED);
   logRecaptchaDebug("recaptcha_site_key_present", Boolean(SITE_KEY));
 
+  if (!RECAPTCHA_ENABLED) {
+    return null;
+  }
+
   if (!SITE_KEY) {
-    throw new Error("reCAPTCHA no esta configurado en el frontend.");
+    throw new Error("reCAPTCHA no está configurado en el frontend.");
   }
 
   if (window.grecaptcha?.ready && window.grecaptcha?.execute) {
@@ -112,22 +142,43 @@ async function ensureRecaptchaLoaded() {
 
 
 export async function getRecaptchaToken(action = "register_start") {
+  if (!RECAPTCHA_ENABLED) {
+    logRecaptchaDebug("recaptcha_skipped", action);
+    return null;
+  }
+
   const grecaptcha = await ensureRecaptchaLoaded();
 
-  const token = await new Promise((resolve, reject) => {
-    grecaptcha.ready(() => {
-      grecaptcha
-        .execute(SITE_KEY, { action })
-        .then(resolve)
-        .catch(() => reject(new Error("No se pudo ejecutar reCAPTCHA.")));
-    });
-  });
+  if (!grecaptcha?.ready || !grecaptcha?.execute) {
+    throw new Error("No se pudo cargar Google reCAPTCHA. Revisa bloqueadores del navegador o dominios permitidos.");
+  }
+
+  const token = await withTimeout(
+    new Promise((resolve, reject) => {
+      try {
+        grecaptcha.ready(() => {
+          grecaptcha
+            .execute(SITE_KEY, { action })
+            .then(resolve)
+            .catch((error) => {
+              logRecaptchaDebug("grecaptcha_execute_failed", error);
+              reject(new Error("reCAPTCHA rechazó la ejecución. Verifica que el dominio esté autorizado para esta site key."));
+            });
+        });
+      } catch (error) {
+        logRecaptchaDebug("grecaptcha_ready_failed", error);
+        reject(new Error("reCAPTCHA rechazó la ejecución. Verifica que el dominio esté autorizado para esta site key."));
+      }
+    }),
+    EXECUTE_TIMEOUT_MS,
+    "reCAPTCHA tardó demasiado en responder.",
+  );
 
   const isValidToken = typeof token === "string" && token.length > 20;
   logRecaptchaDebug("recaptcha_token_present", isValidToken);
 
   if (!isValidToken) {
-    throw new Error("No se pudo obtener un token valido de reCAPTCHA.");
+    throw new Error("No se pudo obtener un token válido de reCAPTCHA.");
   }
 
   return token;
@@ -136,4 +187,9 @@ export async function getRecaptchaToken(action = "register_start") {
 
 export function hasRecaptchaSiteKey() {
   return Boolean(SITE_KEY);
+}
+
+
+export function isRecaptchaEnabled() {
+  return RECAPTCHA_ENABLED;
 }

@@ -163,7 +163,7 @@ export function AuthProvider({ children }) {
       },
     });
 
-    setNotice("");
+    setNotice("Empresa creada correctamente.");
     persistSession(response.access_token, response.empresa.id);
     await hydrateSession(response.access_token, response.empresa.id);
   }

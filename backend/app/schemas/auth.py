@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.schemas.common import EmpresaSummary, MembershipSummary, UserSummary
 
@@ -21,6 +21,13 @@ class RegisterStartRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
     plan_code: str = Field(default="basico")
     recaptcha_token: str | None = Field(default=None, max_length=4096)
+
+    @field_validator("empresa_email_contacto", mode="before")
+    @classmethod
+    def normalize_contact_email(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class RegisterStartResponse(BaseModel):
