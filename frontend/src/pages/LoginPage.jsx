@@ -38,16 +38,14 @@ export default function LoginPage() {
     <div className="auth-shell">
       <section className="auth-hero">
         <p className="eyebrow">Capella Ops V2</p>
-        <h1>Operación multiempresa en un solo lugar</h1>
-        <p>
-          Inicia sesión con JWT propio y contexto de empresa validado desde backend.
-        </p>
+        <h1>Controla tu operación en un solo lugar</h1>
+        <p>Accede a tus módulos de operación, ventas, inventario y proyectos desde una sola plataforma.</p>
       </section>
 
       <form className="auth-card" onSubmit={handleSubmit}>
         <div>
           <h2>Iniciar sesión</h2>
-          <p>Si tu usuario pertenece a varias empresas, captura también el `empresa_id`.</p>
+          <p>Ingresa con tu correo y contraseña.</p>
         </div>
 
         <label>
@@ -74,13 +72,14 @@ export default function LoginPage() {
         </label>
 
         <label>
-          Empresa ID (opcional)
+          Empresa (opcional)
           <input
             onChange={(event) => setForm({ ...form, empresa_id: event.target.value })}
-            placeholder="Solo si el usuario pertenece a varias empresas"
+            placeholder="Solo si tienes acceso a varias empresas"
             type="text"
             value={form.empresa_id}
           />
+          <span className="field-hint">Normalmente puedes dejar este campo vacío.</span>
         </label>
 
         {error ? <p className="form-error">{error}</p> : null}
@@ -90,10 +89,9 @@ export default function LoginPage() {
         </button>
 
         <p className="auth-link">
-          ¿No tienes cuenta? <Link to="/registro">Crear empresa y usuario</Link>
+          ¿No tienes cuenta? <Link to="/registro">Crear empresa</Link>
         </p>
       </form>
     </div>
   );
 }
-
