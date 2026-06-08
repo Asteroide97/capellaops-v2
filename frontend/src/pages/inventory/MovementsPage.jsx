@@ -355,8 +355,7 @@ export default function MovementsPage() {
           material_id: item.material_id,
           cantidad: modalState.tipo === "ajuste" ? null : item.cantidad,
           cantidad_nueva: modalState.tipo === "ajuste" ? item.cantidad_nueva : null,
-          costo_unitario:
-            modalState.tipo === "entrada" || modalState.tipo === "ajuste" ? item.costo_unitario || null : null,
+          costo_unitario: modalState.tipo === "entrada" ? item.costo_unitario || null : null,
           notas: item.notas || null,
         })),
       };
@@ -658,6 +657,14 @@ export default function MovementsPage() {
             <div className={`inventory-form-note inventory-form-note-${currentMovementMeta.tone}`}>
               <strong>{movementTypes.find((item) => item.value === modalState.tipo)?.label}</strong>: {currentMovementMeta.helper}
             </div>
+            <div className="inventory-form-note">
+              <strong>Costo automático</strong>
+              <p className="table-note">
+                {modalState.tipo === "entrada"
+                  ? "Puedes capturar un costo opcional por renglón. Si lo dejas vacío, se usará el costo actual del material."
+                  : "Se usará el costo actual del material para registrar el movimiento."}
+              </p>
+            </div>
 
             <section className="inventory-form-section">
               <SectionTitle subtitle="Datos generales del movimiento" title="Encabezado" />
@@ -916,9 +923,7 @@ export default function MovementsPage() {
                   columns={[
                     { key: "material", label: "Material" },
                     { key: "cantidad", label: modalState.tipo === "ajuste" ? "Cantidad nueva" : "Cantidad" },
-                    ...(modalState.tipo === "entrada" || modalState.tipo === "ajuste"
-                      ? [{ key: "costo", label: "Costo unitario" }]
-                      : []),
+                    ...(modalState.tipo === "entrada" ? [{ key: "costo", label: "Costo opcional" }] : []),
                     { key: "notas", label: "Notas" },
                     { key: "accion", label: "Acción" },
                   ]}
@@ -963,7 +968,7 @@ export default function MovementsPage() {
                               value={modalState.tipo === "ajuste" ? line.cantidad_nueva : line.cantidad}
                             />
                           </td>
-                          {modalState.tipo === "entrada" || modalState.tipo === "ajuste" ? (
+                          {modalState.tipo === "entrada" ? (
                             <td>
                               <input
                                 min="0"
@@ -974,10 +979,12 @@ export default function MovementsPage() {
                                     normalizeDecimalInput(event.target.value),
                                   )
                                 }
+                                placeholder="Auto"
                                 step="0.0001"
                                 type="number"
                                 value={line.costo_unitario}
                               />
+                              <div className="inventory-cell-sub">Déjalo vacío para usar el costo actual del material.</div>
                             </td>
                           ) : null}
                           <td>

@@ -181,6 +181,7 @@ export default function PMProjectMaterialsTab({
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState(null);
   const [planForm, setPlanForm] = useState(defaultPlanForm);
+  const [showPlanCostOptions, setShowPlanCostOptions] = useState(false);
   const [requisitionModalOpen, setRequisitionModalOpen] = useState(false);
   const [requisitionForm, setRequisitionForm] = useState(defaultRequisitionForm);
   const [movementModalState, setMovementModalState] = useState({ open: false, mode: "consume", seed: defaultMovementForm });
@@ -217,6 +218,17 @@ export default function PMProjectMaterialsTab({
 
   const movementSelectedMaterial = materialsById[movementForm.material_id] ?? null;
   const availableStock = Number(stockMap[movementForm.material_id]?.[movementForm.almacen_id] || 0);
+  const movementAutoCost = useMemo(() => {
+    if (!movementSelectedMaterial) {
+      return 0;
+    }
+    const averageCost = Number(movementSelectedMaterial.costo_promedio_actual || 0);
+    if (averageCost > 0) {
+      return averageCost;
+    }
+    const referenceCost = Number(movementSelectedMaterial.costo_unitario || 0);
+    return referenceCost > 0 ? referenceCost : 0;
+  }, [movementSelectedMaterial]);
 
   const planRealCostMap = useMemo(() => {
     return consumptions.reduce((accumulator, item) => {
@@ -272,6 +284,7 @@ export default function PMProjectMaterialsTab({
     }
     setEditingPlan(null);
     setPlanForm(defaultPlanForm);
+    setShowPlanCostOptions(false);
     setMaterialSearch("");
     setPlanModalOpen(false);
   }
@@ -279,6 +292,7 @@ export default function PMProjectMaterialsTab({
   function openCreatePlanModal() {
     setEditingPlan(null);
     setPlanForm(defaultPlanForm);
+    setShowPlanCostOptions(false);
     setMaterialSearch("");
     setPlanModalOpen(true);
   }
@@ -292,6 +306,7 @@ export default function PMProjectMaterialsTab({
       costo_unitario_estimado: plan.costo_unitario_estimado ?? "",
       observaciones: plan.observaciones ?? "",
     });
+    setShowPlanCostOptions(false);
     setMaterialSearch(`${safeDisplayText(plan.material_sku_snapshot)} ${safeDisplayText(plan.material_nombre_snapshot)}`);
     setPlanModalOpen(true);
   }
@@ -360,7 +375,10 @@ export default function PMProjectMaterialsTab({
         tarea_id: planForm.tarea_id || null,
         material_id: planForm.material_id,
         cantidad_planificada: Number(planForm.cantidad_planificada || 0),
-        costo_unitario_estimado: planForm.costo_unitario_estimado === "" ? null : Number(planForm.costo_unitario_estimado || 0),
+        costo_unitario_estimado:
+          showPlanCostOptions && planForm.costo_unitario_estimado !== ""
+            ? Number(planForm.costo_unitario_estimado || 0)
+            : null,
         observaciones: planForm.observaciones.trim() || null,
       };
       if (editingPlan?.id) {
@@ -742,7 +760,7 @@ export default function PMProjectMaterialsTab({
         onClose={closePlanModal}
         open={planModalOpen}
         size="large"
-        subtitle="Define el material planeado para comparar consumo real y costo del proyecto."
+        subtitle="Selecciona el material, la tarea y la cantidad. El costo planeado se calculará automáticamente."
         title={editingPlan ? "Editar material planeado" : "Agregar material planeado"}
       >
         <form className="inventory-modal-form" id="pm-project-material-plan-form" onSubmit={handleSavePlan}>
@@ -793,16 +811,6 @@ export default function PMProjectMaterialsTab({
               />
             </Field>
 
-            <Field hint="Opcional. Si lo dejas vacío se usa el costo actual del material." label="Costo unitario estimado">
-              <input
-                min="0"
-                onChange={(event) => setPlanForm((current) => ({ ...current, costo_unitario_estimado: event.target.value }))}
-                step="0.0001"
-                type="number"
-                value={planForm.costo_unitario_estimado}
-              />
-            </Field>
-
             <Field label="Observaciones" span={2}>
               <textarea
                 onChange={(event) => setPlanForm((current) => ({ ...current, observaciones: event.target.value }))}
@@ -811,6 +819,32 @@ export default function PMProjectMaterialsTab({
               />
             </Field>
           </FormGrid>
+
+          <details className="inventory-optional-panel" open={showPlanCostOptions}>
+            <summary
+              onClick={(event) => {
+                event.preventDefault();
+                setShowPlanCostOptions((current) => !current);
+              }}
+            >
+              Opciones de costeo
+            </summary>
+            <div className="inventory-optional-panel-body">
+              <Field
+                hint="Déjalo vacío para usar el costo actual del material."
+                label="Costo unitario estimado, opcional"
+              >
+                <input
+                  min="0"
+                  onChange={(event) => setPlanForm((current) => ({ ...current, costo_unitario_estimado: event.target.value }))}
+                  placeholder="Auto"
+                  step="0.0001"
+                  type="number"
+                  value={planForm.costo_unitario_estimado}
+                />
+              </Field>
+            </div>
+          </details>
         </form>
       </ModalShell>
 
@@ -842,6 +876,14 @@ export default function PMProjectMaterialsTab({
         title={movementModalState.mode === "consume" ? "Consumir material" : "Devolver material"}
       >
         <form className="inventory-modal-form" id="pm-project-material-movement-form" onSubmit={handleSaveMovement}>
+          <div className={`inventory-form-note ${movementAutoCost > 0 ? "" : "inventory-form-note-warning"}`}>
+            <strong>{movementAutoCost > 0 ? "Costo automático" : "Sin costo registrado"}</strong>
+            <p className="table-note">
+              {movementAutoCost > 0
+                ? "Se usará el costo actual del material para calcular el costo real del proyecto."
+                : "Este material no tiene costo registrado. El movimiento se guardará con costo $0.00."}
+            </p>
+          </div>
           <FormGrid>
             <Field label="Material">
               <select

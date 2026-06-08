@@ -1879,6 +1879,31 @@ textarea {
   background: #fef2f2;
 }
 
+.inventory-optional-panel {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px dashed var(--border);
+  background: color-mix(in srgb, var(--surface) 90%, #eef6ff 10%);
+}
+
+.inventory-optional-panel summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--text);
+  list-style: none;
+}
+
+.inventory-optional-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.inventory-optional-panel-body {
+  display: grid;
+  gap: 1rem;
+}
+
 .inventory-material-picker {
   display: grid;
   gap: 1rem;

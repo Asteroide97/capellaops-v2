@@ -59,11 +59,11 @@ const defaultForm = {
   categoria: "",
   subcategoria: "",
   unidad: "pieza",
-  costo_unitario: "0",
+  costo_unitario: "",
   costo_promedio_actual: "",
-  precio_venta: "0",
-  stock_minimo: "0",
-  stock_maximo: "0",
+  precio_venta: "",
+  stock_minimo: "",
+  stock_maximo: "",
   ubicacion_texto: "",
   proveedor_principal_id: "",
   lead_time_dias: "0",
@@ -366,11 +366,11 @@ export default function MaterialsPage() {
       categoria: material.categoria || "",
       subcategoria: material.subcategoria || "",
       unidad: material.unidad,
-      costo_unitario: String(material.costo_unitario ?? 0),
+      costo_unitario: Number(material.costo_unitario ?? 0) > 0 ? String(material.costo_unitario) : "",
       costo_promedio_actual: material.costo_promedio_actual != null ? String(material.costo_promedio_actual) : "",
-      precio_venta: String(material.precio_venta ?? 0),
-      stock_minimo: String(material.stock_minimo ?? 0),
-      stock_maximo: String(material.stock_maximo ?? 0),
+      precio_venta: Number(material.precio_venta ?? 0) > 0 ? String(material.precio_venta) : "",
+      stock_minimo: Number(material.stock_minimo ?? 0) > 0 ? String(material.stock_minimo) : "",
+      stock_maximo: Number(material.stock_maximo ?? 0) > 0 ? String(material.stock_maximo) : "",
       ubicacion_texto: material.ubicacion_texto || "",
       proveedor_principal_id: material.proveedor_principal_id || "",
       lead_time_dias: String(material.lead_time_dias ?? 0),
@@ -413,11 +413,11 @@ export default function MaterialsPage() {
         categoria: form.categoria,
         subcategoria: form.subcategoria || null,
         unidad: form.unidad,
-        costo_unitario: form.costo_unitario,
+        costo_unitario: form.costo_unitario === "" ? 0 : form.costo_unitario,
         costo_promedio_actual: form.costo_promedio_actual || null,
-        precio_venta: form.precio_venta,
-        stock_minimo: form.stock_minimo,
-        stock_maximo: form.stock_maximo,
+        precio_venta: form.precio_venta === "" ? 0 : form.precio_venta,
+        stock_minimo: form.stock_minimo === "" ? 0 : form.stock_minimo,
+        stock_maximo: form.stock_maximo === "" ? 0 : form.stock_maximo,
         ubicacion_texto: form.ubicacion_texto || null,
         proveedor_principal_id: form.proveedor_principal_id || null,
         lead_time_dias: Number(form.lead_time_dias || 0),
@@ -969,9 +969,12 @@ export default function MaterialsPage() {
           </section>
 
           <section className="inventory-form-section">
-            <SectionTitle subtitle="Mínimos, máximos y costos visibles" title="Stock y costos" />
+            <SectionTitle
+              subtitle="Úsalos como referencia. El stock inicial y los ajustes se registran desde Movimientos."
+              title="Costos y parámetros opcionales"
+            />
             <FormGrid>
-              <Field label="Stock mínimo">
+              <Field hint="Opcional" label="Stock mínimo, opcional">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -980,14 +983,14 @@ export default function MaterialsPage() {
                       stock_minimo: normalizeDecimalInput(event.target.value),
                     }))
                   }
-                  required
+                  placeholder="Auto"
                   step="0.0001"
                   type="number"
                   value={form.stock_minimo}
                 />
               </Field>
 
-              <Field label="Stock máximo">
+              <Field hint="Opcional" label="Stock máximo, opcional">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -996,13 +999,14 @@ export default function MaterialsPage() {
                       stock_maximo: normalizeDecimalInput(event.target.value),
                     }))
                   }
+                  placeholder="Auto"
                   step="0.0001"
                   type="number"
                   value={form.stock_maximo}
                 />
               </Field>
 
-              <Field label="Costo unitario">
+              <Field hint="Déjalo vacío para usar el costo actual del material." label="Costo de referencia, opcional">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -1011,14 +1015,14 @@ export default function MaterialsPage() {
                       costo_unitario: normalizeDecimalInput(event.target.value),
                     }))
                   }
-                  required
+                  placeholder="Auto"
                   step="0.0001"
                   type="number"
                   value={form.costo_unitario}
                 />
               </Field>
 
-              <Field hint="Opcional" label="Costo promedio actual">
+              <Field hint="Opcional. Se usa como referencia si ya conoces el costo actual." label="Costo promedio actual">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -1027,13 +1031,14 @@ export default function MaterialsPage() {
                       costo_promedio_actual: normalizeDecimalInput(event.target.value),
                     }))
                   }
+                  placeholder="Auto"
                   step="0.0001"
                   type="number"
                   value={form.costo_promedio_actual}
                 />
               </Field>
 
-              <Field label="Precio de venta">
+              <Field hint="Opcional" label="Precio de venta, opcional">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -1042,7 +1047,7 @@ export default function MaterialsPage() {
                       precio_venta: normalizeDecimalInput(event.target.value),
                     }))
                   }
-                  required
+                  placeholder="Auto"
                   step="0.0001"
                   type="number"
                   value={form.precio_venta}

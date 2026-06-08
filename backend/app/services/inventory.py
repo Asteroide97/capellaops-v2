@@ -136,6 +136,80 @@ def cost_basis_for_material(material: Material) -> Decimal:
     return decimal_or_zero(material.costo_promedio_actual) or decimal_or_zero(material.costo_unitario)
 
 
+def resolve_inventory_unit_cost(
+    db: Session,
+    *,
+    empresa_id: str,
+    material: Material,
+    almacen_id: str | None = None,
+) -> Decimal:
+    average_cost = decimal_or_zero(material.costo_promedio_actual)
+    if average_cost > ZERO:
+        return average_cost
+
+    latest_entry_query = (
+        select(MovimientoInventario)
+        .where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.material_id == material.id,
+            MovimientoInventario.tipo == "entrada",
+            MovimientoInventario.estatus == "confirmado",
+        )
+        .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
+    )
+    if almacen_id:
+        latest_entry_query = latest_entry_query.where(MovimientoInventario.almacen_id == almacen_id)
+    latest_entry = db.scalars(latest_entry_query.limit(1)).first()
+    if latest_entry:
+        latest_entry_cost = decimal_or_zero(latest_entry.costo_unitario_snapshot) or decimal_or_zero(
+            latest_entry.costo_promedio_snapshot
+        )
+        if latest_entry_cost > ZERO:
+            return latest_entry_cost
+
+    reference_cost = decimal_or_zero(material.costo_unitario)
+    if reference_cost > ZERO:
+        return reference_cost
+    return ZERO
+
+
+def resolve_project_return_unit_cost(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    material_id: str,
+    almacen_id: str | None = None,
+    task_id: str | None = None,
+    partida_id: str | None = None,
+) -> Decimal:
+    movement_query = (
+        select(MovimientoInventario)
+        .where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.proyecto_id == project_id,
+            MovimientoInventario.material_id == material_id,
+            MovimientoInventario.tipo == "salida",
+            MovimientoInventario.estatus == "confirmado",
+            MovimientoInventario.referencia_tipo == "CONSUMO_PROYECTO",
+        )
+        .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
+    )
+    if almacen_id:
+        movement_query = movement_query.where(MovimientoInventario.almacen_id == almacen_id)
+    if task_id:
+        movement_query = movement_query.where(MovimientoInventario.pm_tarea_id == task_id)
+    if partida_id:
+        movement_query = movement_query.where(MovimientoInventario.pm_partida_id == partida_id)
+
+    movement = db.scalars(movement_query.limit(1)).first()
+    if not movement:
+        return ZERO
+
+    unit_cost = decimal_or_zero(movement.costo_unitario_snapshot) or decimal_or_zero(movement.costo_promedio_snapshot)
+    return unit_cost if unit_cost > ZERO else ZERO
+
+
 def is_low_stock_value(stock_total: Decimal, stock_minimo: Decimal) -> bool:
     return stock_total <= stock_minimo if stock_minimo > ZERO else stock_total <= ZERO
 
@@ -882,12 +956,22 @@ def apply_inventory_movement(
         )
 
     override_cost = decimal_or_zero(costo_unitario) if costo_unitario is not None else None
-    if override_cost is not None and tipo in {"entrada", "ajuste"}:
-        material.costo_unitario = override_cost
-        material.costo_promedio_actual = override_cost
+    resolved_unit_cost = (
+        override_cost
+        if override_cost is not None
+        else resolve_inventory_unit_cost(db, empresa_id=empresa.id, material=material, almacen_id=warehouse.id)
+    )
+    if tipo in {"entrada", "ajuste"}:
+        if override_cost is not None:
+            material.costo_unitario = override_cost
+            material.costo_promedio_actual = override_cost
+        elif resolved_unit_cost > ZERO:
+            if decimal_or_zero(material.costo_unitario) <= ZERO:
+                material.costo_unitario = resolved_unit_cost
+            material.costo_promedio_actual = resolved_unit_cost
 
     stock.cantidad = next_quantity
-    cost_basis = cost_basis_for_material(material)
+    cost_basis = decimal_or_zero(material.costo_promedio_actual) or resolved_unit_cost
     movement = MovimientoInventario(
         empresa_id=empresa.id,
         almacen_id=warehouse.id,
@@ -912,7 +996,7 @@ def apply_inventory_movement(
         pm_tarea_nombre_snapshot=normalize_optional_text(pm_tarea_nombre_snapshot),
         pm_partida_id=normalize_optional_text(pm_partida_id),
         pm_partida_nombre_snapshot=normalize_optional_text(pm_partida_nombre_snapshot),
-        costo_unitario_snapshot=override_cost if override_cost is not None else decimal_or_zero(material.costo_unitario),
+        costo_unitario_snapshot=resolved_unit_cost,
         costo_promedio_snapshot=cost_basis,
         notas=normalize_optional_text(notas),
         created_by=user.id,
@@ -1225,6 +1309,22 @@ def return_material_from_project(
             status_code=status.HTTP_409_CONFLICT,
             detail="La devolución excede el material consumido para este proyecto.",
         )
+    return_unit_cost = resolve_project_return_unit_cost(
+        db,
+        empresa_id=empresa_id,
+        project_id=project.id,
+        material_id=material.id,
+        almacen_id=warehouse.id,
+        task_id=task.id if task else None,
+        partida_id=budget_item.id if budget_item else None,
+    )
+    if return_unit_cost <= ZERO:
+        return_unit_cost = resolve_inventory_unit_cost(
+            db,
+            empresa_id=empresa_id,
+            material=material,
+            almacen_id=warehouse.id,
+        )
 
     movement = apply_inventory_movement(
         db,
@@ -1248,7 +1348,7 @@ def return_material_from_project(
         pm_tarea_nombre_snapshot=task.titulo if task else None,
         pm_partida_id=budget_item.id if budget_item else None,
         pm_partida_nombre_snapshot=budget_item.nombre if budget_item else None,
-        costo_unitario=None,
+        costo_unitario=return_unit_cost if return_unit_cost > ZERO else None,
     )
 
     from app.services.pm import refresh_project_material_costs

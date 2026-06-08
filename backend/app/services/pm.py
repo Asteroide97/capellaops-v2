@@ -4416,6 +4416,8 @@ def add_project_material_plan(
     ip_address: str | None,
 ) -> PMProyectoMaterialPlanOut:
     ensure_pm_materials_enabled(pm_context)
+    from app.services.inventory import resolve_inventory_unit_cost
+
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
     task = resolve_project_task(db, pm_context.empresa_id, project.id, task_id)
     material = get_material_for_company_pm(db, pm_context.empresa_id, material_id)
@@ -4429,7 +4431,7 @@ def add_project_material_plan(
     estimated_unit_cost = decimal_or_zero(
         costo_unitario_estimado
         if costo_unitario_estimado is not None
-        else material.costo_promedio_actual or material.costo_unitario
+        else resolve_inventory_unit_cost(db, empresa_id=pm_context.empresa_id, material=material)
     )
     planned_quantity = decimal_or_zero(cantidad_planificada)
     plan = PMProyectoMaterialPlan(
@@ -4481,6 +4483,8 @@ def update_project_material_plan(
     ip_address: str | None,
 ) -> PMProyectoMaterialPlanOut:
     ensure_pm_materials_enabled(pm_context)
+    from app.services.inventory import resolve_inventory_unit_cost
+
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
     plan = get_project_material_plan_for_company(db, pm_context.empresa_id, plan_id)
     if plan.proyecto_id != project.id:
@@ -4516,7 +4520,11 @@ def update_project_material_plan(
     if costo_unitario_estimado is not None:
         plan.costo_unitario_estimado = decimal_or_zero(costo_unitario_estimado)
     else:
-        plan.costo_unitario_estimado = decimal_or_zero(plan.costo_unitario_estimado or next_material.costo_promedio_actual or next_material.costo_unitario)
+        plan.costo_unitario_estimado = decimal_or_zero(plan.costo_unitario_estimado) or resolve_inventory_unit_cost(
+            db,
+            empresa_id=pm_context.empresa_id,
+            material=next_material,
+        )
     if observaciones is not None:
         plan.observaciones = normalize_optional_text(observaciones)
     if activo is not None:
