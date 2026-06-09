@@ -1065,35 +1065,46 @@ textarea {
 
 .pos-grid {
   display: grid;
-  gap: 1.5rem;
+  gap: 1.25rem;
   grid-template-columns: minmax(0, 1.05fr) minmax(360px, 0.95fr);
 }
 
-.pos-shell-v2 {
-  gap: 1.5rem;
-}
-
-.pos-page-header {
+.pos-shell {
   display: grid;
   gap: 1.25rem;
 }
 
+.pos-shell-v2 {
+  gap: 1.25rem;
+}
+
+.pos-page-header {
+  display: grid;
+  gap: 1rem;
+  padding: 1.4rem 1.5rem;
+}
+
 .pos-page-header-copy {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.35rem;
 }
 
 .pos-page-header-copy h1 {
   margin: 0;
-  font-size: clamp(1.9rem, 2.2vw, 2.5rem);
+  font-size: clamp(1.8rem, 2vw, 2.35rem);
   color: var(--brand-strong);
 }
 
-.pos-page-header-meta {
+.pos-toolbar {
   display: flex;
-  align-items: flex-end;
-  gap: 0.85rem;
+  align-items: center;
+  gap: 0.75rem;
   flex-wrap: wrap;
+}
+
+.pos-status-badge {
+  display: inline-flex;
+  align-items: center;
 }
 
 .pos-warehouse-selector {
@@ -1105,10 +1116,16 @@ textarea {
 
 .pos-warehouse-selector select {
   width: 100%;
-  padding: 0.9rem 1rem;
-  border-radius: 1rem;
-  border: 1px solid var(--border);
-  background: var(--surface);
+}
+
+.pos-content-grid {
+  display: grid;
+  gap: 1.25rem;
+}
+
+.pos-main-column {
+  display: grid;
+  gap: 1rem;
 }
 
 .pos-view-nav {
@@ -1128,8 +1145,8 @@ textarea {
 
 .pos-sell-layout {
   display: grid;
-  gap: 1.5rem;
-  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 380px);
+  gap: 1.25rem;
+  grid-template-columns: minmax(0, 1.5fr) minmax(320px, 390px);
   align-items: start;
 }
 
@@ -1137,40 +1154,39 @@ textarea {
 .pos-view-stack,
 .pos-modal-stack {
   display: grid;
-  gap: 1.5rem;
+  gap: 1rem;
 }
 
 .pos-search-card {
-  gap: 1rem;
+  padding: 1.15rem 1.25rem;
 }
 
 .pos-search-form {
   display: grid;
-  gap: 0.85rem;
+  gap: 0.75rem;
 }
 
 .pos-search-input {
   width: 100%;
-  padding: 1rem 1.15rem;
-  border-radius: 1rem;
-  border: 1px solid var(--border);
-  background: var(--surface);
+  min-height: 52px;
   font-size: 1rem;
 }
 
 .pos-catalog-grid {
   display: grid;
-  gap: 1rem;
+  gap: 0.9rem;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.pos-product-card,
 .pos-catalog-card {
   border: 1px solid var(--border);
-  border-radius: 1.1rem;
+  border-radius: 1.25rem;
   background: var(--surface);
-  padding: 1rem;
+  padding: 1rem 1rem 0.95rem;
   display: grid;
-  gap: 0.85rem;
+  gap: 0.75rem;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.04);
 }
 
 .pos-catalog-card-top,
@@ -1188,51 +1204,105 @@ textarea {
   gap: 0.75rem;
   color: var(--muted);
   font-size: 0.92rem;
+  align-items: center;
+}
+
+.pos-catalog-card-meta strong {
+  color: var(--brand-strong);
+  font-size: 1rem;
 }
 
 .pos-cart-list {
   display: grid;
-  gap: 1rem;
+  gap: 0.85rem;
 }
 
+.pos-cart-item,
 .pos-cart-row {
   border: 1px solid var(--border);
-  border-radius: 1.1rem;
+  border-radius: 1.15rem;
   background: var(--surface);
-  padding: 1rem;
+  padding: 0.95rem 1rem;
   display: grid;
-  gap: 0.9rem;
+  gap: 0.85rem;
+}
+
+.pos-cart-total-chip {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 170px;
+  padding: 0.75rem 0.9rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(20, 92, 67, 0.1);
+  background: rgba(20, 92, 67, 0.05);
+  text-align: right;
+}
+
+.pos-cart-total-chip span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.pos-cart-total-chip strong {
+  color: var(--brand-strong);
+  font-size: 1.05rem;
 }
 
 .pos-cart-grid {
   display: grid;
-  gap: 0.85rem;
+  gap: 0.75rem;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .pos-cart-grid label,
 .pos-payment-form label,
-.pos-history-filters label {
+.pos-history-filters label,
+.pos-cash-form label {
   display: grid;
   gap: 0.4rem;
   color: var(--muted);
 }
 
+.pos-input,
+.pos-textarea,
 .pos-cart-grid input,
 .pos-payment-form input,
 .pos-payment-form textarea,
 .pos-history-filters input,
-.pos-history-filters select {
+.pos-history-filters select,
+.pos-cash-form input,
+.pos-cash-form textarea {
   width: 100%;
   padding: 0.9rem 1rem;
   border-radius: 1rem;
   border: 1px solid var(--border);
   background: var(--surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.pos-input:focus,
+.pos-textarea:focus,
+.pos-cart-grid input:focus,
+.pos-payment-form input:focus,
+.pos-payment-form textarea:focus,
+.pos-history-filters input:focus,
+.pos-history-filters select:focus,
+.pos-cash-form input:focus,
+.pos-cash-form textarea:focus {
+  outline: none;
+  border-color: rgba(20, 92, 67, 0.4);
+  box-shadow: 0 0 0 4px rgba(20, 92, 67, 0.1);
+}
+
+.pos-input.is-warning {
+  border-color: rgba(217, 119, 6, 0.4);
+  background: rgba(245, 158, 11, 0.08);
 }
 
 .pos-cart-inline-meta {
   grid-column: 1 / -1;
-  min-height: 2.9rem;
+  min-height: 2.6rem;
   display: grid;
   align-content: start;
   gap: 0.25rem;
@@ -1240,7 +1310,7 @@ textarea {
 
 .pos-cart-total {
   justify-self: flex-end;
-  font-size: 1.05rem;
+  font-size: 1rem;
   font-weight: 700;
   color: var(--brand-strong);
 }
@@ -1248,17 +1318,20 @@ textarea {
 .pos-payment-panel {
   position: sticky;
   top: 1rem;
+  padding: 1.15rem 1.2rem;
+  border-radius: 1.4rem;
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.06);
 }
 
 .pos-payment-form {
   display: grid;
-  gap: 1rem;
+  gap: 0.9rem;
 }
 
 .pos-payment-summary {
   display: grid;
-  gap: 0.8rem;
-  padding: 1rem;
+  gap: 0.7rem;
+  padding: 0.95rem 1rem;
   border-radius: 1rem;
   background: rgba(20, 92, 67, 0.05);
   border: 1px solid rgba(20, 92, 67, 0.08);
@@ -1289,6 +1362,34 @@ textarea {
   border-color: var(--border);
 }
 
+.pos-warning-box {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(217, 119, 6, 0.2);
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.pos-warning-box strong {
+  color: var(--text-primary);
+}
+
+.pos-warning-box p {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.pos-warning-box.is-success {
+  border-color: rgba(20, 92, 67, 0.16);
+  background: rgba(20, 92, 67, 0.08);
+}
+
+.pos-warning-box.is-error {
+  border-color: rgba(185, 28, 28, 0.15);
+  background: rgba(239, 68, 68, 0.08);
+}
+
 .pos-payment-methods {
   display: grid;
   gap: 0.6rem;
@@ -1311,16 +1412,27 @@ textarea {
   width: 100%;
   justify-content: center;
   background: linear-gradient(135deg, #1e7a57, #145c43);
+  min-height: 50px;
+  border-radius: 1rem;
 }
 
 .pos-charge-button:hover {
   background: linear-gradient(135deg, #239163, #17684b);
 }
 
+.pos-charge-button:disabled {
+  background: #d9e1dc;
+  color: #6b7280;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.pos-action-row,
 .pos-bottom-actions {
   display: flex;
   gap: 0.75rem;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .pos-shift-warning {
@@ -1353,15 +1465,83 @@ textarea {
   gap: 0.45rem;
 }
 
-.pos-history-filters {
+.pos-form-card {
   display: grid;
   gap: 1rem;
-  grid-template-columns: minmax(0, 1.5fr) minmax(220px, 0.7fr) auto;
+}
+
+.pos-form-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pos-kpi-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.pos-kpi-card {
+  border: 1px solid var(--border);
+  border-radius: 1.15rem;
+  background: var(--surface);
+  padding: 0.95rem 1rem;
+  display: grid;
+  gap: 0.45rem;
+  min-height: 116px;
+}
+
+.pos-kpi-card-head {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.pos-history-filters {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: minmax(0, 1.6fr) minmax(220px, 0.7fr) auto;
   align-items: end;
 }
 
 .pos-history-search {
   min-width: 0;
+}
+
+.pos-ticket-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pos-ticket-row {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: minmax(0, 1.2fr) minmax(150px, 0.8fr) minmax(140px, 0.7fr) auto;
+  align-items: center;
+  padding: 0.95rem 1rem;
+  border-radius: 1.15rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pos-ticket-row > div {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.pos-ticket-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.pos-cash-empty-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 0.95fr);
 }
 
 .pos-ticket-meta-grid {
@@ -1373,6 +1553,13 @@ textarea {
 .pos-ticket-printable .mini-card,
 .pos-modal-stack .mini-card {
   gap: 0.35rem;
+}
+
+.pos-empty-state {
+  border-radius: 1.15rem;
+  border: 1px dashed rgba(20, 92, 67, 0.14);
+  background: linear-gradient(180deg, rgba(20, 92, 67, 0.03), rgba(255, 255, 255, 0.7));
+  padding: 1.4rem 1.2rem;
 }
 
 .superadmin-grid {
@@ -4143,6 +4330,11 @@ body.pm-is-dragging {
     grid-template-columns: 1fr;
   }
 
+  .pos-content-grid,
+  .pos-cash-empty-layout {
+    grid-template-columns: 1fr;
+  }
+
   .pos-sell-layout {
     grid-template-columns: 1fr;
   }
@@ -4182,7 +4374,10 @@ body.pm-is-dragging {
 
   .pos-cart-grid,
   .pos-payment-method-grid,
-  .pos-history-filters {
+  .pos-history-filters,
+  .pos-form-grid,
+  .pos-kpi-grid,
+  .pos-ticket-row {
     grid-template-columns: 1fr;
   }
 
@@ -4250,11 +4445,16 @@ body.pm-is-dragging {
   }
 
   .pos-page-header-meta,
+  .pos-toolbar,
   .pos-bottom-actions,
   .pos-cart-main,
   .pos-section-header {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .pos-ticket-row-actions {
+    justify-content: flex-start;
   }
 
   .pos-payment-inline {
