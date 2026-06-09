@@ -163,6 +163,29 @@ function getPaymentMethodLabel(method) {
 }
 
 
+function getPosUiError(requestError, fallback) {
+  const rawMessage = String(requestError?.message ?? "").trim();
+  const normalized = rawMessage.toLowerCase();
+
+  if (!rawMessage) {
+    return fallback;
+  }
+  if (normalized.includes("not found")) {
+    return "No se pudo cargar la información. Intenta actualizar.";
+  }
+  if (normalized.includes("abre caja")) {
+    return "Abre caja para poder cobrar ventas.";
+  }
+  if (normalized.includes("stock") || normalized.includes("existenc") || normalized.includes("insuficiente")) {
+    return "No hay stock suficiente.";
+  }
+  if (normalized.includes("precio") && normalized.includes("venta")) {
+    return "Captura precio de venta para continuar.";
+  }
+  return rawMessage || fallback;
+}
+
+
 function getSaleStatusLabel(status) {
   const labels = {
     pagada: "Pagada",
@@ -486,6 +509,7 @@ export default function PosPage() {
   const [shiftSubmitting, setShiftSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [successContext, setSuccessContext] = useState(null);
 
   const [warehouses, setWarehouses] = useState([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState("");
@@ -620,6 +644,7 @@ export default function PosPage() {
   function clearFeedback() {
     setError("");
     setSuccess("");
+    setSuccessContext(null);
   }
 
   function clearCart() {
@@ -765,13 +790,15 @@ export default function PosPage() {
     }
   }
 
-  async function refreshPosData({ keepTicket = true } = {}) {
+  async function refreshPosData({ keepTicket = true, preserveFeedback = false } = {}) {
     if (!token || !empresaId) {
       return;
     }
 
     setRefreshing(true);
-    clearFeedback();
+    if (!preserveFeedback) {
+      clearFeedback();
+    }
     try {
       await Promise.all([loadCatalog(selectedWarehouseId, catalogFilters), loadSales(saleFilters), loadActiveShift(selectedWarehouseId)]);
       if (keepTicket && selectedSale?.id) {
@@ -799,14 +826,14 @@ export default function PosPage() {
 
     Promise.all([loadCatalog(selectedWarehouseId, catalogFilters), loadActiveShift(selectedWarehouseId)]).catch(
       (requestError) => {
-        setError(requestError.message || "No se pudo cargar el catálogo POS.");
+        setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
       },
     );
   }, [selectedWarehouseId]);
 
   function addToCart(item) {
     if (Number(item.existencia) <= 0) {
-      setError("No hay existencias disponibles para este producto.");
+      setError("No hay stock suficiente.");
       return;
     }
 
@@ -936,11 +963,11 @@ export default function PosPage() {
       return;
     }
     if (cartHasInvalidQuantity) {
-      setError("Revisa las cantidades del carrito. No pueden exceder el stock disponible.");
+      setError("No hay stock suficiente.");
       return;
     }
     if (cartHasMissingPrice) {
-      setError("Configura o captura un precio de venta para este producto.");
+      setError("Captura precio de venta para continuar.");
       return;
     }
     if (saleForm.metodo_pago === "efectivo" && cashReceived < cartTotal) {
@@ -973,12 +1000,13 @@ export default function PosPage() {
       const sale = await createPosSale({ token, empresaId, payload });
       await loadSaleArtifacts(sale.id);
       clearCart();
-      setSuccess(`Venta ${sale.folio} registrada correctamente.`);
-      await refreshPosData({ keepTicket: false });
-      setTicketModalOpen(true);
-      updateView("tickets");
+      await refreshPosData({ keepTicket: false, preserveFeedback: true });
+      setSuccess("Venta cobrada correctamente.");
+      setSuccessContext({ type: "sale", saleId: sale.id, folio: sale.folio });
+      setTicketModalOpen(false);
+      updateView("sell");
     } catch (requestError) {
-      setError(requestError.message || "No se pudo registrar la venta.");
+      setError(getPosUiError(requestError, "No se pudo cobrar la venta. Intenta de nuevo."));
     } finally {
       setSubmitting(false);
     }
@@ -1005,11 +1033,11 @@ export default function PosPage() {
       });
       setActiveShift(shift);
       setOpenShiftForm(defaultOpenShiftForm);
-      setSuccess(`Turno ${shift.folio} abierto.`);
-      await refreshPosData({ keepTicket: false });
+      await refreshPosData({ keepTicket: false, preserveFeedback: true });
+      setSuccess("Turno abierto correctamente.");
       updateView("sell");
     } catch (requestError) {
-      setError(requestError.message || "No se pudo abrir el turno.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setShiftSubmitting(false);
     }
@@ -1044,7 +1072,7 @@ export default function PosPage() {
           : "Retiro manual registrado.",
       );
     } catch (requestError) {
-      setError(requestError.message || "No se pudo registrar el movimiento de caja.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setShiftSubmitting(false);
     }
@@ -1072,10 +1100,10 @@ export default function PosPage() {
       setActiveShift(null);
       setCloseShiftForm(defaultCloseShiftForm);
       setCloseShiftModalOpen(false);
-      setSuccess(`Turno ${shift.folio} cerrado.`);
-      await refreshPosData({ keepTicket: false });
+      await refreshPosData({ keepTicket: false, preserveFeedback: true });
+      setSuccess("Turno cerrado correctamente.");
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cerrar el turno.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setShiftSubmitting(false);
     }
@@ -1102,9 +1130,9 @@ export default function PosPage() {
       });
       await loadSaleArtifacts(sale.id);
       setSuccess(`Venta ${sale.folio} cancelada.`);
-      await refreshPosData({ keepTicket: false });
+      await refreshPosData({ keepTicket: false, preserveFeedback: true });
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cancelar la venta.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setSubmitting(false);
     }
@@ -1118,7 +1146,7 @@ export default function PosPage() {
       setCatalogFilters(nextFilters);
       await loadCatalog(selectedWarehouseId, nextFilters);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo buscar en el catálogo.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     }
   }
 
@@ -1145,7 +1173,7 @@ export default function PosPage() {
         setSuccess(`Producto agregado: ${response.items[0].nombre}`);
       }
     } catch (requestError) {
-      setError(requestError.message || "No se pudo buscar el código en POS.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     }
   }
 
@@ -1157,7 +1185,7 @@ export default function PosPage() {
       setSaleFilters(nextFilters);
       await loadSales(nextFilters);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo filtrar el historial.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     }
   }
 
@@ -1167,7 +1195,7 @@ export default function PosPage() {
     try {
       await loadCatalog(selectedWarehouseId, nextFilters);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cambiar la página del catálogo.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     }
   }
 
@@ -1177,7 +1205,7 @@ export default function PosPage() {
     try {
       await loadSales(nextFilters);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cambiar la página del historial.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     }
   }
 
@@ -1196,7 +1224,7 @@ export default function PosPage() {
       await loadSaleArtifacts(record.id);
       setDetailModalOpen(true);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cargar la venta.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setSubmitting(false);
     }
@@ -1209,7 +1237,7 @@ export default function PosPage() {
       await loadSaleArtifacts(saleId);
       setTicketModalOpen(true);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cargar el ticket.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setSubmitting(false);
     }
@@ -1314,6 +1342,16 @@ export default function PosPage() {
         <div className="pos-warning-box is-success">
           <strong>Operación completada</strong>
           <p>{success}</p>
+          {successContext?.type === "sale" && selectedTicket ? (
+            <div className="pos-action-row">
+              <button className="ghost-button" onClick={() => openTicket(successContext.saleId)} type="button">
+                Ver ticket
+              </button>
+              <button className="primary-button" onClick={handleNewSale} type="button">
+                Nueva venta
+              </button>
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -1503,7 +1541,7 @@ export default function PosPage() {
                               <span className="table-note inventory-value-negative">Captura precio de venta.</span>
                             ) : null}
                             {lineHasStockIssue ? (
-                              <span className="form-error">La cantidad excede el stock disponible.</span>
+                              <span className="form-error">No hay stock suficiente.</span>
                             ) : null}
                           </div>
                         </div>
@@ -1758,6 +1796,7 @@ export default function PosPage() {
                       <th>Folio</th>
                       <th>Fecha</th>
                       <th>Cliente o cajero</th>
+                      <th>Método</th>
                       <th>Estatus</th>
                       <th>Total</th>
                       <th>Acciones</th>
@@ -1768,7 +1807,13 @@ export default function PosPage() {
                       <tr key={`${record.source}-${record.id}`}>
                         <td>{record.folio}</td>
                         <td>{formatDateTime(record.created_at)}</td>
-                        <td>{record.cliente_nombre || record.vendedor_nombre || "Mostrador"}</td>
+                        <td>
+                          <div className="pos-record-copy">
+                            <strong>{record.cliente_nombre || "Mostrador"}</strong>
+                            <span className="table-note">{record.vendedor_nombre || "Sin cajero"}</span>
+                          </div>
+                        </td>
+                        <td>{getPaymentMethodLabel(record.metodo_pago)}</td>
                         <td>
                           <StatusBadge
                             label={getSaleStatusLabel(record.estatus)}
@@ -1964,6 +2009,8 @@ export default function PosPage() {
               <div className="pos-kpi-grid pos-kpi-grid-compact">
                 <PosKpiCard icon={<Wallet size={18} />} label="Fondo inicial" meta={activeShift.folio} value={formatMoney(activeShift.fondo_inicial)} />
                 <PosKpiCard icon={<BadgeDollarSign size={18} />} label="Ventas totales" meta={`${activeShift.ventas_count} ventas`} value={formatMoney(activeShift.total_ventas)} />
+                <PosKpiCard icon={<ReceiptText size={18} />} label="Núm. ventas" meta="Operaciones cobradas" value={formatNumber(activeShift.ventas_count)} />
+                <PosKpiCard icon={<Clock3 size={18} />} label="Apertura" meta="Inicio del turno" value={formatDateTime(activeShift.opened_at)} />
                 <PosKpiCard icon={<BanknoteArrowUp size={18} />} label="Ingresos manuales" meta="Ajustes de caja" value={formatMoney(activeShift.ingresos_manuales)} />
                 <PosKpiCard icon={<BanknoteArrowDown size={18} />} label="Retiros manuales" meta="Salidas manuales" value={formatMoney(activeShift.retiros_manuales)} />
               </div>
@@ -2112,6 +2159,11 @@ export default function PosPage() {
                 <strong>{getSaleStatusLabel(selectedSale.estatus)}</strong>
                 <p>{getPaymentMethodLabel(selectedSale.metodo_pago)}</p>
               </article>
+              <article className="mini-card">
+                <span className="eyebrow">Método de pago</span>
+                <strong>{getPaymentMethodLabel(selectedSale.metodo_pago)}</strong>
+                <p>{selectedSale.vendedor_nombre || "Mostrador"}</p>
+              </article>
             </div>
 
             <div className="table-wrap">
@@ -2154,6 +2206,16 @@ export default function PosPage() {
               </article>
             </div>
 
+            {selectedSale.notas ? (
+              <div className="feature-card pos-note-card">
+                <div className="feature-header">
+                  <p className="eyebrow">Nota</p>
+                  <h3>Nota de venta</h3>
+                </div>
+                <p>{selectedSale.notas}</p>
+              </div>
+            ) : null}
+
             {selectedSale.estatus === "pagada" ? (
               <label>
                 Motivo de cancelación
@@ -2168,6 +2230,9 @@ export default function PosPage() {
         footer={
           selectedTicket ? (
             <div className="inventory-actions">
+              <button className="ghost-button" onClick={() => setTicketModalOpen(false)} type="button">
+                Cerrar
+              </button>
               <button className="primary-button" onClick={printTicket} type="button">
                 Imprimir
               </button>
@@ -2247,7 +2312,7 @@ export default function PosPage() {
             </div>
 
             {selectedTicket.notas ? (
-              <div className="feature-card warning">
+              <div className="feature-card pos-note-card">
                 <div className="feature-header">
                   <p className="eyebrow">Nota</p>
                   <h3>Nota de venta</h3>
@@ -2255,6 +2320,11 @@ export default function PosPage() {
                 <p>{selectedTicket.notas}</p>
               </div>
             ) : null}
+
+            <div className="pos-ticket-thanks">
+              <strong>Gracias por su compra</strong>
+              <p>Conserve este comprobante para cualquier aclaración.</p>
+            </div>
           </div>
         )}
       </PosModal>
