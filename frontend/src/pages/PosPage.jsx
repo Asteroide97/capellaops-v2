@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BadgeDollarSign,
@@ -35,6 +35,9 @@ import {
   getPosTicket,
   getWarehouses,
   openPosShift,
+  paySuspendedPosSale,
+  resumePosSale,
+  suspendPosSale,
 } from "../api/client";
 
 
@@ -170,7 +173,7 @@ function getPosUiError(requestError, fallback) {
   if (!rawMessage) {
     return fallback;
   }
-  if (normalized.includes("not found")) {
+  if (requestError?.status === 404) {
     return "No se pudo cargar la información. Intenta actualizar.";
   }
   if (normalized.includes("abre caja")) {
@@ -211,112 +214,8 @@ function getSaleStatusTone(status) {
 }
 
 
-function buildDraftStorageKey(empresaId) {
-  return `capella_ops_pos_suspended_${empresaId}`;
-}
-
-
-function loadSuspendedDrafts(empresaId) {
-  if (!empresaId) {
-    return [];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(buildDraftStorageKey(empresaId));
-    if (!raw) {
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-
-function persistSuspendedDrafts(empresaId, drafts) {
-  if (!empresaId) {
-    return;
-  }
-
-  window.localStorage.setItem(buildDraftStorageKey(empresaId), JSON.stringify(drafts));
-}
-
-
-function buildSuspendedDraft({ cart, saleForm, warehouse, user }) {
-  const subtotal = cart.reduce(
-    (total, item) => total + Number(item.precio_unitario || 0) * Number(item.cantidad || 0),
-    0,
-  );
-  const descuentoTotal = cart.reduce(
-    (total, item) => total + Number(item.descuento_unitario || 0) * Number(item.cantidad || 0),
-    0,
-  );
-  const total = Math.max(0, subtotal - descuentoTotal);
-  const createdAt = new Date().toISOString();
-  const draftId = `draft-${Date.now()}`;
-
-  return {
-    id: draftId,
-    source: "draft",
-    folio: `SUSP-${draftId.slice(-6).toUpperCase()}`,
-    created_at: createdAt,
-    estatus: "suspendida",
-    almacen_id: warehouse?.id ?? "",
-    almacen_nombre: warehouse?.nombre ?? "",
-    usuario_id: user?.id ?? "",
-    vendedor_nombre: user?.full_name ?? "Usuario actual",
-    cliente_nombre: saleForm.cliente_nombre || null,
-    cliente_email: saleForm.cliente_email || null,
-    subtotal,
-    descuento_total: descuentoTotal,
-    impuesto_total: 0,
-    total,
-    metodo_pago: saleForm.metodo_pago,
-    monto_recibido: saleForm.monto_recibido || null,
-    cambio: null,
-    notas: saleForm.notas || null,
-    items_count: cart.length,
-    details: cart.map((item) => ({
-      id: `${draftId}-${item.material_id}`,
-      venta_id: draftId,
-      material_id: item.material_id,
-      sku_snapshot: item.sku,
-      nombre_snapshot: item.nombre,
-      cantidad: Number(item.cantidad || 0),
-      precio_unitario: Number(item.precio_unitario || 0),
-      descuento_unitario: Number(item.descuento_unitario || 0),
-      subtotal_linea: Number(item.precio_unitario || 0) * Number(item.cantidad || 0),
-      total_linea:
-        Math.max(0, Number(item.precio_unitario || 0) - Number(item.descuento_unitario || 0)) *
-        Number(item.cantidad || 0),
-      unidad: item.unidad,
-      existencia: item.existencia,
-    })),
-  };
-}
-
-
-function recordMatchesSearch(record, search) {
-  const normalizedSearch = String(search ?? "").trim().toLowerCase();
-  if (!normalizedSearch) {
-    return true;
-  }
-
-  const haystack = [
-    record.folio,
-    record.cliente_nombre,
-    record.cliente_email,
-    record.vendedor_nombre,
-    record.almacen_nombre,
-    record.turno_folio,
-    record.notas,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  return haystack.includes(normalizedSearch);
+function getSaleDisplayDate(sale) {
+  return sale?.paid_at || sale?.created_at || null;
 }
 
 
@@ -542,8 +441,7 @@ export default function PosPage() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [ticketModalOpen, setTicketModalOpen] = useState(false);
-  const [selectedDraft, setSelectedDraft] = useState(null);
-  const [suspendedDrafts, setSuspendedDrafts] = useState([]);
+  const [resumedSaleId, setResumedSaleId] = useState("");
   const [shiftMovementModalType, setShiftMovementModalType] = useState("");
   const [closeShiftModalOpen, setCloseShiftModalOpen] = useState(false);
 
@@ -604,26 +502,10 @@ export default function PosPage() {
     cartTotal,
   });
 
-  const historyRecords = useMemo(() => {
-    const suspended = suspendedDrafts
-      .filter((draft) => (saleFilters.estatus ? saleFilters.estatus === "suspendida" : true))
-      .filter((draft) => recordMatchesSearch(draft, saleFilters.q))
-      .map((draft) => ({ ...draft, source: "draft" }));
-
-    const realSales = sales
-      .filter((sale) => (saleFilters.estatus === "suspendida" ? false : true))
-      .map((sale) => ({ ...sale, source: "sale" }));
-
-    return [...suspended, ...realSales].sort(
-      (left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime(),
-    );
-  }, [sales, saleFilters.estatus, saleFilters.q, suspendedDrafts]);
+  const historyRecords = useMemo(() => sales, [sales]);
 
   const historySummary = useMemo(() => {
-    const records = [
-      ...sales.map((item) => item.estatus),
-      ...suspendedDrafts.map((item) => item.estatus),
-    ];
+    const records = sales.map((item) => item.estatus);
 
     return {
       total: records.length,
@@ -631,7 +513,7 @@ export default function PosPage() {
       cancelada: records.filter((status) => status === "cancelada").length,
       suspendida: records.filter((status) => status === "suspendida").length,
     };
-  }, [sales, suspendedDrafts]);
+  }, [sales]);
 
   const ticketsList = useMemo(() => sales.filter((item) => ["pagada", "cancelada"].includes(item.estatus)), [sales]);
 
@@ -650,6 +532,7 @@ export default function PosPage() {
   function clearCart() {
     setCart([]);
     setSaleForm(defaultSaleForm);
+    setResumedSaleId("");
   }
 
   function handleNewSale() {
@@ -657,28 +540,8 @@ export default function PosPage() {
     clearCart();
     setSelectedSale(null);
     setSelectedTicket(null);
-    setSelectedDraft(null);
+    setResumedSaleId("");
     updateView("sell");
-  }
-
-  function syncSuspendedDrafts(nextDrafts) {
-    setSuspendedDrafts(nextDrafts);
-    persistSuspendedDrafts(empresaId, nextDrafts);
-  }
-
-  function removeDraft(draftId) {
-    const nextDrafts = suspendedDrafts.filter((draft) => draft.id !== draftId);
-    syncSuspendedDrafts(nextDrafts);
-  }
-
-  function discardSelectedDraft() {
-    if (!selectedDraft?.id) {
-      return;
-    }
-    removeDraft(selectedDraft.id);
-    setSelectedDraft(null);
-    setDetailModalOpen(false);
-    setSuccess("Venta suspendida eliminada.");
   }
 
   async function loadWarehousesOptions() {
@@ -745,7 +608,7 @@ export default function PosPage() {
       empresaId,
       filters: {
         q: nextFilters.q,
-        estatus: nextFilters.estatus === "suspendida" ? "" : nextFilters.estatus,
+        estatus: nextFilters.estatus,
         limit: nextFilters.limit,
         offset: nextFilters.offset,
       },
@@ -761,13 +624,13 @@ export default function PosPage() {
   }
 
   async function loadSaleArtifacts(saleId) {
-    const [saleDetail, ticket] = await Promise.all([
-      getPosSaleDetail({ saleId, token, empresaId }),
-      getPosTicket({ saleId, token, empresaId }),
-    ]);
+    const saleDetail = await getPosSaleDetail({ saleId, token, empresaId });
+    const ticket =
+      saleDetail.estatus === "suspendida"
+        ? null
+        : await getPosTicket({ saleId, token, empresaId });
     setSelectedSale(saleDetail);
     setSelectedTicket(ticket);
-    setSelectedDraft(null);
     setCancelReason("");
     return { saleDetail, ticket };
   }
@@ -784,7 +647,7 @@ export default function PosPage() {
       const nextWarehouseId = selectedWarehouseId || warehouseItems[0]?.id || "";
       await Promise.all([loadCatalog(nextWarehouseId, catalogFilters), loadSales(saleFilters), loadActiveShift(nextWarehouseId)]);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cargar Punto de Venta.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setLoading(false);
     }
@@ -805,7 +668,7 @@ export default function PosPage() {
         await loadSaleArtifacts(selectedSale.id);
       }
     } catch (requestError) {
-      setError(requestError.message || "No se pudo actualizar Punto de Venta.");
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setRefreshing(false);
     }
@@ -814,10 +677,6 @@ export default function PosPage() {
   useEffect(() => {
     loadPosData();
   }, [token, empresaId]);
-
-  useEffect(() => {
-    setSuspendedDrafts(loadSuspendedDrafts(empresaId));
-  }, [empresaId]);
 
   useEffect(() => {
     if (!selectedWarehouseId || loading) {
@@ -898,7 +757,7 @@ export default function PosPage() {
     setSaleForm((current) => ({ ...current, monto_recibido: cartTotal ? String(cartTotal.toFixed(2)) : "" }));
   }
 
-  function handleSuspendSale() {
+  async function handleSuspendSale() {
     if (!selectedWarehouse) {
       setError("Selecciona un almacén para suspender la venta.");
       return;
@@ -908,44 +767,79 @@ export default function PosPage() {
       return;
     }
 
-    const draft = buildSuspendedDraft({
-      cart,
-      saleForm,
-      warehouse: selectedWarehouse,
-      user,
-    });
-    syncSuspendedDrafts([draft, ...suspendedDrafts]);
-    clearCart();
-    setSelectedDraft(null);
-    setSuccess("Venta suspendida.");
-    updateView("history");
+    setSubmitting(true);
+    clearFeedback();
+    const payload = {
+      almacen_id: selectedWarehouse.id,
+      cliente_nombre: saleForm.cliente_nombre || null,
+      cliente_email: saleForm.cliente_email || null,
+      metodo_pago: saleForm.metodo_pago,
+      monto_recibido: null,
+      notas: saleForm.notas || null,
+      items: cart.map((item) => ({
+        material_id: item.material_id,
+        cantidad: item.cantidad,
+        precio_unitario: item.precio_unitario === "" ? "0" : item.precio_unitario,
+        descuento_unitario: item.descuento_unitario || "0",
+      })),
+    };
+
+    try {
+      const sale = await suspendPosSale({ token, empresaId, payload });
+      clearCart();
+      setResumedSaleId("");
+      await refreshPosData({ keepTicket: false, preserveFeedback: true });
+      setSuccess("Venta suspendida correctamente.");
+      setSuccessContext({ type: "suspended", saleId: sale.id });
+      updateView("history");
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo completar la acción."));
+    } finally {
+      setSubmitting(false);
+    }
   }
 
-  function handleResumeDraft(draft) {
-    setSelectedWarehouseId(draft.almacen_id);
-    setCart(
-      (draft.details ?? []).map((detail) => ({
-        material_id: detail.material_id,
-        sku: detail.sku_snapshot,
-        nombre: detail.nombre_snapshot,
-        unidad: detail.unidad ?? "",
-        precio_unitario: String(detail.precio_unitario ?? 0),
-        descuento_unitario: String(detail.descuento_unitario ?? 0),
-        cantidad: String(detail.cantidad ?? 0),
-        existencia: detail.existencia ?? detail.cantidad ?? 0,
-      })),
-    );
-    setSaleForm({
-      cliente_nombre: draft.cliente_nombre ?? "",
-      cliente_email: draft.cliente_email ?? "",
-      metodo_pago: draft.metodo_pago ?? "efectivo",
-      monto_recibido: draft.monto_recibido ? String(draft.monto_recibido) : "",
-      notas: draft.notas ?? "",
-    });
-    removeDraft(draft.id);
-    setDetailModalOpen(false);
-    setSuccess(`Venta ${draft.folio} reanudada.`);
-    updateView("sell");
+  async function handleResumeSale(saleId) {
+    setSubmitting(true);
+    clearFeedback();
+    try {
+      const sale = await resumePosSale({ saleId, token, empresaId });
+      const stockChanged = (sale.details ?? []).some(
+        (detail) => Number(detail.stock_actual ?? 0) < Number(detail.cantidad ?? 0),
+      );
+      setSelectedWarehouseId(sale.almacen_id);
+      setCart(
+        (sale.details ?? []).map((detail) => ({
+          material_id: detail.material_id,
+          sku: detail.sku_snapshot,
+          nombre: detail.nombre_snapshot,
+          unidad: detail.unidad ?? "",
+          precio_unitario: String(detail.precio_unitario ?? 0),
+          descuento_unitario: String(detail.descuento_unitario ?? 0),
+          cantidad: String(detail.cantidad ?? 0),
+          existencia: Number(detail.stock_actual ?? 0),
+        })),
+      );
+      setSaleForm({
+        cliente_nombre: sale.cliente_nombre ?? "",
+        cliente_email: sale.cliente_email ?? "",
+        metodo_pago: sale.metodo_pago ?? "efectivo",
+        monto_recibido: "",
+        notas: sale.notas ?? "",
+      });
+      setResumedSaleId(sale.id);
+      setDetailModalOpen(false);
+      updateView("sell");
+      if (stockChanged) {
+        setError("El stock cambió desde que se suspendió la venta.");
+      } else {
+        setSuccess("Venta reanudada.");
+      }
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function handleCreateSale(event) {
@@ -997,9 +891,12 @@ export default function PosPage() {
     };
 
     try {
-      const sale = await createPosSale({ token, empresaId, payload });
+      const sale = resumedSaleId
+        ? await paySuspendedPosSale({ saleId: resumedSaleId, token, empresaId, payload })
+        : await createPosSale({ token, empresaId, payload });
       await loadSaleArtifacts(sale.id);
       clearCart();
+      setResumedSaleId("");
       await refreshPosData({ keepTicket: false, preserveFeedback: true });
       setSuccess("Venta cobrada correctamente.");
       setSuccessContext({ type: "sale", saleId: sale.id, folio: sale.folio });
@@ -1129,7 +1026,7 @@ export default function PosPage() {
         payload: { reason: cancelReason },
       });
       await loadSaleArtifacts(sale.id);
-      setSuccess(`Venta ${sale.folio} cancelada.`);
+      setSuccess("Venta cancelada correctamente.");
       await refreshPosData({ keepTicket: false, preserveFeedback: true });
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
@@ -1210,14 +1107,6 @@ export default function PosPage() {
   }
 
   async function openSaleDetail(record) {
-    if (record.source === "draft") {
-      setSelectedDraft(record);
-      setSelectedSale(null);
-      setSelectedTicket(null);
-      setDetailModalOpen(true);
-      return;
-    }
-
     setSubmitting(true);
     clearFeedback();
     try {
@@ -1247,27 +1136,27 @@ export default function PosPage() {
     window.print();
   }
 
-  const historyDetailFooter = selectedDraft ? (
+  const historyDetailFooter = selectedSale ? (
     <div className="inventory-actions">
-      <button className="primary-button" onClick={() => handleResumeDraft(selectedDraft)} type="button">
-        Reanudar venta
-      </button>
-      <button className="ghost-button" onClick={discardSelectedDraft} type="button">
-        Eliminar suspendida
-      </button>
-    </div>
-  ) : selectedSale ? (
-    <div className="inventory-actions">
-      <button className="ghost-button" onClick={() => openTicket(selectedSale.id)} type="button">
-        Ver ticket
-      </button>
-      {selectedSale.estatus === "pagada" ? (
+      {selectedSale.estatus !== "suspendida" ? (
+        <button className="ghost-button" onClick={() => openTicket(selectedSale.id)} type="button">
+          Ver ticket
+        </button>
+      ) : null}
+      {selectedSale.estatus === "suspendida" ? (
+        <button className="primary-button" onClick={() => handleResumeSale(selectedSale.id)} type="button">
+          Reanudar venta
+        </button>
+      ) : null}
+      {["pagada", "suspendida"].includes(selectedSale.estatus) ? (
         <button className="ghost-button" onClick={handleCancelSale} type="button">
           {submitting ? "Cancelando..." : "Cancelar venta"}
         </button>
       ) : null}
     </div>
   ) : null;
+
+  const activeDetailDate = selectedSale ? formatDateTime(getSaleDisplayDate(selectedSale)) : "";
 
   if (loading) {
     return <div className="screen-center">Cargando Punto de Venta...</div>;
@@ -1294,7 +1183,6 @@ export default function PosPage() {
                 clearCart();
                 setSelectedSale(null);
                 setSelectedTicket(null);
-                setSelectedDraft(null);
               }}
               value={selectedWarehouseId}
             >
@@ -1342,10 +1230,33 @@ export default function PosPage() {
         <div className="pos-warning-box is-success">
           <strong>Operación completada</strong>
           <p>{success}</p>
-          {successContext?.type === "sale" && selectedTicket ? (
+          {successContext?.type === "sale" ? (
             <div className="pos-action-row">
               <button className="ghost-button" onClick={() => openTicket(successContext.saleId)} type="button">
                 Ver ticket
+              </button>
+              <button className="primary-button" onClick={handleNewSale} type="button">
+                Nueva venta
+              </button>
+            </div>
+          ) : null}
+          {successContext?.type === "suspended" ? (
+            <div className="pos-action-row">
+              <button
+                className="ghost-button"
+                onClick={async () => {
+                  const nextFilters = { ...saleFilterDefaults, estatus: "suspendida" };
+                  setSaleFilters(nextFilters);
+                  updateView("history");
+                  try {
+                    await loadSales(nextFilters);
+                  } catch (requestError) {
+                    setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+                  }
+                }}
+                type="button"
+              >
+                Ver suspendidas
               </button>
               <button className="primary-button" onClick={handleNewSale} type="button">
                 Nueva venta
@@ -1776,7 +1687,7 @@ export default function PosPage() {
                     try {
                       await loadSales(saleFilterDefaults);
                     } catch (requestError) {
-                      setError(requestError.message || "No se pudo reiniciar el historial.");
+                      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
                     }
                   }}
                   type="button"
@@ -1804,13 +1715,16 @@ export default function PosPage() {
                   </thead>
                   <tbody>
                     {historyRecords.map((record) => (
-                      <tr key={`${record.source}-${record.id}`}>
+                      <tr key={record.id}>
                         <td>{record.folio}</td>
-                        <td>{formatDateTime(record.created_at)}</td>
+                        <td>{formatDateTime(getSaleDisplayDate(record))}</td>
                         <td>
                           <div className="pos-record-copy">
                             <strong>{record.cliente_nombre || "Mostrador"}</strong>
-                            <span className="table-note">{record.vendedor_nombre || "Sin cajero"}</span>
+                            <span className="table-note">
+                              {record.vendedor_nombre || "Sin cajero"}
+                              {record.turno_folio ? ` · ${record.turno_folio}` : ""}
+                            </span>
                           </div>
                         </td>
                         <td>{getPaymentMethodLabel(record.metodo_pago)}</td>
@@ -1825,15 +1739,16 @@ export default function PosPage() {
                           <button className="link-button" onClick={() => openSaleDetail(record)} type="button">
                             Ver detalle
                           </button>
-                          {record.source === "sale" ? (
+                          {record.estatus === "suspendida" ? (
+                            <button className="link-button" onClick={() => handleResumeSale(record.id)} type="button">
+                              Reanudar
+                            </button>
+                          ) : null}
+                          {record.estatus !== "suspendida" ? (
                             <button className="link-button" onClick={() => openTicket(record.id)} type="button">
                               Ver ticket
                             </button>
-                          ) : (
-                            <button className="link-button" onClick={() => handleResumeDraft(record)} type="button">
-                              Reanudar
-                            </button>
-                          )}
+                          ) : null}
                         </td>
                       </tr>
                     ))}
@@ -1871,7 +1786,7 @@ export default function PosPage() {
                   <article className="pos-ticket-row" key={sale.id}>
                     <div>
                       <strong>{sale.folio}</strong>
-                      <p className="table-note">{formatDateTime(sale.created_at)}</p>
+                      <p className="table-note">{formatDateTime(getSaleDisplayDate(sale))}</p>
                     </div>
                     <div>
                       <span className="table-note">Método</span>
@@ -2011,6 +1926,18 @@ export default function PosPage() {
                 <PosKpiCard icon={<BadgeDollarSign size={18} />} label="Ventas totales" meta={`${activeShift.ventas_count} ventas`} value={formatMoney(activeShift.total_ventas)} />
                 <PosKpiCard icon={<ReceiptText size={18} />} label="Núm. ventas" meta="Operaciones cobradas" value={formatNumber(activeShift.ventas_count)} />
                 <PosKpiCard icon={<Clock3 size={18} />} label="Apertura" meta="Inicio del turno" value={formatDateTime(activeShift.opened_at)} />
+                <PosKpiCard
+                  icon={<History size={18} />}
+                  label="Ventas canceladas"
+                  meta={`${formatNumber(activeShift.ventas_canceladas_count)} cancelaciones`}
+                  value={formatMoney(activeShift.ventas_canceladas_total)}
+                />
+                <PosKpiCard
+                  icon={<CircleDollarSign size={18} />}
+                  label="Total neto"
+                  meta="Ventas cobradas menos cancelaciones"
+                  value={formatMoney(activeShift.total_neto)}
+                />
                 <PosKpiCard icon={<BanknoteArrowUp size={18} />} label="Ingresos manuales" meta="Ajustes de caja" value={formatMoney(activeShift.ingresos_manuales)} />
                 <PosKpiCard icon={<BanknoteArrowDown size={18} />} label="Retiros manuales" meta="Salidas manuales" value={formatMoney(activeShift.retiros_manuales)} />
               </div>
@@ -2087,72 +2014,21 @@ export default function PosPage() {
         footer={historyDetailFooter}
         onClose={() => setDetailModalOpen(false)}
         open={detailModalOpen}
-        subtitle={
-          selectedDraft
-            ? "Venta suspendida guardada localmente."
-            : selectedSale
-              ? "Detalle completo de la venta."
-              : ""
-        }
-        title={selectedDraft ? "Detalle de venta suspendida" : "Detalle de venta"}
+        subtitle={selectedSale ? "Detalle completo de la venta." : ""}
+        title={selectedSale?.estatus === "suspendida" ? "Detalle de venta suspendida" : "Detalle de venta"}
       >
-        {selectedDraft ? (
-          <div className="pos-modal-stack">
-            <div className="pos-ticket-meta-grid">
-              <article className="mini-card">
-                <span className="eyebrow">Folio</span>
-                <strong>{selectedDraft.folio}</strong>
-                <p>{formatDateTime(selectedDraft.created_at)}</p>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Almacén</span>
-                <strong>{selectedDraft.almacen_nombre || "Sin almacén"}</strong>
-                <p>{selectedDraft.vendedor_nombre}</p>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Estatus</span>
-                <strong>{getSaleStatusLabel(selectedDraft.estatus)}</strong>
-                <p>{getPaymentMethodLabel(selectedDraft.metodo_pago)}</p>
-              </article>
-            </div>
-
-            <div className="table-wrap">
-              <table className="inventory-table">
-                <thead>
-                  <tr>
-                    <th>SKU</th>
-                    <th>Producto</th>
-                    <th>Cantidad</th>
-                    <th>Precio</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedDraft.details.map((item) => (
-                    <tr key={item.id}>
-                      <td>{item.sku_snapshot}</td>
-                      <td>{item.nombre_snapshot}</td>
-                      <td>{formatNumber(item.cantidad)}</td>
-                      <td>{formatMoney(item.precio_unitario)}</td>
-                      <td>{formatMoney(item.total_linea)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : selectedSale ? (
+        {selectedSale ? (
           <div className="pos-modal-stack">
             <div className="pos-ticket-meta-grid">
               <article className="mini-card">
                 <span className="eyebrow">Folio</span>
                 <strong>{selectedSale.folio}</strong>
-                <p>{formatDateTime(selectedSale.created_at)}</p>
+                <p>{activeDetailDate}</p>
               </article>
               <article className="mini-card">
                 <span className="eyebrow">Cliente o cajero</span>
                 <strong>{selectedSale.cliente_nombre || selectedSale.vendedor_nombre || "Mostrador"}</strong>
-                <p>{selectedSale.almacen_nombre}</p>
+                <p>{selectedSale.almacen_nombre || "Sin almacén"}</p>
               </article>
               <article className="mini-card">
                 <span className="eyebrow">Estatus</span>
@@ -2160,8 +2036,8 @@ export default function PosPage() {
                 <p>{getPaymentMethodLabel(selectedSale.metodo_pago)}</p>
               </article>
               <article className="mini-card">
-                <span className="eyebrow">Método de pago</span>
-                <strong>{getPaymentMethodLabel(selectedSale.metodo_pago)}</strong>
+                <span className="eyebrow">Turno / caja</span>
+                <strong>{selectedSale.turno_folio || "Sin turno"}</strong>
                 <p>{selectedSale.vendedor_nombre || "Mostrador"}</p>
               </article>
             </div>
@@ -2216,7 +2092,14 @@ export default function PosPage() {
               </div>
             ) : null}
 
-            {selectedSale.estatus === "pagada" ? (
+            {selectedSale.estatus === "cancelada" && selectedSale.cancel_reason ? (
+              <div className="pos-warning-box">
+                <strong>Venta cancelada</strong>
+                <p>{selectedSale.cancel_reason}</p>
+              </div>
+            ) : null}
+
+            {["pagada", "suspendida"].includes(selectedSale.estatus) ? (
               <label>
                 Motivo de cancelación
                 <textarea className="pos-textarea" onChange={(event) => setCancelReason(event.target.value)} rows={3} value={cancelReason} />
@@ -2249,6 +2132,12 @@ export default function PosPage() {
           <EmptyState note="Selecciona una venta para ver su ticket." title="Sin ticket activo" />
         ) : (
           <div className="pos-modal-stack pos-ticket-printable">
+            {selectedTicket.estatus === "cancelada" ? (
+              <div className="pos-warning-box">
+                <strong>VENTA CANCELADA</strong>
+                <p>{selectedTicket.cancel_reason || "Esta venta fue cancelada."}</p>
+              </div>
+            ) : null}
             <div className="pos-ticket-meta-grid">
               <article className="mini-card">
                 <span className="eyebrow">Empresa</span>
@@ -2466,3 +2355,6 @@ export default function PosPage() {
     </section>
   );
 }
+
+
+

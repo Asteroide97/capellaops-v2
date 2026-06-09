@@ -201,19 +201,41 @@ def create_audit_log(
     )
 
 
-def serialize_sale_detail(detail: VentaDetalle) -> SaleDetailItem:
+def build_sale_stock_map(
+    db: Session,
+    *,
+    empresa_id: str,
+    almacen_id: str,
+    material_ids: list[str],
+) -> dict[str, Decimal]:
+    if not material_ids:
+        return {}
+
+    rows = db.execute(
+        select(Existencia.material_id, func.coalesce(Existencia.cantidad, 0)).where(
+            Existencia.empresa_id == empresa_id,
+            Existencia.almacen_id == almacen_id,
+            Existencia.material_id.in_(material_ids),
+        )
+    ).all()
+    return {material_id: Decimal(quantity or ZERO) for material_id, quantity in rows}
+
+
+def serialize_sale_detail(detail: VentaDetalle, *, stock_actual: Decimal | None = None) -> SaleDetailItem:
     return SaleDetailItem(
         id=detail.id,
         venta_id=detail.venta_id,
         material_id=detail.material_id,
         sku_snapshot=detail.sku_snapshot,
         nombre_snapshot=detail.nombre_snapshot,
+        unidad=detail.material.unidad if detail.material else None,
         cantidad=detail.cantidad,
         precio_unitario=detail.precio_unitario,
         descuento_unitario=detail.descuento_unitario,
         subtotal_linea=detail.subtotal_linea,
         total_linea=detail.total_linea,
         movimiento_inventario_id=detail.movimiento_inventario_id,
+        stock_actual=stock_actual,
     )
 
 
@@ -247,6 +269,7 @@ def build_sale_item(
         estatus=sale.estatus,
         notas=sale.notas,
         created_at=sale.created_at,
+        paid_at=sale.paid_at,
         cancelled_at=sale.cancelled_at,
         cancelled_by_user_id=sale.cancelled_by_user_id,
         cancel_reason=sale.cancel_reason,
@@ -260,6 +283,12 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
         .where(VentaDetalle.venta_id == sale.id)
         .order_by(VentaDetalle.nombre_snapshot.asc(), VentaDetalle.sku_snapshot.asc(), VentaDetalle.id.asc())
     ).all()
+    stock_map = build_sale_stock_map(
+        db,
+        empresa_id=sale.empresa_id,
+        almacen_id=sale.almacen_id,
+        material_ids=[detail.material_id for detail in details],
+    )
     summary = build_sale_item(
         sale,
         sale.almacen.nombre,
@@ -267,10 +296,21 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
         len(details),
         turno_folio=sale.turno.folio if sale.turno else None,
     )
-    return SaleResponse(**summary.model_dump(), details=[serialize_sale_detail(detail) for detail in details])
+    return SaleResponse(
+        **summary.model_dump(),
+        details=[
+            serialize_sale_detail(detail, stock_actual=stock_map.get(detail.material_id, ZERO))
+            for detail in details
+        ],
+    )
 
 
 def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
+    if sale.estatus == "suspendida":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo las ventas pagadas o canceladas generan ticket.",
+        )
     details = db.scalars(
         select(VentaDetalle)
         .where(VentaDetalle.venta_id == sale.id)
@@ -280,7 +320,8 @@ def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
         id=sale.id,
         folio=sale.folio,
         turno_folio=sale.turno.folio if sale.turno else None,
-        fecha=sale.created_at,
+        fecha=sale.paid_at or sale.created_at,
+        paid_at=sale.paid_at,
         empresa=sale.empresa.name,
         almacen=sale.almacen.nombre,
         vendedor=sale.usuario.full_name,
@@ -325,6 +366,7 @@ def list_sales(
     limit: int = 25,
     offset: int = 0,
 ) -> tuple[int, list[SaleItem]]:
+    sort_timestamp = func.coalesce(Venta.paid_at, Venta.created_at)
     id_query = select(Venta.id).where(Venta.empresa_id == empresa_id)
     id_query = apply_text_search(id_query, q, Venta.folio, Venta.cliente_nombre, Venta.cliente_email, Venta.notas)
 
@@ -335,13 +377,13 @@ def list_sales(
     if metodo_pago:
         id_query = id_query.where(Venta.metodo_pago == metodo_pago)
     if fecha_desde:
-        id_query = id_query.where(Venta.created_at >= fecha_desde)
+        id_query = id_query.where(sort_timestamp >= fecha_desde)
     if fecha_hasta:
-        id_query = id_query.where(Venta.created_at <= fecha_hasta)
+        id_query = id_query.where(sort_timestamp <= fecha_hasta)
 
     total = count_rows(db, id_query)
     page_ids = db.scalars(
-        id_query.order_by(desc(Venta.created_at), desc(Venta.id)).offset(offset).limit(limit)
+        id_query.order_by(desc(sort_timestamp), desc(Venta.id)).offset(offset).limit(limit)
     ).all()
     if not page_ids:
         return total, []
@@ -369,7 +411,7 @@ def list_sales(
         .outerjoin(PosTurnoCaja, Venta.turno_id == PosTurnoCaja.id)
         .outerjoin(detail_count_subquery, detail_count_subquery.c.venta_id == Venta.id)
         .where(Venta.id.in_(page_ids))
-        .order_by(desc(Venta.created_at), desc(Venta.id))
+        .order_by(desc(func.coalesce(Venta.paid_at, Venta.created_at)), desc(Venta.id))
     ).all()
 
     items = [
@@ -464,6 +506,19 @@ def get_shift_sales_count(db: Session, shift_id: str) -> int:
     )
 
 
+def get_shift_cancelled_summary(db: Session, shift_id: str) -> tuple[int, Decimal]:
+    count_value, total_value = db.execute(
+        select(
+            func.count(Venta.id),
+            func.coalesce(func.sum(Venta.total), 0),
+        ).where(
+            Venta.turno_id == shift_id,
+            Venta.estatus == "cancelada",
+        )
+    ).one()
+    return int(count_value or 0), Decimal(total_value or ZERO)
+
+
 def serialize_shift_movement(movement: PosTurnoCajaMovimiento) -> PosShiftMovementResponse:
     return PosShiftMovementResponse(
         id=movement.id,
@@ -482,6 +537,7 @@ def serialize_shift_response(db: Session, shift: PosTurnoCaja) -> PosShiftRespon
         .where(PosTurnoCajaMovimiento.turno_id == shift.id)
         .order_by(desc(PosTurnoCajaMovimiento.created_at), desc(PosTurnoCajaMovimiento.id))
     ).all()
+    cancelled_count, cancelled_total = get_shift_cancelled_summary(db, shift.id)
     return PosShiftResponse(
         id=shift.id,
         empresa_id=shift.empresa_id,
@@ -509,6 +565,9 @@ def serialize_shift_response(db: Session, shift: PosTurnoCaja) -> PosShiftRespon
         opened_at=shift.opened_at,
         closed_at=shift.closed_at,
         ventas_count=get_shift_sales_count(db, shift.id),
+        ventas_canceladas_count=cancelled_count,
+        ventas_canceladas_total=cancelled_total,
+        total_neto=Decimal(shift.total_ventas or ZERO),
         movimientos=[serialize_shift_movement(movement) for movement in movements],
     )
 
@@ -528,15 +587,33 @@ def adjust_shift_totals_for_sale(
 ) -> None:
     multiplier = Decimal("-1") if reverse else Decimal("1")
     amount = Decimal(sale_total) * multiplier
-    shift.total_ventas = Decimal(shift.total_ventas or ZERO) + amount
+    next_total_ventas = Decimal(shift.total_ventas or ZERO) + amount
+    if next_total_ventas < ZERO:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se pudo ajustar el turno para esta venta.",
+        )
+    shift.total_ventas = next_total_ventas
     if payment_method == "efectivo":
-        shift.total_efectivo = Decimal(shift.total_efectivo or ZERO) + amount
+        next_value = Decimal(shift.total_efectivo or ZERO) + amount
+        if next_value < ZERO:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo ajustar el turno para esta venta.")
+        shift.total_efectivo = next_value
     elif payment_method == "tarjeta":
-        shift.total_tarjeta = Decimal(shift.total_tarjeta or ZERO) + amount
+        next_value = Decimal(shift.total_tarjeta or ZERO) + amount
+        if next_value < ZERO:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo ajustar el turno para esta venta.")
+        shift.total_tarjeta = next_value
     elif payment_method == "transferencia":
-        shift.total_transferencia = Decimal(shift.total_transferencia or ZERO) + amount
+        next_value = Decimal(shift.total_transferencia or ZERO) + amount
+        if next_value < ZERO:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo ajustar el turno para esta venta.")
+        shift.total_transferencia = next_value
     else:
-        shift.total_otro = Decimal(shift.total_otro or ZERO) + amount
+        next_value = Decimal(shift.total_otro or ZERO) + amount
+        if next_value < ZERO:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo ajustar el turno para esta venta.")
+        shift.total_otro = next_value
 
 
 def refresh_closed_shift_difference(shift: PosTurnoCaja) -> None:
@@ -701,48 +778,27 @@ def add_shift_manual_movement(
     return serialize_shift_response(db, shift)
 
 
-def create_sale(
+def resolve_sale_lines(
     db: Session,
     *,
-    empresa: Empresa,
-    user: Usuario,
-    almacen_id: str,
-    cliente_nombre: str | None,
-    cliente_email: str | None,
-    metodo_pago: str,
-    monto_recibido: Decimal | None,
-    notas: str | None,
+    empresa_id: str,
+    warehouse_id: str,
     items: list,
-    ip_address: str | None,
-) -> SaleResponse:
-    validate_pos_access(user, empresa)
-
-    if metodo_pago in PENDING_PAYMENT_METHODS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Pagos mixtos quedan pendientes en esta fase.",
-        )
-
-    warehouse = get_active_sale_warehouse(db, empresa.id, almacen_id)
-    shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
-    if not shift:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Abre caja para poder cobrar ventas.",
-        )
-
+    validate_stock: bool,
+) -> tuple[Almacen, list[dict], Decimal, Decimal, Decimal]:
+    warehouse = get_active_sale_warehouse(db, empresa_id, warehouse_id)
     resolved_lines: list[dict] = []
     required_stock: dict[str, Decimal] = {}
     subtotal = ZERO
     descuento_total = ZERO
 
     for item in items:
-        material = get_active_sale_material(db, empresa.id, item.material_id)
+        material = get_active_sale_material(db, empresa_id, item.material_id)
         quantity = Decimal(item.cantidad)
         if quantity <= ZERO:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="La cantidad debe ser mayor a 0.",
+                detail="La cantidad debe ser mayor a cero.",
             )
 
         price_override = getattr(item, "precio_unitario", None)
@@ -778,10 +834,14 @@ def create_sale(
             }
         )
 
-    for material_id, quantity in required_stock.items():
-        stock = get_or_create_stock(db, empresa.id, warehouse.id, material_id)
-        if Decimal(stock.cantidad) < quantity:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Stock insuficiente.")
+    if validate_stock:
+        for material_id, quantity in required_stock.items():
+            stock = get_or_create_stock(db, empresa_id, warehouse.id, material_id)
+            if Decimal(stock.cantidad) < quantity:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No hay stock suficiente.",
+                )
 
     impuesto_total = ZERO
     total = subtotal - descuento_total + impuesto_total
@@ -790,6 +850,25 @@ def create_sale(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El total de la venta no puede ser negativo.",
         )
+
+    return warehouse, resolved_lines, subtotal, descuento_total, total
+
+
+def resolve_sale_payment(
+    *,
+    metodo_pago: str,
+    monto_recibido: Decimal | None,
+    total: Decimal,
+    require_payment_validation: bool,
+) -> tuple[Decimal | None, Decimal | None]:
+    if metodo_pago in PENDING_PAYMENT_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pagos mixtos quedan pendientes en esta fase.",
+        )
+
+    if not require_payment_validation:
+        return None, None
 
     received_amount = Decimal(monto_recibido) if monto_recibido is not None else None
     change_amount: Decimal | None = None
@@ -800,29 +879,25 @@ def create_sale(
                 detail="El monto recibido debe cubrir el total para pago en efectivo.",
             )
         change_amount = received_amount - total
+    return received_amount, change_amount
 
-    folio = normalize_sale_folio(None)
-    ensure_unique_sale_folio(db, empresa.id, folio)
 
-    sale = Venta(
-        empresa_id=empresa.id,
-        folio=folio,
-        almacen_id=warehouse.id,
-        turno_id=shift.id,
-        usuario_id=user.id,
-        cliente_nombre=normalize_optional_text(cliente_nombre),
-        cliente_email=normalize_customer_email(cliente_email),
-        subtotal=subtotal,
-        descuento_total=descuento_total,
-        impuesto_total=impuesto_total,
-        total=total,
-        metodo_pago=metodo_pago,
-        monto_recibido=received_amount,
-        cambio=change_amount,
-        estatus="pagada",
-        notas=normalize_optional_text(notas),
-    )
-    db.add(sale)
+def replace_sale_details(
+    db: Session,
+    *,
+    sale: Venta,
+    resolved_lines: list[dict],
+    empresa: Empresa,
+    user: Usuario,
+    warehouse_id: str,
+    create_inventory_movements: bool,
+    ip_address: str | None,
+) -> None:
+    existing_details = db.scalars(
+        select(VentaDetalle).where(VentaDetalle.venta_id == sale.id).order_by(VentaDetalle.id.asc())
+    ).all()
+    for detail in existing_details:
+        db.delete(detail)
     db.flush()
 
     for line in resolved_lines:
@@ -841,21 +916,95 @@ def create_sale(
         db.add(detail)
         db.flush()
 
-        movement = apply_inventory_movement(
-            db,
-            user=user,
-            empresa=empresa,
-            almacen_id=warehouse.id,
-            material_id=material.id,
-            tipo="salida",
-            cantidad=line["cantidad"],
-            cantidad_nueva=None,
-            referencia_tipo="pos_sale",
-            referencia_id=sale.id,
-            notas=f"Venta {sale.folio}",
-            ip_address=ip_address,
+        if create_inventory_movements:
+            movement = apply_inventory_movement(
+                db,
+                user=user,
+                empresa=empresa,
+                almacen_id=warehouse_id,
+                material_id=material.id,
+                tipo="salida",
+                cantidad=line["cantidad"],
+                cantidad_nueva=None,
+                referencia_tipo="pos_sale",
+                referencia_id=sale.id,
+                notas=f"Venta {sale.folio}",
+                ip_address=ip_address,
+            )
+            detail.movimiento_inventario_id = movement.id
+
+
+def create_sale(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    almacen_id: str,
+    cliente_nombre: str | None,
+    cliente_email: str | None,
+    metodo_pago: str,
+    monto_recibido: Decimal | None,
+    notas: str | None,
+    items: list,
+    ip_address: str | None,
+) -> SaleResponse:
+    validate_pos_access(user, empresa)
+    warehouse, resolved_lines, subtotal, descuento_total, total = resolve_sale_lines(
+        db,
+        empresa_id=empresa.id,
+        warehouse_id=almacen_id,
+        items=items,
+        validate_stock=True,
+    )
+    shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
+    if not shift:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Abre caja para poder cobrar ventas.",
         )
-        detail.movimiento_inventario_id = movement.id
+
+    received_amount, change_amount = resolve_sale_payment(
+        metodo_pago=metodo_pago,
+        monto_recibido=monto_recibido,
+        total=total,
+        require_payment_validation=True,
+    )
+
+    paid_at = datetime.now(timezone.utc)
+    folio = normalize_sale_folio(None)
+    ensure_unique_sale_folio(db, empresa.id, folio)
+    sale = Venta(
+        empresa_id=empresa.id,
+        folio=folio,
+        almacen_id=warehouse.id,
+        turno_id=shift.id,
+        usuario_id=user.id,
+        cliente_nombre=normalize_optional_text(cliente_nombre),
+        cliente_email=normalize_customer_email(cliente_email),
+        subtotal=subtotal,
+        descuento_total=descuento_total,
+        impuesto_total=ZERO,
+        total=total,
+        metodo_pago=metodo_pago,
+        monto_recibido=received_amount,
+        cambio=change_amount,
+        estatus="pagada",
+        notas=normalize_optional_text(notas),
+        paid_at=paid_at,
+    )
+    db.add(sale)
+    db.flush()
+
+    replace_sale_details(
+        db,
+        sale=sale,
+        resolved_lines=resolved_lines,
+        empresa=empresa,
+        user=user,
+        warehouse_id=warehouse.id,
+        create_inventory_movements=True,
+        ip_address=ip_address,
+    )
 
     adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=False)
     refresh_closed_shift_difference(shift)
@@ -884,6 +1033,211 @@ def create_sale(
     return serialize_sale_response(db, sale)
 
 
+def create_suspended_sale(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    almacen_id: str,
+    cliente_nombre: str | None,
+    cliente_email: str | None,
+    metodo_pago: str,
+    notas: str | None,
+    items: list,
+    ip_address: str | None,
+) -> SaleResponse:
+    validate_pos_access(user, empresa)
+    warehouse, resolved_lines, subtotal, descuento_total, total = resolve_sale_lines(
+        db,
+        empresa_id=empresa.id,
+        warehouse_id=almacen_id,
+        items=items,
+        validate_stock=False,
+    )
+    if metodo_pago in PENDING_PAYMENT_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Pagos mixtos quedan pendientes en esta fase.",
+        )
+
+    folio = normalize_sale_folio(None)
+    ensure_unique_sale_folio(db, empresa.id, folio)
+    sale = Venta(
+        empresa_id=empresa.id,
+        folio=folio,
+        almacen_id=warehouse.id,
+        turno_id=None,
+        usuario_id=user.id,
+        cliente_nombre=normalize_optional_text(cliente_nombre),
+        cliente_email=normalize_customer_email(cliente_email),
+        subtotal=subtotal,
+        descuento_total=descuento_total,
+        impuesto_total=ZERO,
+        total=total,
+        metodo_pago=metodo_pago,
+        monto_recibido=None,
+        cambio=None,
+        estatus="suspendida",
+        notas=normalize_optional_text(notas),
+        paid_at=None,
+    )
+    db.add(sale)
+    db.flush()
+
+    replace_sale_details(
+        db,
+        sale=sale,
+        resolved_lines=resolved_lines,
+        empresa=empresa,
+        user=user,
+        warehouse_id=warehouse.id,
+        create_inventory_movements=False,
+        ip_address=ip_address,
+    )
+
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.sale.suspend",
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={
+            "folio": sale.folio,
+            "almacen_id": sale.almacen_id,
+            "estatus": sale.estatus,
+            "total": str(sale.total),
+            "items_count": len(resolved_lines),
+        },
+    )
+    db.flush()
+    db.refresh(sale)
+    return serialize_sale_response(db, sale)
+
+
+def resume_suspended_sale(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+) -> SaleResponse:
+    validate_pos_access(user, empresa)
+    sale = get_sale_for_company(db, empresa.id, sale_id)
+    if sale.estatus != "suspendida":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo se pueden reanudar ventas suspendidas.",
+        )
+    return serialize_sale_response(db, sale)
+
+
+def pay_suspended_sale(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    almacen_id: str,
+    cliente_nombre: str | None,
+    cliente_email: str | None,
+    metodo_pago: str,
+    monto_recibido: Decimal | None,
+    notas: str | None,
+    items: list,
+    ip_address: str | None,
+) -> SaleResponse:
+    validate_pos_access(user, empresa)
+    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
+    if sale.estatus == "cancelada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se puede cobrar una venta cancelada.",
+        )
+    if sale.estatus != "suspendida":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo se pueden cobrar ventas suspendidas.",
+        )
+
+    warehouse, resolved_lines, subtotal, descuento_total, total = resolve_sale_lines(
+        db,
+        empresa_id=empresa.id,
+        warehouse_id=almacen_id,
+        items=items,
+        validate_stock=True,
+    )
+    shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
+    if not shift:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Abre caja para cobrar esta venta.",
+        )
+
+    received_amount, change_amount = resolve_sale_payment(
+        metodo_pago=metodo_pago,
+        monto_recibido=monto_recibido,
+        total=total,
+        require_payment_validation=True,
+    )
+
+    sale.almacen_id = warehouse.id
+    sale.turno_id = shift.id
+    sale.usuario_id = user.id
+    sale.cliente_nombre = normalize_optional_text(cliente_nombre)
+    sale.cliente_email = normalize_customer_email(cliente_email)
+    sale.subtotal = subtotal
+    sale.descuento_total = descuento_total
+    sale.impuesto_total = ZERO
+    sale.total = total
+    sale.metodo_pago = metodo_pago
+    sale.monto_recibido = received_amount
+    sale.cambio = change_amount
+    sale.estatus = "pagada"
+    sale.notas = normalize_optional_text(notas)
+    sale.paid_at = datetime.now(timezone.utc)
+    sale.cancelled_at = None
+    sale.cancelled_by_user_id = None
+    sale.cancel_reason = None
+    db.flush()
+
+    replace_sale_details(
+        db,
+        sale=sale,
+        resolved_lines=resolved_lines,
+        empresa=empresa,
+        user=user,
+        warehouse_id=warehouse.id,
+        create_inventory_movements=True,
+        ip_address=ip_address,
+    )
+
+    adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=False)
+    refresh_closed_shift_difference(shift)
+
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.sale.pay_suspended",
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={
+            "folio": sale.folio,
+            "almacen_id": sale.almacen_id,
+            "turno_id": sale.turno_id,
+            "metodo_pago": sale.metodo_pago,
+            "total": str(sale.total),
+            "items_count": len(resolved_lines),
+        },
+    )
+    db.flush()
+    db.refresh(sale)
+    return serialize_sale_response(db, sale)
+
+
 def cancel_sale(
     db: Session,
     *,
@@ -899,39 +1253,46 @@ def cancel_sale(
     if sale.estatus == "cancelada":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="La venta ya fue cancelada.",
-        )
-    if sale.estatus != "pagada":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Solo se pueden cancelar ventas pagadas.",
+            detail="No se puede cancelar una venta ya cancelada.",
         )
 
     cancel_reason = normalize_required_text(reason, "Razon")
-    detail_rows = db.scalars(
-        select(VentaDetalle).where(VentaDetalle.venta_id == sale.id).order_by(VentaDetalle.id.asc())
-    ).all()
 
-    for detail in detail_rows:
-        apply_inventory_movement(
-            db,
-            user=user,
-            empresa=empresa,
-            almacen_id=sale.almacen_id,
-            material_id=detail.material_id,
-            tipo="entrada",
-            cantidad=detail.cantidad,
-            cantidad_nueva=None,
-            referencia_tipo="pos_sale_cancel",
-            referencia_id=sale.id,
-            notas=f"Cancelacion de venta {sale.folio}",
-            ip_address=ip_address,
+    if sale.estatus == "pagada":
+        detail_rows = db.scalars(
+            select(VentaDetalle).where(VentaDetalle.venta_id == sale.id).order_by(VentaDetalle.id.asc())
+        ).all()
+
+        if sale.turno_id:
+            shift = get_shift_for_company(db, empresa.id, sale.turno_id, for_update=True)
+            if shift.estatus != "abierta":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No se puede cancelar una venta de un turno cerrado en esta fase.",
+                )
+            adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=True)
+            refresh_closed_shift_difference(shift)
+
+        for detail in detail_rows:
+            apply_inventory_movement(
+                db,
+                user=user,
+                empresa=empresa,
+                almacen_id=sale.almacen_id,
+                material_id=detail.material_id,
+                tipo="entrada",
+                cantidad=detail.cantidad,
+                cantidad_nueva=None,
+                referencia_tipo="pos_sale_cancel",
+                referencia_id=sale.id,
+                notas=f"Cancelacion de venta {sale.folio}",
+                ip_address=ip_address,
+            )
+    elif sale.estatus != "suspendida":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo se pueden cancelar ventas pagadas o suspendidas.",
         )
-
-    if sale.turno_id:
-        shift = get_shift_for_company(db, empresa.id, sale.turno_id, for_update=True)
-        adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=True)
-        refresh_closed_shift_difference(shift)
 
     sale.estatus = "cancelada"
     sale.cancelled_at = datetime.now(timezone.utc)
@@ -949,6 +1310,7 @@ def cancel_sale(
         metadata_json={
             "folio": sale.folio,
             "reason": cancel_reason,
+            "previous_status": "pagada" if sale.paid_at else "suspendida",
         },
     )
     db.flush()

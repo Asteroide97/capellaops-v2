@@ -26,6 +26,7 @@ from app.services.pos import (
     add_shift_manual_movement,
     cancel_sale,
     close_shift,
+    create_suspended_sale,
     create_sale,
     get_active_shift_response,
     get_pos_catalog,
@@ -33,6 +34,8 @@ from app.services.pos import (
     get_sale_ticket,
     list_sales,
     open_shift,
+    pay_suspended_sale,
+    resume_suspended_sale,
     serialize_sale_response,
     validate_pos_access,
 )
@@ -202,7 +205,7 @@ def get_catalog(
 @router.get("/sales", response_model=SaleListResponse)
 def get_sales(
     q: str | None = None,
-    estatus: Literal["pagada", "cancelada"] | None = None,
+    estatus: Literal["pagada", "cancelada", "suspendida"] | None = None,
     almacen_id: str | None = None,
     metodo_pago: Literal["efectivo", "tarjeta", "transferencia", "mixto", "otro"] | None = None,
     fecha_desde: datetime | None = None,
@@ -255,6 +258,73 @@ def create_sale_endpoint(
             db,
             empresa=context.empresa,
             user=context.user,
+            almacen_id=payload.almacen_id,
+            cliente_nombre=payload.cliente_nombre,
+            cliente_email=payload.cliente_email,
+            metodo_pago=payload.metodo_pago,
+            monto_recibido=payload.monto_recibido,
+            notas=payload.notas,
+            items=payload.items,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/sales/suspend", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)
+def suspend_sale_endpoint(
+    payload: SaleCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleResponse:
+    return run_pos_write(
+        db,
+        "suspend_sale",
+        lambda: create_suspended_sale(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            almacen_id=payload.almacen_id,
+            cliente_nombre=payload.cliente_nombre,
+            cliente_email=payload.cliente_email,
+            metodo_pago=payload.metodo_pago,
+            notas=payload.notas,
+            items=payload.items,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/sales/{sale_id}/resume", response_model=SaleResponse)
+def resume_sale_endpoint(
+    sale_id: str,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleResponse:
+    return resume_suspended_sale(
+        db,
+        empresa=context.empresa,
+        user=context.user,
+        sale_id=sale_id,
+    )
+
+
+@router.post("/sales/{sale_id}/pay", response_model=SaleResponse)
+def pay_suspended_sale_endpoint(
+    sale_id: str,
+    payload: SaleCreateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleResponse:
+    return run_pos_write(
+        db,
+        "pay_suspended_sale",
+        lambda: pay_suspended_sale(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
             almacen_id=payload.almacen_id,
             cliente_nombre=payload.cliente_nombre,
             cliente_email=payload.cliente_email,

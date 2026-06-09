@@ -158,7 +158,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
             "metodo_pago IN ('efectivo', 'tarjeta', 'transferencia', 'mixto', 'otro')",
             name="ck_venta_metodo_pago",
         ),
-        CheckConstraint("estatus IN ('pagada', 'cancelada')", name="ck_venta_estatus"),
+        CheckConstraint("estatus IN ('pagada', 'cancelada', 'suspendida')", name="ck_venta_estatus"),
         CheckConstraint("subtotal >= 0", name="ck_venta_subtotal_nonnegative"),
         CheckConstraint("descuento_total >= 0", name="ck_venta_descuento_nonnegative"),
         CheckConstraint("impuesto_total >= 0", name="ck_venta_impuesto_nonnegative"),
@@ -192,6 +192,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
         index=True,
     )
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

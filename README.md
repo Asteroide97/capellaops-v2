@@ -1535,12 +1535,23 @@ Las órdenes de compra ya siguen el flujo base:
 - El precio de venta puede editarse en Materiales y también ajustarse en el carrito POS como snapshot de la venta.
 - Existe ticket básico, cancelación básica con retorno de stock y turno/caja MVP con apertura, ingresos manuales, retiros manuales y cierre.
 
+## POS Fase 3 - Ventas suspendidas, cancelaciones y corte de caja robusto
+
+- Las ventas suspendidas ya se persisten en backend con estatus `suspendida`.
+- Reanudar una venta suspendida vuelve a cargar el carrito y revalida stock antes de cobrar.
+- Una venta suspendida no mueve inventario hasta cobrarse.
+- Al cobrar una venta suspendida, la venta cambia a `pagada`, se liga al turno abierto y genera ticket final.
+- Cancelar una venta pagada crea una reversa de inventario y ajusta los totales del turno cuando el turno sigue abierto.
+- Cancelar una venta suspendida no mueve inventario y queda trazada como `cancelada`.
+- En esta fase no se permite cancelar una venta pagada de un turno cerrado.
+- Caja / Turnos ya muestra ventas canceladas, total neto y mantiene ingresos/retiros manuales dentro del resumen del turno.
+
 ### Pendientes POS
 
 - Pagos mixtos formales
 - Descuentos avanzados
 - Ticket imprimible formal
-- Ajuste fino de cancelaciones contra turnos cerrados
+- Cancelación segura de ventas cobradas en turnos ya cerrados
 - Conexión con facturación fiscal
 
 ## Placeholders actuales

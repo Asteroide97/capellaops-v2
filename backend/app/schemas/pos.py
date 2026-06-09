@@ -32,12 +32,14 @@ class SaleDetailItem(BaseModel):
     material_id: str
     sku_snapshot: str
     nombre_snapshot: str
+    unidad: str | None = None
     cantidad: Decimal
     precio_unitario: Decimal
     descuento_unitario: Decimal
     subtotal_linea: Decimal
     total_linea: Decimal
     movimiento_inventario_id: str | None = None
+    stock_actual: Decimal | None = None
 
 
 class SaleItem(BaseModel):
@@ -62,6 +64,7 @@ class SaleItem(BaseModel):
     estatus: str
     notas: str | None = None
     created_at: datetime
+    paid_at: datetime | None = None
     cancelled_at: datetime | None = None
     cancelled_by_user_id: str | None = None
     cancel_reason: str | None = None
@@ -112,6 +115,7 @@ class PosTicketResponse(BaseModel):
     folio: str
     turno_folio: str | None = None
     fecha: datetime
+    paid_at: datetime | None = None
     empresa: str
     almacen: str
     vendedor: str
@@ -168,6 +172,9 @@ class PosShiftResponse(BaseModel):
     opened_at: datetime
     closed_at: datetime | None = None
     ventas_count: int
+    ventas_canceladas_count: int = 0
+    ventas_canceladas_total: Decimal = Decimal("0")
+    total_neto: Decimal = Decimal("0")
     movimientos: list[PosShiftMovementResponse] = Field(default_factory=list)
 
 

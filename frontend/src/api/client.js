@@ -729,6 +729,35 @@ export function createPosSale({ token, empresaId, payload }) {
 }
 
 
+export function suspendPosSale({ token, empresaId, payload }) {
+  return apiRequest("/pos/sales/suspend", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function resumePosSale({ saleId, token, empresaId }) {
+  return apiRequest(`/pos/sales/${saleId}/resume`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function paySuspendedPosSale({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/pay`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function cancelPosSale({ saleId, token, empresaId, payload }) {
   return apiRequest(`/pos/sales/${saleId}/cancel`, {
     method: "POST",
