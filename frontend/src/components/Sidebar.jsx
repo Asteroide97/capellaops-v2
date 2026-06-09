@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink, useLocation } from "react-router-dom";
 import {
   BarChart3,
   ChevronDown,
@@ -13,6 +13,7 @@ import {
 
 import { useAuth } from "../auth/AuthContext";
 import { inventoryModuleIcon, inventoryNavItems } from "../pages/inventory/navigation";
+import { posModuleIcon, posNavItems } from "../pages/pos/navigation";
 
 
 const ICON_SIZE = 16;
@@ -23,7 +24,7 @@ const moduleIconMap = {
   crm: Users,
   inventory: inventoryModuleIcon,
   pm: FolderKanban,
-  pos: MonitorSmartphone,
+  pos: posModuleIcon,
   superadmin: ShieldCheck,
 };
 
@@ -51,11 +52,22 @@ export default function Sidebar() {
   const { empresa, modules } = useAuth();
   const location = useLocation();
   const [inventoryExpanded, setInventoryExpanded] = useState(location.pathname.startsWith("/inventario"));
+  const [posExpanded, setPosExpanded] = useState(location.pathname.startsWith("/pos"));
   const getNavClass = ({ isActive }) => (isActive ? "nav-item active" : "nav-item");
+  const currentPosView = (() => {
+    if (!location.pathname.startsWith("/pos")) {
+      return "";
+    }
+    const view = new URLSearchParams(location.search).get("view");
+    return view || "sell";
+  })();
 
   useEffect(() => {
     if (location.pathname.startsWith("/inventario")) {
       setInventoryExpanded(true);
+    }
+    if (location.pathname.startsWith("/pos")) {
+      setPosExpanded(true);
     }
   }, [location.pathname]);
 
@@ -112,6 +124,45 @@ export default function Sidebar() {
                         <NavLabel child icon={item.icon} label={item.label} />
                       </NavLink>
                     ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          }
+
+          if (module.name === "pos" && module.enabled && module.route) {
+            const isPosActive = location.pathname.startsWith("/pos");
+
+            return (
+              <div className="nav-group" key={module.name}>
+                <button
+                  className={`nav-item nav-toggle ${isPosActive ? "active" : ""}`}
+                  onClick={() => setPosExpanded((current) => !current)}
+                  type="button"
+                >
+                  <NavLabel icon={moduleIcon} label={module.label} />
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`nav-toggle-icon ${posExpanded ? "expanded" : ""}`}
+                    size={16}
+                    strokeWidth={ICON_STROKE}
+                  />
+                </button>
+
+                {posExpanded ? (
+                  <div className="nav-children">
+                    {posNavItems.map((item) => {
+                      const isActive = isPosActive && currentPosView === item.view;
+                      return (
+                        <Link
+                          className={isActive ? "nav-child nav-child-active" : "nav-child"}
+                          key={item.key}
+                          to={item.path}
+                        >
+                          <NavLabel child icon={item.icon} label={item.label} />
+                        </Link>
+                      );
+                    })}
                   </div>
                 ) : null}
               </div>

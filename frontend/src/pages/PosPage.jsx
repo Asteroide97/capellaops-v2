@@ -104,8 +104,25 @@ function safeText(value, fallback = "—") {
 }
 
 
-function getViewLabel(view) {
-  return viewTabs.find((item) => item.value === view)?.label ?? "Punto de Venta";
+function getViewTitle(view) {
+  const titles = {
+    sell: "Punto de Venta",
+    history: "Historial de Ventas",
+    tickets: "Tickets",
+    cash: "Caja / Turnos",
+  };
+  return titles[view] ?? "Punto de Venta";
+}
+
+
+function getViewSubtitle(view) {
+  const subtitles = {
+    sell: "Cobra desde el almacén activo y descuenta inventario automáticamente.",
+    history: "Consulta ventas pagadas, canceladas y suspendidas.",
+    tickets: "Consulta e imprime comprobantes de venta.",
+    cash: "Consulta el estado del turno y prepara el flujo de caja.",
+  };
+  return subtitles[view] ?? "Cobra desde el almacén activo y descuenta inventario automáticamente.";
 }
 
 
@@ -416,10 +433,6 @@ export default function PosPage() {
     const quantity = Number(item.cantidad || 0);
     return quantity <= 0 || Number.isNaN(quantity) || quantity > Number(item.existencia || 0);
   });
-  const cartHasInsufficientCash =
-    saleForm.metodo_pago === "efectivo" &&
-    saleForm.monto_recibido !== "" &&
-    Number(saleForm.monto_recibido || 0) < cartTotal;
   const canCharge =
     Boolean(selectedWarehouseId) &&
     hasCartItems &&
@@ -970,11 +983,8 @@ export default function PosPage() {
     <section className="inventory-shell pos-shell-v2">
       <section className="feature-card pos-page-header">
         <div className="pos-page-header-copy">
-          <p className="eyebrow">POS Fase 1</p>
-          <h1>Punto de Venta</h1>
-          <p className="table-note">
-            Cobra desde el almacén activo, consulta el historial y revisa tickets sin salir del mismo flujo.
-          </p>
+          <h1>{getViewTitle(activeView)}</h1>
+          <p className="table-note">{getViewSubtitle(activeView)}</p>
         </div>
 
         <div className="pos-page-header-meta">
@@ -1002,10 +1012,12 @@ export default function PosPage() {
               ))}
             </select>
           </label>
-          <button className="primary-button" onClick={handleNewSale} type="button">
-            <Plus size={16} />
-            <span>Nueva venta</span>
-          </button>
+          {activeView === "sell" ? (
+            <button className="primary-button" onClick={handleNewSale} type="button">
+              <Plus size={16} />
+              <span>Nueva venta</span>
+            </button>
+          ) : null}
           <button className="ghost-button" disabled={refreshing} onClick={() => refreshPosData()} type="button">
             {refreshing ? "Actualizando..." : "Actualizar"}
           </button>
@@ -1034,26 +1046,17 @@ export default function PosPage() {
           <div className="pos-sell-main">
             <section className="feature-card pos-search-card">
               <div className="feature-header">
-                <p className="eyebrow">Vender</p>
                 <h2>Busca y agrega productos</h2>
                 <p className="table-note">El stock y el precio corresponden al almacén activo.</p>
               </div>
 
               {!selectedWarehouseId ? (
-                <EmptyState
-                  note="Selecciona un almacén para vender."
-                  title="Sin almacén activo"
-                />
+                <EmptyState note="Selecciona un almacén para vender." title="Sin almacén activo" />
               ) : (
                 <form className="pos-search-form" onSubmit={handleCatalogSearch}>
                   <input
                     className="pos-search-input"
                     onChange={(event) => setCatalogFilters((current) => ({ ...current, q: event.target.value }))}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && event.currentTarget.value.trim()) {
-                        return;
-                      }
-                    }}
                     placeholder="Buscar por nombre, SKU o código de barras..."
                     type="text"
                     value={catalogFilters.q}
@@ -1140,10 +1143,7 @@ export default function PosPage() {
               </div>
 
               {!hasCartItems ? (
-                <EmptyState
-                  note="Agrega productos desde el buscador."
-                  title="El carrito está vacío"
-                />
+                <EmptyState note="Agrega productos desde el buscador" title="El carrito está vacío" />
               ) : (
                 <div className="pos-cart-list">
                   {cart.map((item) => {
@@ -1222,7 +1222,7 @@ export default function PosPage() {
                 <p className="table-note">
                   {TURNOS_AVAILABLE
                     ? "Turno activo para cobrar."
-                    : "Esta fase cobra directo desde el almacén activo. Los turnos de caja quedan para una siguiente iteración."}
+                    : "Esta fase cobra directo desde el almacén activo. Caja / Turnos queda pendiente."}
                 </p>
               </div>
 
@@ -1337,9 +1337,7 @@ export default function PosPage() {
                 />
               </label>
 
-              {!selectedWarehouseId ? (
-                <p className="form-error">Selecciona un almacén para vender.</p>
-              ) : null}
+              {!selectedWarehouseId ? <p className="form-error">Selecciona un almacén para vender.</p> : null}
               {cartHasInvalidQuantity ? (
                 <p className="form-error">Revisa las cantidades del carrito. No pueden exceder el stock disponible.</p>
               ) : null}
@@ -1368,9 +1366,8 @@ export default function PosPage() {
         <div className="pos-view-stack">
           <section className="feature-card">
             <div className="feature-header">
-              <p className="eyebrow">Historial</p>
               <h2>Historial de Ventas</h2>
-              <p className="table-note">Consulta ventas pagadas, canceladas y ventas suspendidas guardadas localmente.</p>
+              <p className="table-note">Consulta ventas pagadas, canceladas y suspendidas.</p>
             </div>
 
             <div className="inventory-metric-grid-4">
@@ -1489,9 +1486,8 @@ export default function PosPage() {
         <div className="pos-view-stack">
           <section className="feature-card">
             <div className="feature-header">
-              <p className="eyebrow">Tickets</p>
               <h2>Tickets</h2>
-              <p className="table-note">Consulta ventas imprimibles y abre el ticket desde el historial real de POS.</p>
+              <p className="table-note">Consulta e imprime comprobantes de venta.</p>
             </div>
 
             {ticketsList.length === 0 ? (
@@ -1537,13 +1533,10 @@ export default function PosPage() {
       {activeView === "cash" ? (
         <div className="pos-view-stack">
           <section className="feature-card">
-              <div className="feature-header">
-                <p className="eyebrow">Caja / Turnos</p>
-                <h2>Caja / Turnos</h2>
-                <p className="table-note">
-                Esta fase todavía no incluye apertura, ingresos, retiros ni cierre de turno.
-                </p>
-              </div>
+            <div className="feature-header">
+              <h2>Caja / Turnos</h2>
+              <p className="table-note">Consulta el estado del turno y prepara el flujo de caja.</p>
+            </div>
 
             <div className="inventory-metric-grid-3">
               <MetricCard icon={<Clock3 size={18} />} label="Estado actual" meta="Disponible en una fase siguiente" value="Sin turno" />
