@@ -297,9 +297,10 @@ function recordMatchesSearch(record, search) {
 }
 
 
-function EmptyState({ title, note, action = null }) {
+function EmptyState({ title, note, action = null, icon = null }) {
   return (
     <div className="empty-state pos-empty-state">
+      {icon ? <span className="pos-empty-state-icon">{icon}</span> : null}
       <strong>{title}</strong>
       <p>{note}</p>
       {action}
@@ -338,13 +339,13 @@ function PosKpiCard({ icon, label, value, meta = "" }) {
   return (
     <article className="pos-kpi-card">
       <div className="pos-kpi-card-head">
-        <span className="inventory-metric-icon neutral">{icon}</span>
-        <div>
-          <span className="inventory-metric-label">{label}</span>
-          <strong className="inventory-metric-value">{value}</strong>
+        <span className="pos-kpi-card-icon">{icon}</span>
+        <div className="pos-kpi-body">
+          <span className="pos-kpi-title">{label}</span>
+          <strong className="pos-kpi-number">{value}</strong>
+          {meta ? <p className="pos-kpi-help">{meta}</p> : null}
         </div>
       </div>
-      {meta ? <p className="table-note">{meta}</p> : null}
     </article>
   );
 }
@@ -1685,13 +1686,13 @@ export default function PosPage() {
 
       {activeView === "history" ? (
         <div className="pos-view-stack">
-          <section className="feature-card">
+          <section className="feature-card pos-section-card">
             <div className="feature-header">
-              <h2>Historial de Ventas</h2>
+              <p className="eyebrow">Resumen</p>
               <p className="table-note">Consulta ventas pagadas, canceladas y suspendidas.</p>
             </div>
 
-            <div className="pos-kpi-grid">
+            <div className="pos-kpi-grid pos-kpi-grid-compact">
               <PosKpiCard icon={<ReceiptText size={18} />} label="Ventas" meta="Registros visibles" value={historySummary.total} />
               <PosKpiCard icon={<BadgeDollarSign size={18} />} label="Pagadas" meta="Ventas cobradas" value={historySummary.pagada} />
               <PosKpiCard icon={<History size={18} />} label="Canceladas" meta="Ventas revertidas" value={historySummary.cancelada} />
@@ -1699,7 +1700,7 @@ export default function PosPage() {
             </div>
           </section>
 
-          <section className="feature-card">
+          <section className="feature-card pos-section-card">
             <form className="pos-history-filters" onSubmit={handleSalesSearch}>
               <label className="pos-history-search">
                 <span>Buscar</span>
@@ -1748,7 +1749,7 @@ export default function PosPage() {
             </form>
 
             {historyRecords.length === 0 ? (
-              <EmptyState note="No hay ventas registradas." title="Sin ventas" />
+              <EmptyState icon={<ReceiptText size={18} />} note="No hay ventas registradas." title="Sin ventas" />
             ) : (
               <div className="table-wrap">
                 <table className="inventory-table">
@@ -1807,14 +1808,15 @@ export default function PosPage() {
 
       {activeView === "tickets" ? (
         <div className="pos-view-stack">
-          <section className="feature-card">
+          <section className="feature-card pos-section-card">
             <div className="feature-header">
-              <h2>Tickets</h2>
+              <p className="eyebrow">Comprobantes</p>
               <p className="table-note">Consulta e imprime comprobantes de venta.</p>
             </div>
 
             {ticketsList.length === 0 ? (
               <EmptyState
+                icon={<Ticket size={18} />}
                 note="Cuando cobres ventas, sus tickets aparecerán aquí."
                 title="No hay tickets disponibles todavía."
               />
@@ -1850,13 +1852,13 @@ export default function PosPage() {
 
       {activeView === "cash" ? (
         <div className="pos-view-stack">
-          <section className="feature-card">
+          <section className="feature-card pos-section-card">
             <div className="feature-header">
-              <h2>Caja / Turnos</h2>
+              <p className="eyebrow">Resumen</p>
               <p className="table-note">Consulta el estado del turno y prepara el flujo de caja.</p>
             </div>
 
-            <div className="pos-kpi-grid">
+            <div className="pos-kpi-grid pos-kpi-grid-compact">
               <PosKpiCard
                 icon={<Clock3 size={18} />}
                 label="Estado actual"
@@ -1892,10 +1894,10 @@ export default function PosPage() {
                   <p className="table-note">Abre caja para poder cobrar ventas.</p>
                 </div>
                 <div className="pos-warning-box is-warning">
-                  <strong>Sin turno activo</strong>
+                  <strong>Cobro bloqueado</strong>
                   <p>El catálogo puede consultarse, pero el cobro se habilita hasta abrir caja.</p>
                 </div>
-                <div className="pos-kpi-grid">
+                <div className="pos-kpi-grid pos-kpi-grid-compact">
                   <PosKpiCard icon={<Store size={18} />} label="Almacén activo" value={selectedWarehouse?.nombre ?? "Sin selección"} meta="Origen de ventas POS" />
                   <PosKpiCard icon={<CircleDollarSign size={18} />} label="Efectivo esperado" value={formatMoney(0)} meta="Se actualizará al abrir turno" />
                 </div>
@@ -1953,20 +1955,20 @@ export default function PosPage() {
           ) : null}
 
           {selectedWarehouseId && hasActiveShift ? (
-            <section className="feature-card">
+            <section className="feature-card pos-section-card">
               <div className="feature-header">
                 <h2>Turno en curso</h2>
                 <p className="table-note">Resumen operativo de la caja actual.</p>
               </div>
 
-              <div className="pos-kpi-grid">
+              <div className="pos-kpi-grid pos-kpi-grid-compact">
                 <PosKpiCard icon={<Wallet size={18} />} label="Fondo inicial" meta={activeShift.folio} value={formatMoney(activeShift.fondo_inicial)} />
                 <PosKpiCard icon={<BadgeDollarSign size={18} />} label="Ventas totales" meta={`${activeShift.ventas_count} ventas`} value={formatMoney(activeShift.total_ventas)} />
                 <PosKpiCard icon={<BanknoteArrowUp size={18} />} label="Ingresos manuales" meta="Ajustes de caja" value={formatMoney(activeShift.ingresos_manuales)} />
                 <PosKpiCard icon={<BanknoteArrowDown size={18} />} label="Retiros manuales" meta="Salidas manuales" value={formatMoney(activeShift.retiros_manuales)} />
               </div>
 
-              <div className="pos-kpi-grid">
+              <div className="pos-kpi-grid pos-kpi-grid-compact">
                 <PosKpiCard icon={<CircleDollarSign size={18} />} label="Efectivo" meta="Ventas en efectivo" value={formatMoney(activeShift.total_efectivo)} />
                 <PosKpiCard icon={<CreditCard size={18} />} label="Tarjeta" meta="Ventas con tarjeta" value={formatMoney(activeShift.total_tarjeta)} />
                 <PosKpiCard icon={<ReceiptText size={18} />} label="Transferencia" meta="Ventas por transferencia" value={formatMoney(activeShift.total_transferencia)} />
