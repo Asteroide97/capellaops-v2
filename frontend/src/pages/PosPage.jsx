@@ -9,8 +9,11 @@ import {
   CreditCard,
   History,
   LockKeyhole,
+  Mail,
+  MessageSquare,
   PackageSearch,
   Plus,
+  Printer,
   ReceiptText,
   ScanLine,
   ShoppingCart,
@@ -37,6 +40,8 @@ import {
   openPosShift,
   paySuspendedPosSale,
   resumePosSale,
+  sendPosTicketEmail,
+  sendPosTicketSms,
   suspendPosSale,
 } from "../api/client";
 
@@ -97,6 +102,11 @@ const defaultCloseShiftForm = {
   notas: "",
 };
 
+const defaultTicketDeliveryForm = {
+  email: "",
+  phone: "",
+};
+
 
 function formatDateTime(value) {
   if (!value) {
@@ -131,6 +141,16 @@ function formatNumber(value) {
 
 function normalizeDecimalInput(value) {
   return String(value ?? "").replace(",", ".").replace(/[^\d.]/g, "");
+}
+
+
+function isValidEmailInput(value) {
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(value || "").trim());
+}
+
+
+function isValidPhoneInput(value) {
+  return /^\+[1-9]\d{7,14}$/.test(String(value || "").trim());
 }
 
 
@@ -206,6 +226,12 @@ function getPosUiError(requestError, fallback) {
   }
   if (normalized.includes("total pagado") || normalized.includes("no cubre")) {
     return "El total pagado no cubre el total de la venta.";
+  }
+  if (normalized.includes("email no esta configurado")) {
+    return "El envío de email no está configurado.";
+  }
+  if (normalized.includes("sms no esta configurado")) {
+    return "El envío de SMS no está configurado.";
   }
   return rawMessage || fallback;
 }
@@ -478,6 +504,9 @@ export default function PosPage() {
   const [closeShiftForm, setCloseShiftForm] = useState(defaultCloseShiftForm);
   const [selectedSale, setSelectedSale] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
+  const [ticketDeliveryForm, setTicketDeliveryForm] = useState(defaultTicketDeliveryForm);
+  const [ticketDeliverySubmitting, setTicketDeliverySubmitting] = useState("");
+  const [ticketDeliveryFeedback, setTicketDeliveryFeedback] = useState({ tone: "", message: "" });
   const [cancelReason, setCancelReason] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -784,6 +813,15 @@ export default function PosPage() {
       },
     );
   }, [selectedWarehouseId]);
+
+  useEffect(() => {
+    setTicketDeliveryForm({
+      email: selectedTicket?.cliente_email ?? "",
+      phone: "",
+    });
+    setTicketDeliverySubmitting("");
+    setTicketDeliveryFeedback({ tone: "", message: "" });
+  }, [selectedTicket?.id]);
 
   function addToCart(item) {
     if (Number(item.existencia) <= 0) {
@@ -1373,6 +1411,88 @@ export default function PosPage() {
 
   function printTicket() {
     window.print();
+  }
+
+  function applyTicketDeliveryResult(response) {
+    if (response?.delivery) {
+      setSelectedTicket((current) => {
+        if (!current) {
+          return current;
+        }
+        const currentDeliveries = Array.isArray(current.deliveries) ? current.deliveries : [];
+        return {
+          ...current,
+          deliveries: [response.delivery, ...currentDeliveries.filter((item) => item.id !== response.delivery.id)],
+        };
+      });
+    }
+    setTicketDeliveryFeedback({
+      tone: response?.sent ? "success" : "error",
+      message: response?.message || "No se pudo enviar el ticket.",
+    });
+  }
+
+  async function handleSendTicketEmail() {
+    if (!selectedTicket?.id) {
+      return;
+    }
+    const email = String(ticketDeliveryForm.email || "").trim();
+    if (!isValidEmailInput(email)) {
+      setTicketDeliveryFeedback({ tone: "error", message: "Ingresa un email válido." });
+      return;
+    }
+
+    setTicketDeliverySubmitting("email");
+    setTicketDeliveryFeedback({ tone: "", message: "" });
+    try {
+      const response = await sendPosTicketEmail({
+        saleId: selectedTicket.id,
+        token,
+        empresaId,
+        payload: {
+          email,
+          nombre: selectedTicket.cliente_nombre || null,
+        },
+      });
+      applyTicketDeliveryResult(response);
+    } catch (requestError) {
+      setTicketDeliveryFeedback({
+        tone: "error",
+        message: getPosUiError(requestError, "No se pudo enviar el ticket por email."),
+      });
+    } finally {
+      setTicketDeliverySubmitting("");
+    }
+  }
+
+  async function handleSendTicketSms() {
+    if (!selectedTicket?.id) {
+      return;
+    }
+    const phone = String(ticketDeliveryForm.phone || "").trim();
+    if (!isValidPhoneInput(phone)) {
+      setTicketDeliveryFeedback({ tone: "error", message: "Ingresa un teléfono válido." });
+      return;
+    }
+
+    setTicketDeliverySubmitting("sms");
+    setTicketDeliveryFeedback({ tone: "", message: "" });
+    try {
+      const response = await sendPosTicketSms({
+        saleId: selectedTicket.id,
+        token,
+        empresaId,
+        payload: { phone },
+      });
+      applyTicketDeliveryResult(response);
+    } catch (requestError) {
+      setTicketDeliveryFeedback({
+        tone: "error",
+        message: getPosUiError(requestError, "No se pudo enviar el ticket por SMS."),
+      });
+    } finally {
+      setTicketDeliverySubmitting("");
+    }
   }
 
   const historyDetailFooter = selectedSale ? (
@@ -2504,7 +2624,8 @@ export default function PosPage() {
                 Cerrar
               </button>
               <button className="primary-button" onClick={printTicket} type="button">
-                Imprimir
+                <Printer size={16} />
+                <span>Imprimir</span>
               </button>
             </div>
           ) : null
@@ -2512,128 +2633,232 @@ export default function PosPage() {
         onClose={() => setTicketModalOpen(false)}
         open={ticketModalOpen}
         size="wide"
-        subtitle="Comprobante básico imprimible."
+        subtitle="Comprobante de venta. No es comprobante fiscal."
         title="Ticket"
       >
         {!selectedTicket ? (
           <EmptyState note="Selecciona una venta para ver su ticket." title="Sin ticket activo" />
         ) : (
-          <div className="pos-modal-stack pos-ticket-printable">
-            {selectedTicket.estatus === "cancelada" ? (
-              <div className="pos-warning-box">
-                <strong>VENTA CANCELADA</strong>
-                <p>{selectedTicket.cancel_reason || "Esta venta fue cancelada."}</p>
-              </div>
-            ) : null}
-            <div className="pos-ticket-meta-grid">
-              <article className="mini-card">
-                <span className="eyebrow">Empresa</span>
-                <strong>{selectedTicket.empresa}</strong>
-                <p>{selectedTicket.almacen}</p>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Folio</span>
-                <strong>{selectedTicket.folio}</strong>
-                <p>{formatDateTime(selectedTicket.fecha)}</p>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Método de pago</span>
-                <strong>{getPaymentMethodLabel(selectedTicket.metodo_pago)}</strong>
-                <p>{selectedTicket.vendedor}</p>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Cliente</span>
-                <strong>{selectedTicket.cliente_nombre || "Mostrador"}</strong>
-                <p>{selectedTicket.turno_folio || "Sin turno"}</p>
-              </article>
-            </div>
-
-            <div className="table-wrap">
-              <table className="inventory-table">
-                <thead>
-                  <tr>
-                    <th>SKU</th>
-                    <th>Producto</th>
-                    <th>Cantidad</th>
-                    <th>Precio</th>
-                    <th>Descuento</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedTicket.productos.map((item, index) => (
-                    <tr key={`${item.sku}-${index}`}>
-                      <td>{item.sku}</td>
-                      <td>{item.nombre}</td>
-                      <td>{formatNumber(item.cantidad)}</td>
-                      <td>{formatMoney(item.precio_unitario)}</td>
-                      <td>{formatMoney(item.descuento_unitario)}</td>
-                      <td>{formatMoney(item.total_linea)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="module-board">
-              <article className="mini-card">
-                <span className="eyebrow">Subtotal bruto</span>
-                <strong>{formatMoney(selectedTicket.subtotal)}</strong>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Descuentos de línea</span>
-                <strong>{formatMoney(selectedTicket.descuento_lineas_total)}</strong>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Descuento global</span>
-                <strong>{formatMoney(selectedTicket.descuento_global)}</strong>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Descuento total</span>
-                <strong>{formatMoney(selectedTicket.descuento_total)}</strong>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Total</span>
-                <strong>{formatMoney(selectedTicket.total)}</strong>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Cambio</span>
-                <strong>{formatMoney(selectedTicket.cambio)}</strong>
-              </article>
-            </div>
-
-            <section className="feature-card pos-note-card">
-              <div className="feature-header">
-                <p className="eyebrow">Pagos</p>
-                <h3>{selectedTicket.metodo_pago === "mixto" ? "Pago mixto" : "Pago registrado"}</h3>
-              </div>
-              <div className="pos-payment-breakdown">
-                {(selectedTicket.pagos ?? []).map((payment) => (
-                  <div className="pos-payment-breakdown-row" key={payment.id}>
-                    <div>
-                      <strong>{getPaymentMethodLabel(payment.metodo)}</strong>
-                      <p>{payment.referencia || "Sin referencia"}</p>
-                    </div>
-                    <strong>{formatMoney(payment.monto)}</strong>
+          <div className="pos-modal-stack">
+            <article className="pos-ticket-print pos-ticket-printable">
+              <div className="pos-ticket-receipt">
+                <header className="pos-ticket-receipt-head">
+                  <div>
+                    <p className="eyebrow">Comprobante de venta</p>
+                    <h3>{selectedTicket.empresa}</h3>
+                    <p>{selectedTicket.almacen}</p>
                   </div>
-                ))}
+                  <div className="pos-ticket-status-block">
+                    <StatusBadge
+                      label={selectedTicket.estatus === "cancelada" ? "Cancelada" : "Pagada"}
+                      tone={selectedTicket.estatus === "cancelada" ? "danger" : "success"}
+                    />
+                    <strong>{selectedTicket.folio}</strong>
+                    <span>{formatDateTime(selectedTicket.fecha)}</span>
+                  </div>
+                </header>
+
+                {selectedTicket.estatus === "cancelada" ? (
+                  <div className="pos-ticket-cancelled-stamp">VENTA CANCELADA</div>
+                ) : null}
+
+                <div className="pos-ticket-facts">
+                  <div>
+                    <span>Cajero</span>
+                    <strong>{selectedTicket.vendedor}</strong>
+                  </div>
+                  <div>
+                    <span>Cliente</span>
+                    <strong>{selectedTicket.cliente_nombre || "Mostrador"}</strong>
+                  </div>
+                  <div>
+                    <span>Email</span>
+                    <strong>{selectedTicket.cliente_email || "-"}</strong>
+                  </div>
+                  <div>
+                    <span>Turno</span>
+                    <strong>{selectedTicket.turno_folio || "Sin turno"}</strong>
+                  </div>
+                </div>
+
+                <div className="table-wrap pos-ticket-table-wrap">
+                  <table className="inventory-table pos-ticket-table">
+                    <thead>
+                      <tr>
+                        <th>Cant.</th>
+                        <th>Producto</th>
+                        <th>Precio</th>
+                        <th>Desc.</th>
+                        <th>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedTicket.productos.map((item, index) => (
+                        <tr key={`${item.sku}-${index}`}>
+                          <td>{formatNumber(item.cantidad)}</td>
+                          <td>
+                            <div className="pos-ticket-product-cell">
+                              <strong>{item.nombre}</strong>
+                              <span>{item.sku}</span>
+                            </div>
+                          </td>
+                          <td>{formatMoney(item.precio_unitario)}</td>
+                          <td>{formatMoney(item.descuento_unitario)}</td>
+                          <td>{formatMoney(item.total_linea)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="pos-ticket-totals">
+                  <div><span>Subtotal bruto</span><strong>{formatMoney(selectedTicket.subtotal)}</strong></div>
+                  <div><span>Descuentos de línea</span><strong>-{formatMoney(selectedTicket.descuento_lineas_total)}</strong></div>
+                  <div><span>Descuento global</span><strong>-{formatMoney(selectedTicket.descuento_global)}</strong></div>
+                  <div><span>Total</span><strong>{formatMoney(selectedTicket.total)}</strong></div>
+                  <div><span>Pagado</span><strong>{formatMoney(selectedTicket.monto_pagado)}</strong></div>
+                  <div><span>Cambio</span><strong>{formatMoney(selectedTicket.cambio)}</strong></div>
+                </div>
+
+                <section className="pos-ticket-section">
+                  <div className="feature-header">
+                    <p className="eyebrow">Pagos</p>
+                    <h3>{selectedTicket.metodo_pago === "mixto" ? "Pago mixto" : "Pago registrado"}</h3>
+                  </div>
+                  <div className="pos-payment-breakdown pos-ticket-payment-list">
+                    {(selectedTicket.pagos ?? []).map((payment) => (
+                      <div className="pos-payment-breakdown-row" key={payment.id}>
+                        <div>
+                          <strong>{getPaymentMethodLabel(payment.metodo)}</strong>
+                          <p>{payment.referencia || "Sin referencia"}</p>
+                        </div>
+                        <strong>{formatMoney(payment.monto)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                {selectedTicket.notas ? (
+                  <section className="pos-ticket-section">
+                    <div className="feature-header">
+                      <p className="eyebrow">Nota</p>
+                      <h3>Nota de venta</h3>
+                    </div>
+                    <p>{selectedTicket.notas}</p>
+                  </section>
+                ) : null}
+
+                {selectedTicket.cancel_reason ? (
+                  <section className="pos-ticket-section">
+                    <div className="feature-header">
+                      <p className="eyebrow">Cancelación</p>
+                      <h3>Motivo de cancelación</h3>
+                    </div>
+                    <p>{selectedTicket.cancel_reason}</p>
+                  </section>
+                ) : null}
+
+                <footer className="pos-ticket-footer">
+                  <strong>Gracias por su compra</strong>
+                  <p>No es comprobante fiscal.</p>
+                </footer>
+              </div>
+            </article>
+
+            <section className="feature-card pos-ticket-delivery-card">
+              <div className="feature-header">
+                <p className="eyebrow">Ticket digital</p>
+                <h3>Enviar comprobante</h3>
+              </div>
+              {ticketDeliveryFeedback.message ? (
+                <div className={`pos-warning-box ${ticketDeliveryFeedback.tone === "success" ? "is-success" : "is-error"}`}>
+                  <strong>{ticketDeliveryFeedback.tone === "success" ? "Envío completado" : "No se pudo completar el envío"}</strong>
+                  <p>{ticketDeliveryFeedback.message}</p>
+                </div>
+              ) : null}
+              <div className="pos-ticket-delivery-grid">
+                <div className="pos-ticket-delivery-form">
+                  <label>
+                    Email
+                    <input
+                      className="pos-input"
+                      onChange={(event) =>
+                        setTicketDeliveryForm((current) => ({
+                          ...current,
+                          email: event.target.value,
+                        }))
+                      }
+                      placeholder="cliente@dominio.com"
+                      type="email"
+                      value={ticketDeliveryForm.email}
+                    />
+                  </label>
+                  <button
+                    className="ghost-button"
+                    disabled={ticketDeliverySubmitting === "email"}
+                    onClick={handleSendTicketEmail}
+                    type="button"
+                  >
+                    <Mail size={16} />
+                    <span>{ticketDeliverySubmitting === "email" ? "Enviando..." : "Enviar email"}</span>
+                  </button>
+                </div>
+                <div className="pos-ticket-delivery-form">
+                  <label>
+                    SMS
+                    <input
+                      className="pos-input"
+                      onChange={(event) =>
+                        setTicketDeliveryForm((current) => ({
+                          ...current,
+                          phone: event.target.value,
+                        }))
+                      }
+                      placeholder="+528711234567"
+                      type="tel"
+                      value={ticketDeliveryForm.phone}
+                    />
+                  </label>
+                  <button
+                    className="ghost-button"
+                    disabled={ticketDeliverySubmitting === "sms"}
+                    onClick={handleSendTicketSms}
+                    type="button"
+                  >
+                    <MessageSquare size={16} />
+                    <span>{ticketDeliverySubmitting === "sms" ? "Enviando..." : "Enviar SMS"}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="pos-ticket-delivery-history">
+                <div className="feature-header">
+                  <p className="eyebrow">Trazabilidad</p>
+                  <h3>Historial de envíos</h3>
+                </div>
+                {selectedTicket.deliveries?.length ? (
+                  <div className="pos-ticket-delivery-list">
+                    {selectedTicket.deliveries.map((delivery) => (
+                      <div className="pos-ticket-delivery-item" key={delivery.id}>
+                        <div>
+                          <strong>{delivery.canal === "email" ? "Email" : "SMS"}</strong>
+                          <p>{delivery.destino}</p>
+                        </div>
+                        <div>
+                          <StatusBadge
+                            label={delivery.estatus === "enviado" ? "Enviado" : "Fallido"}
+                            tone={delivery.estatus === "enviado" ? "success" : "warning"}
+                          />
+                          <p>{formatDateTime(delivery.created_at)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="table-note">Todavía no hay envíos registrados para este ticket.</p>
+                )}
               </div>
             </section>
-
-            {selectedTicket.notas ? (
-              <div className="feature-card pos-note-card">
-                <div className="feature-header">
-                  <p className="eyebrow">Nota</p>
-                  <h3>Nota de venta</h3>
-                </div>
-                <p>{selectedTicket.notas}</p>
-              </div>
-            ) : null}
-
-            <div className="pos-ticket-thanks">
-              <strong>Gracias por su compra</strong>
-              <p>Conserve este comprobante para cualquier aclaración.</p>
-            </div>
           </div>
         )}
       </PosModal>

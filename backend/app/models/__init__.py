@@ -11,7 +11,7 @@ from app.models.inventory import (
     TransferenciaInventario,
     TransferenciaInventarioDetalle,
 )
-from app.models.pos import PosTurnoCaja, PosTurnoCajaMovimiento, Venta, VentaDetalle, VentaPago
+from app.models.pos import PosTicketDelivery, PosTurnoCaja, PosTurnoCajaMovimiento, Venta, VentaDetalle, VentaPago
 from app.models.pm import (
     EmpresaPMConfig,
     PMAprobacion,
@@ -98,6 +98,7 @@ __all__ = [
     "PMTimeEntry",
     "PendingRegistration",
     "Plan",
+    "PosTicketDelivery",
     "PosTurnoCaja",
     "PosTurnoCajaMovimiento",
     "Proveedor",

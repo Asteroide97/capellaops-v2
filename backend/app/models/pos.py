@@ -224,6 +224,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     cancelled_by_user = relationship("Usuario", foreign_keys=[cancelled_by_user_id])
     detalles = relationship("VentaDetalle", back_populates="venta", cascade="all, delete-orphan")
     pagos = relationship("VentaPago", back_populates="venta", cascade="all, delete-orphan")
+    ticket_deliveries = relationship("PosTicketDelivery", back_populates="venta", cascade="all, delete-orphan")
 
 
 class VentaDetalle(UUIDPrimaryKeyMixin, Base):
@@ -288,3 +289,30 @@ class VentaPago(UUIDPrimaryKeyMixin, Base):
     empresa = relationship("Empresa")
     venta = relationship("Venta", back_populates="pagos")
     turno = relationship("PosTurnoCaja")
+
+
+class PosTicketDelivery(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "pos_ticket_deliveries"
+    __table_args__ = (
+        CheckConstraint("canal IN ('email', 'sms')", name="ck_pos_ticket_delivery_canal"),
+        CheckConstraint("estatus IN ('enviado', 'fallido')", name="ck_pos_ticket_delivery_estatus"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    venta_id: Mapped[str] = mapped_column(ForeignKey("ventas.id"), nullable=False, index=True)
+    canal: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    destino: Mapped[str] = mapped_column(String(255), nullable=False)
+    estatus: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    proveedor: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_by_user_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+
+    empresa = relationship("Empresa")
+    venta = relationship("Venta", back_populates="ticket_deliveries")
+    sent_by_user = relationship("Usuario")

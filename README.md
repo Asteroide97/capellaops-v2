@@ -1556,11 +1556,22 @@ Las órdenes de compra ya siguen el flujo base:
 - Caja / Turnos acumula cada método de pago sin duplicar montos y revierte el desglose correcto cuando se cancela una venta.
 - Las ventas antiguas sin registros de pagos múltiples siguen abriendo historial y ticket con fallback al método principal.
 
+## POS Fase 5 - Ticket digital por email/SMS y UI de ticket mejorada
+
+- El ticket POS se presenta como `Comprobante de venta` y deja claro que `No es comprobante fiscal`.
+- La impresion usa un formato compacto para imprimir solo el comprobante, sin sidebar, overlay ni botones de la app.
+- El ticket ya permite envio por email en HTML cuando existe configuracion `SENDGRID_API_KEY` y `EMAIL_FROM`.
+- El ticket ya permite envio por SMS resumido cuando existe configuracion `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` y `TWILIO_SMS_FROM`.
+- Cada intento de envio queda trazado en `pos_ticket_deliveries` con canal, destino, estatus, proveedor y usuario.
+- Las ventas `pagada` y `cancelada` pueden enviarse; las ventas `suspendida` no generan ticket final.
+- En esta fase no se implemento link publico de ticket; el SMS envia un resumen corto del comprobante.
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados
 - Pagos mixtos con notas avanzadas por pago
 - Descuentos promocionales/reglas avanzadas
+- Link publico de ticket
 - PDF de ticket
 - Conexión con facturación fiscal
 

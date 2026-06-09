@@ -1,18 +1,38 @@
 from __future__ import annotations
 
+import base64
+import json
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
+from html import escape
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models import AuditLog, Empresa, PosTurnoCaja, PosTurnoCajaMovimiento, Usuario, Venta, VentaDetalle, VentaPago
+from app.core.config import get_settings
+from app.models import (
+    AuditLog,
+    Empresa,
+    PosTicketDelivery,
+    PosTurnoCaja,
+    PosTurnoCajaMovimiento,
+    Usuario,
+    Venta,
+    VentaDetalle,
+    VentaPago,
+)
 from app.models.inventory import Almacen, Existencia, Material
 from app.schemas.pos import (
     PosActiveShiftResponse,
     PosCatalogItem,
+    PosTicketDeliveryItem,
+    PosTicketDeliveryResponse,
     PosShiftMovementResponse,
     PosShiftResponse,
     PosTicketResponse,
@@ -35,10 +55,14 @@ from app.services.inventory import (
     normalize_optional_text,
     normalize_required_text,
 )
+from app.services.phone import validate_phone_e164
 
 
 PAYMENT_METHODS = {"efectivo", "tarjeta", "transferencia", "otro"}
 LEGACY_MIXED_PAYMENT_METHODS = {"mixto"}
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+SENDGRID_API_URL = "https://api.sendgrid.com/v3/mail/send"
+TWILIO_MESSAGES_API_TEMPLATE = "https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
 
 
 def validate_pos_access(user: Usuario, empresa: Empresa) -> None:
@@ -97,6 +121,289 @@ def calculate_sale_paid_amount(sale: Venta) -> Decimal | None:
 def normalize_payment_reference(value: str | None) -> str | None:
     return normalize_optional_text(value)
 
+
+def normalize_ticket_email(value: str) -> str:
+    normalized = normalize_optional_text(value)
+    if not normalized or not EMAIL_PATTERN.fullmatch(normalized):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ingresa un email válido.",
+        )
+    return normalized.lower()
+
+
+def normalize_ticket_phone(value: str) -> str:
+    normalized = normalize_optional_text(value)
+    if not normalized or not validate_phone_e164(normalized):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ingresa un teléfono válido.",
+        )
+    return normalized
+
+
+def format_ticket_currency(value: Decimal | int | float | None) -> str:
+    amount = Decimal(value or ZERO).quantize(Decimal("0.01"))
+    return f"${amount:,.2f}"
+
+
+def format_ticket_datetime(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    return value.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def validate_sale_ticket_available(sale: Venta) -> None:
+    if sale.estatus == "suspendida":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo las ventas pagadas o canceladas generan ticket.",
+        )
+
+
+def serialize_ticket_delivery(delivery: PosTicketDelivery) -> PosTicketDeliveryItem:
+    return PosTicketDeliveryItem(
+        id=delivery.id,
+        canal=delivery.canal,
+        destino=delivery.destino,
+        estatus=delivery.estatus,
+        proveedor=delivery.proveedor,
+        error_message=delivery.error_message,
+        sent_by_user_id=delivery.sent_by_user_id,
+        sent_by_user_nombre=delivery.sent_by_user.full_name if delivery.sent_by_user else None,
+        created_at=delivery.created_at,
+    )
+
+
+def load_ticket_deliveries(db: Session, sale_id: str) -> list[PosTicketDelivery]:
+    return db.scalars(
+        select(PosTicketDelivery)
+        .where(PosTicketDelivery.venta_id == sale_id)
+        .order_by(PosTicketDelivery.created_at.desc(), PosTicketDelivery.id.desc())
+    ).all()
+
+
+def get_serialized_ticket_deliveries(db: Session, sale: Venta) -> list[PosTicketDeliveryItem]:
+    return [serialize_ticket_delivery(delivery) for delivery in load_ticket_deliveries(db, sale.id)]
+
+
+def record_ticket_delivery(
+    db: Session,
+    *,
+    sale: Venta,
+    user: Usuario,
+    channel: str,
+    destination: str,
+    status_value: str,
+    provider: str | None,
+    error_message: str | None = None,
+) -> PosTicketDelivery:
+    delivery = PosTicketDelivery(
+        empresa_id=sale.empresa_id,
+        venta_id=sale.id,
+        canal=channel,
+        destino=destination,
+        estatus=status_value,
+        proveedor=provider,
+        error_message=error_message,
+        sent_by_user_id=user.id,
+    )
+    delivery.sent_by_user = user
+    db.add(delivery)
+    db.flush()
+    return delivery
+
+
+def build_ticket_email_html(ticket: PosTicketResponse, recipient_name: str | None = None) -> str:
+    greeting = f"<p>Hola {escape(recipient_name)},</p>" if recipient_name else ""
+    product_rows = "".join(
+        (
+            "<tr>"
+            f"<td style='padding:6px 0'>{escape(item.nombre)}</td>"
+            f"<td style='padding:6px 0; text-align:center'>{escape(str(item.cantidad))}</td>"
+            f"<td style='padding:6px 0; text-align:right'>{escape(format_ticket_currency(item.precio_unitario))}</td>"
+            f"<td style='padding:6px 0; text-align:right'>{escape(format_ticket_currency(item.descuento_unitario))}</td>"
+            f"<td style='padding:6px 0; text-align:right'>{escape(format_ticket_currency(item.total_linea))}</td>"
+            "</tr>"
+        )
+        for item in ticket.productos
+    )
+    payment_rows = "".join(
+        (
+            "<tr>"
+            f"<td style='padding:6px 0'>{escape(payment.metodo.capitalize())}</td>"
+            f"<td style='padding:6px 0'>{escape(payment.referencia or 'Sin referencia')}</td>"
+            f"<td style='padding:6px 0; text-align:right'>{escape(format_ticket_currency(payment.monto))}</td>"
+            "</tr>"
+        )
+        for payment in ticket.pagos
+    )
+    cancelled_block = (
+        "<p style='margin:0 0 16px; padding:10px 12px; border-radius:10px; background:#fff5f5; color:#b42318; font-weight:700'>"
+        "VENTA CANCELADA"
+        "</p>"
+        if ticket.estatus == "cancelada"
+        else ""
+    )
+    note_block = f"<p style='margin:16px 0 0'>{escape(ticket.notas)}</p>" if ticket.notas else ""
+    return (
+        "<div style='font-family:Arial,sans-serif; color:#101828; max-width:720px; margin:0 auto; padding:24px'>"
+        "<p style='margin:0 0 8px; font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#475467'>Comprobante de venta</p>"
+        f"<h1 style='margin:0 0 16px; font-size:24px'>{escape(ticket.empresa)}</h1>"
+        f"{greeting}"
+        f"{cancelled_block}"
+        f"<p style='margin:0 0 16px'>Adjuntamos el resumen de tu compra <strong>{escape(ticket.folio)}</strong>.</p>"
+        "<table style='width:100%; border-collapse:collapse; margin-bottom:20px'>"
+        f"<tr><td><strong>Almacen</strong></td><td>{escape(ticket.almacen)}</td></tr>"
+        f"<tr><td><strong>Fecha</strong></td><td>{escape(format_ticket_datetime(ticket.fecha))}</td></tr>"
+        f"<tr><td><strong>Cajero</strong></td><td>{escape(ticket.vendedor)}</td></tr>"
+        f"<tr><td><strong>Cliente</strong></td><td>{escape(ticket.cliente_nombre or 'Mostrador')}</td></tr>"
+        "</table>"
+        "<table style='width:100%; border-collapse:collapse; margin-bottom:20px'>"
+        "<thead><tr>"
+        "<th style='text-align:left; padding:8px 0; border-bottom:1px solid #d0d5dd'>Producto</th>"
+        "<th style='text-align:center; padding:8px 0; border-bottom:1px solid #d0d5dd'>Cant.</th>"
+        "<th style='text-align:right; padding:8px 0; border-bottom:1px solid #d0d5dd'>Precio</th>"
+        "<th style='text-align:right; padding:8px 0; border-bottom:1px solid #d0d5dd'>Desc.</th>"
+        "<th style='text-align:right; padding:8px 0; border-bottom:1px solid #d0d5dd'>Total</th>"
+        "</tr></thead>"
+        f"<tbody>{product_rows}</tbody>"
+        "</table>"
+        "<table style='width:100%; border-collapse:collapse; margin-bottom:20px'>"
+        f"<tr><td>Subtotal bruto</td><td style='text-align:right'>{escape(format_ticket_currency(ticket.subtotal))}</td></tr>"
+        f"<tr><td>Descuentos de linea</td><td style='text-align:right'>-{escape(format_ticket_currency(ticket.descuento_lineas_total))}</td></tr>"
+        f"<tr><td>Descuento global</td><td style='text-align:right'>-{escape(format_ticket_currency(ticket.descuento_global))}</td></tr>"
+        f"<tr><td><strong>Total</strong></td><td style='text-align:right'><strong>{escape(format_ticket_currency(ticket.total))}</strong></td></tr>"
+        f"<tr><td>Pagado</td><td style='text-align:right'>{escape(format_ticket_currency(ticket.monto_pagado))}</td></tr>"
+        f"<tr><td>Cambio</td><td style='text-align:right'>{escape(format_ticket_currency(ticket.cambio))}</td></tr>"
+        "</table>"
+        "<h2 style='margin:0 0 10px; font-size:16px'>Pagos</h2>"
+        "<table style='width:100%; border-collapse:collapse; margin-bottom:20px'>"
+        "<thead><tr>"
+        "<th style='text-align:left; padding:8px 0; border-bottom:1px solid #d0d5dd'>Metodo</th>"
+        "<th style='text-align:left; padding:8px 0; border-bottom:1px solid #d0d5dd'>Referencia</th>"
+        "<th style='text-align:right; padding:8px 0; border-bottom:1px solid #d0d5dd'>Monto</th>"
+        "</tr></thead>"
+        f"<tbody>{payment_rows}</tbody>"
+        "</table>"
+        f"{note_block}"
+        "<p style='margin:20px 0 0; font-weight:700'>Gracias por su compra</p>"
+        "<p style='margin:8px 0 0; color:#475467'>No es comprobante fiscal.</p>"
+        "</div>"
+    )
+
+
+def build_ticket_sms_message(ticket: PosTicketResponse) -> str:
+    return (
+        f"Ticket {ticket.folio}. Total {format_ticket_currency(ticket.total)}. "
+        "Gracias por su compra. No es comprobante fiscal."
+    )
+
+
+def post_json_request(url: str, *, payload: dict, headers: dict[str, str]) -> tuple[int, dict | None]:
+    request = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8").strip()
+            return response.status, json.loads(body) if body else None
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore").strip()
+        try:
+            parsed = json.loads(body) if body else None
+        except json.JSONDecodeError:
+            parsed = None
+        return exc.code, parsed
+    except URLError:
+        return 0, None
+
+
+def post_form_request(url: str, *, payload: dict[str, str], headers: dict[str, str]) -> tuple[int, dict | None]:
+    request = Request(
+        url,
+        data=urlencode(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            body = response.read().decode("utf-8").strip()
+            return response.status, json.loads(body) if body else None
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore").strip()
+        try:
+            parsed = json.loads(body) if body else None
+        except json.JSONDecodeError:
+            parsed = None
+        return exc.code, parsed
+    except URLError:
+        return 0, None
+
+
+def dispatch_ticket_email(ticket: PosTicketResponse, *, email: str, recipient_name: str | None = None) -> tuple[bool, str, str]:
+    settings = get_settings()
+    if not settings.sendgrid_api_key or not settings.email_from:
+        return False, "El envío de email no está configurado.", "sendgrid"
+
+    status_code, payload = post_json_request(
+        SENDGRID_API_URL,
+        payload={
+            "personalizations": [
+                {
+                    "to": [{"email": email, "name": recipient_name} if recipient_name else {"email": email}],
+                }
+            ],
+            "from": {"email": settings.email_from},
+            "subject": f"Comprobante de venta {ticket.folio}",
+            "content": [
+                {
+                    "type": "text/html",
+                    "value": build_ticket_email_html(ticket, recipient_name=recipient_name),
+                }
+            ],
+        },
+        headers={
+            "Authorization": f"Bearer {settings.sendgrid_api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+    )
+    if status_code == 202:
+        return True, "Ticket enviado por email.", "sendgrid"
+    if status_code == 0:
+        return False, "No se pudo enviar el ticket por email.", "sendgrid"
+    return False, "No se pudo enviar el ticket por email.", "sendgrid"
+
+
+def dispatch_ticket_sms(ticket: PosTicketResponse, *, phone: str) -> tuple[bool, str, str]:
+    settings = get_settings()
+    if not settings.twilio_account_sid or not settings.twilio_auth_token or not settings.twilio_sms_from:
+        return False, "El envío de SMS no está configurado.", "twilio"
+
+    credentials = f"{settings.twilio_account_sid}:{settings.twilio_auth_token}".encode("utf-8")
+    auth_token = base64.b64encode(credentials).decode("utf-8")
+    status_code, payload = post_form_request(
+        TWILIO_MESSAGES_API_TEMPLATE.format(account_sid=settings.twilio_account_sid),
+        payload={
+            "From": settings.twilio_sms_from,
+            "To": phone,
+            "Body": build_ticket_sms_message(ticket),
+        },
+        headers={
+            "Authorization": f"Basic {auth_token}",
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Accept": "application/json",
+        },
+    )
+    if status_code in {200, 201} and payload and payload.get("sid"):
+        return True, "Ticket enviado por SMS.", "twilio"
+    if status_code == 0:
+        return False, "No se pudo enviar el ticket por SMS.", "twilio"
+    return False, "No se pudo enviar el ticket por SMS.", "twilio"
 
 def ensure_unique_sale_folio(db: Session, empresa_id: str, folio: str, sale_id: str | None = None) -> None:
     query = select(Venta.id).where(Venta.empresa_id == empresa_id, Venta.folio == folio)
@@ -369,17 +676,14 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
 
 
 def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
-    if sale.estatus == "suspendida":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Solo las ventas pagadas o canceladas generan ticket.",
-        )
+    validate_sale_ticket_available(sale)
     details = db.scalars(
         select(VentaDetalle)
         .where(VentaDetalle.venta_id == sale.id)
         .order_by(VentaDetalle.nombre_snapshot.asc(), VentaDetalle.sku_snapshot.asc(), VentaDetalle.id.asc())
     ).all()
     serialized_payments = get_serialized_sale_payments(db, sale)
+    serialized_deliveries = get_serialized_ticket_deliveries(db, sale)
     return PosTicketResponse(
         id=sale.id,
         folio=sale.folio,
@@ -418,6 +722,68 @@ def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
         cancel_reason=sale.cancel_reason,
         cancelled_at=sale.cancelled_at,
         pagos=serialized_payments,
+        deliveries=serialized_deliveries,
+    )
+
+
+def send_sale_ticket_email(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    email: str,
+    recipient_name: str | None = None,
+) -> PosTicketDeliveryResponse:
+    sale = get_sale_for_company(db, empresa.id, sale_id)
+    validate_sale_ticket_available(sale)
+    normalized_email = normalize_ticket_email(email)
+    ticket = get_sale_ticket(db, sale)
+    sent, message, provider = dispatch_ticket_email(ticket, email=normalized_email, recipient_name=recipient_name)
+    delivery = record_ticket_delivery(
+        db,
+        sale=sale,
+        user=user,
+        channel="email",
+        destination=normalized_email,
+        status_value="enviado" if sent else "fallido",
+        provider=provider,
+        error_message=None if sent else message,
+    )
+    return PosTicketDeliveryResponse(
+        sent=sent,
+        message=message,
+        delivery=serialize_ticket_delivery(delivery),
+    )
+
+
+def send_sale_ticket_sms(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    phone: str,
+) -> PosTicketDeliveryResponse:
+    sale = get_sale_for_company(db, empresa.id, sale_id)
+    validate_sale_ticket_available(sale)
+    normalized_phone = normalize_ticket_phone(phone)
+    ticket = get_sale_ticket(db, sale)
+    sent, message, provider = dispatch_ticket_sms(ticket, phone=normalized_phone)
+    delivery = record_ticket_delivery(
+        db,
+        sale=sale,
+        user=user,
+        channel="sms",
+        destination=normalized_phone,
+        status_value="enviado" if sent else "fallido",
+        provider=provider,
+        error_message=None if sent else message,
+    )
+    return PosTicketDeliveryResponse(
+        sent=sent,
+        message=message,
+        delivery=serialize_ticket_delivery(delivery),
     )
 
 
