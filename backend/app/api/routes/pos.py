@@ -263,8 +263,10 @@ def create_sale_endpoint(
             cliente_email=payload.cliente_email,
             metodo_pago=payload.metodo_pago,
             monto_recibido=payload.monto_recibido,
+            descuento_global=payload.descuento_global,
             notas=payload.notas,
             items=payload.items,
+            payments=payload.payments,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -288,8 +290,10 @@ def suspend_sale_endpoint(
             cliente_nombre=payload.cliente_nombre,
             cliente_email=payload.cliente_email,
             metodo_pago=payload.metodo_pago,
+            descuento_global=payload.descuento_global,
             notas=payload.notas,
             items=payload.items,
+            payments=payload.payments,
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -330,8 +334,10 @@ def pay_suspended_sale_endpoint(
             cliente_email=payload.cliente_email,
             metodo_pago=payload.metodo_pago,
             monto_recibido=payload.monto_recibido,
+            descuento_global=payload.descuento_global,
             notas=payload.notas,
             items=payload.items,
+            payments=payload.payments,
             ip_address=request.client.host if request.client else None,
         ),
     )

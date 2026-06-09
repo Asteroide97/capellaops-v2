@@ -75,7 +75,10 @@ const defaultSaleForm = {
   cliente_nombre: "",
   cliente_email: "",
   metodo_pago: "efectivo",
+  payment_mode: "simple",
+  payments: [],
   monto_recibido: "",
+  descuento_global: "",
   notas: "",
 };
 
@@ -131,6 +134,16 @@ function normalizeDecimalInput(value) {
 }
 
 
+function createPaymentDraft(method = "efectivo", amount = "", reference = "") {
+  return {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    metodo: method,
+    monto: amount,
+    referencia: reference,
+  };
+}
+
+
 function safeText(value, fallback = "-") {
   if (value === null || value === undefined || value === "") {
     return fallback;
@@ -162,6 +175,9 @@ function getViewSubtitle(view) {
 
 
 function getPaymentMethodLabel(method) {
+  if (method === "mixto") {
+    return "Pago mixto";
+  }
   return paymentMethodOptions.find((item) => item.value === method)?.label ?? safeText(method);
 }
 
@@ -184,6 +200,12 @@ function getPosUiError(requestError, fallback) {
   }
   if (normalized.includes("precio") && normalized.includes("venta")) {
     return "Captura precio de venta para continuar.";
+  }
+  if (normalized.includes("descuento") && normalized.includes("subtotal")) {
+    return "El descuento no puede superar el subtotal.";
+  }
+  if (normalized.includes("total pagado") || normalized.includes("no cubre")) {
+    return "El total pagado no cubre el total de la venta.";
   }
   return rawMessage || fallback;
 }
@@ -279,8 +301,9 @@ function getPaymentState({
   hasCartItems,
   cartHasMissingPrice,
   cartHasInvalidQuantity,
-  saleMethod,
-  cashReceived,
+  cartHasInvalidDiscount,
+  cartHasInvalidPayments,
+  totalPaid,
   cartTotal,
 }) {
   if (!selectedWarehouseId) {
@@ -328,12 +351,30 @@ function getPaymentState({
     };
   }
 
-  if (saleMethod === "efectivo" && cashReceived < cartTotal) {
+  if (cartHasInvalidDiscount) {
+    return {
+      tone: "warning",
+      title: "Descuento inválido",
+      note: "El descuento no puede superar el subtotal.",
+      buttonLabel: "Revisa descuento",
+    };
+  }
+
+  if (cartHasInvalidPayments) {
+    return {
+      tone: "warning",
+      title: "Pago incompleto",
+      note: "El total pagado no cubre el total de la venta.",
+      buttonLabel: "Completa pago",
+    };
+  }
+
+  if (totalPaid < cartTotal) {
     return {
       tone: "warning",
       title: "Monto incompleto",
-      note: "Captura el monto recibido para completar el cobro.",
-      buttonLabel: "Completa efectivo",
+      note: "El total pagado no cubre el total de la venta.",
+      buttonLabel: "Completa pago",
     };
   }
 
@@ -467,13 +508,46 @@ export default function PosPage() {
       ),
     [cart],
   );
-  const cartTotal = Math.max(0, cartSubtotal - cartDiscountTotal);
+  const netSubtotalAfterLineDiscounts = Math.max(0, cartSubtotal - cartDiscountTotal);
+  const globalDiscount = Number(saleForm.descuento_global || 0);
+  const cartTotal = Math.max(0, netSubtotalAfterLineDiscounts - globalDiscount);
+  const usesMixedPayments = saleForm.payment_mode === "mixed";
+  const paymentRows = useMemo(
+    () => (Array.isArray(saleForm.payments) ? saleForm.payments : []),
+    [saleForm.payments],
+  );
   const cashReceived = Number(saleForm.monto_recibido || 0);
-  const paidPreview = saleForm.metodo_pago === "efectivo" ? cashReceived : cartTotal;
+  const mixedPaymentsSummary = useMemo(() => {
+    return paymentRows.reduce(
+      (summary, payment) => {
+        const amount = Number(payment.monto || 0);
+        if (Number.isNaN(amount) || amount < 0) {
+          summary.hasInvalidRow = true;
+          return summary;
+        }
+        if (amount === 0) {
+          return summary;
+        }
+        summary.totalPaid += amount;
+        if (payment.metodo === "efectivo") {
+          summary.cashPaid += amount;
+        }
+        return summary;
+      },
+      { totalPaid: 0, cashPaid: 0, hasInvalidRow: false },
+    );
+  }, [paymentRows]);
+  const paidPreview = usesMixedPayments
+    ? mixedPaymentsSummary.totalPaid
+    : saleForm.metodo_pago === "efectivo"
+      ? cashReceived
+      : cartTotal;
+  const paymentOverage = Math.max(0, paidPreview - cartTotal);
   const cashChangePreview =
-    saleForm.metodo_pago === "efectivo" && saleForm.monto_recibido !== ""
-      ? Math.max(0, cashReceived - cartTotal)
+    paymentOverage > 0 && paymentOverage <= (usesMixedPayments ? mixedPaymentsSummary.cashPaid : cashReceived)
+      ? paymentOverage
       : 0;
+  const paymentPendingPreview = Math.max(0, cartTotal - Math.min(paidPreview, cartTotal));
   const expectedCash = Number(activeShift?.efectivo_esperado || 0);
   const countedCash = Number(closeShiftForm.efectivo_contado || 0);
   const closeShiftDifference = countedCash - expectedCash;
@@ -483,22 +557,43 @@ export default function PosPage() {
     const quantity = Number(item.cantidad || 0);
     return quantity <= 0 || Number.isNaN(quantity) || quantity > Number(item.existencia || 0);
   });
+  const cartHasInvalidLineDiscount = cart.some(
+    (item) => Number(item.descuento_unitario || 0) > Number(item.precio_unitario || 0),
+  );
+  const cartHasInvalidGlobalDiscount =
+    globalDiscount < 0 || Number.isNaN(globalDiscount) || globalDiscount > netSubtotalAfterLineDiscounts;
+  const cartHasInvalidDiscount = cartHasInvalidLineDiscount || cartHasInvalidGlobalDiscount;
   const cartHasMissingPrice = cart.some((item) => Number(item.precio_unitario || 0) <= 0);
+  const nonCashOverageWithoutCash =
+    usesMixedPayments && paymentOverage > 0 && paymentOverage > mixedPaymentsSummary.cashPaid;
+  const hasMixedPaymentRows = paymentRows.length > 0;
+  const hasInvalidMixedPaymentAmounts =
+    usesMixedPayments &&
+    (mixedPaymentsSummary.hasInvalidRow || paymentRows.some((payment) => Number(payment.monto || 0) <= 0));
+  const hasInsufficientMixedPayment = usesMixedPayments && paidPreview < cartTotal;
+  const cartHasInvalidPayments =
+    (usesMixedPayments && (!hasMixedPaymentRows || hasInvalidMixedPaymentAmounts || nonCashOverageWithoutCash)) ||
+    hasInsufficientMixedPayment;
   const canCharge =
     Boolean(selectedWarehouseId) &&
     hasActiveShift &&
     hasCartItems &&
     !cartHasInvalidQuantity &&
+    !cartHasInvalidDiscount &&
     !cartHasMissingPrice &&
-    (saleForm.metodo_pago !== "efectivo" || Number(saleForm.monto_recibido || 0) >= cartTotal);
+    !cartHasInvalidPayments &&
+    paidPreview >= cartTotal &&
+    (!usesMixedPayments || !nonCashOverageWithoutCash) &&
+    (!usesMixedPayments || hasMixedPaymentRows);
   const paymentState = getPaymentState({
     selectedWarehouseId,
     hasActiveShift,
     hasCartItems,
     cartHasMissingPrice,
     cartHasInvalidQuantity,
-    saleMethod: saleForm.metodo_pago,
-    cashReceived,
+    cartHasInvalidDiscount,
+    cartHasInvalidPayments,
+    totalPaid: paidPreview,
     cartTotal,
   });
 
@@ -757,6 +852,89 @@ export default function PosPage() {
     setSaleForm((current) => ({ ...current, monto_recibido: cartTotal ? String(cartTotal.toFixed(2)) : "" }));
   }
 
+  function enableMixedPayments() {
+    setSaleForm((current) => {
+      if (current.payment_mode === "mixed") {
+        return current;
+      }
+      return {
+        ...current,
+        payment_mode: "mixed",
+        payments: [
+          createPaymentDraft(
+            current.metodo_pago === "mixto" ? "efectivo" : current.metodo_pago,
+            current.metodo_pago === "efectivo"
+              ? current.monto_recibido
+              : cartTotal > 0
+                ? String(cartTotal.toFixed(2))
+                : "",
+          ),
+        ],
+      };
+    });
+  }
+
+  function disableMixedPayments() {
+    setSaleForm((current) => {
+      const firstMethod = current.payments?.[0]?.metodo || "efectivo";
+      const cashPayment = (current.payments ?? []).find((payment) => payment.metodo === "efectivo");
+      return {
+        ...current,
+        payment_mode: "simple",
+        payments: [],
+        metodo_pago: firstMethod,
+        monto_recibido: firstMethod === "efectivo" ? cashPayment?.monto || "" : "",
+      };
+    });
+  }
+
+  function addPaymentRow() {
+    setSaleForm((current) => ({
+      ...current,
+      payment_mode: "mixed",
+      payments: [...(current.payments ?? []), createPaymentDraft("efectivo", "")],
+    }));
+  }
+
+  function updatePaymentRow(paymentId, field, value) {
+    setSaleForm((current) => ({
+      ...current,
+      payments: (current.payments ?? []).map((payment) =>
+        payment.id === paymentId
+          ? {
+              ...payment,
+              [field]: field === "monto" ? normalizeDecimalInput(value) : value,
+            }
+          : payment,
+      ),
+    }));
+  }
+
+  function removePaymentRow(paymentId) {
+    setSaleForm((current) => ({
+      ...current,
+      payments: (current.payments ?? []).filter((payment) => payment.id !== paymentId),
+    }));
+  }
+
+  function applyExactToPayment(paymentId) {
+    const pendingAmount = paymentPendingPreview;
+    setSaleForm((current) => ({
+      ...current,
+      payment_mode: "mixed",
+      payments: (current.payments ?? []).map((payment) => {
+        if (payment.id !== paymentId || payment.metodo !== "efectivo") {
+          return payment;
+        }
+        const nextAmount = Number(payment.monto || 0) + pendingAmount;
+        return {
+          ...payment,
+          monto: nextAmount > 0 ? String(nextAmount.toFixed(2)) : payment.monto,
+        };
+      }),
+    }));
+  }
+
   async function handleSuspendSale() {
     if (!selectedWarehouse) {
       setError("Selecciona un almacén para suspender la venta.");
@@ -766,6 +944,14 @@ export default function PosPage() {
       setError("Agrega productos antes de suspender la venta.");
       return;
     }
+    if (cartHasInvalidQuantity) {
+      setError("No hay stock suficiente.");
+      return;
+    }
+    if (cartHasInvalidDiscount) {
+      setError("El descuento no puede superar el subtotal.");
+      return;
+    }
 
     setSubmitting(true);
     clearFeedback();
@@ -773,8 +959,9 @@ export default function PosPage() {
       almacen_id: selectedWarehouse.id,
       cliente_nombre: saleForm.cliente_nombre || null,
       cliente_email: saleForm.cliente_email || null,
-      metodo_pago: saleForm.metodo_pago,
+      metodo_pago: usesMixedPayments ? "mixto" : saleForm.metodo_pago,
       monto_recibido: null,
+      descuento_global: saleForm.descuento_global === "" ? "0" : saleForm.descuento_global,
       notas: saleForm.notas || null,
       items: cart.map((item) => ({
         material_id: item.material_id,
@@ -782,6 +969,15 @@ export default function PosPage() {
         precio_unitario: item.precio_unitario === "" ? "0" : item.precio_unitario,
         descuento_unitario: item.descuento_unitario || "0",
       })),
+      payments: usesMixedPayments
+        ? paymentRows
+            .filter((payment) => Number(payment.monto || 0) > 0)
+            .map((payment) => ({
+              metodo: payment.metodo,
+              monto: payment.monto,
+              referencia: payment.referencia || null,
+            }))
+        : [],
     };
 
     try {
@@ -823,8 +1019,31 @@ export default function PosPage() {
       setSaleForm({
         cliente_nombre: sale.cliente_nombre ?? "",
         cliente_email: sale.cliente_email ?? "",
-        metodo_pago: sale.metodo_pago ?? "efectivo",
-        monto_recibido: "",
+        metodo_pago:
+          sale.metodo_pago && sale.metodo_pago !== "mixto"
+            ? sale.metodo_pago
+            : sale.payments?.[0]?.metodo || "efectivo",
+        payment_mode: sale.payments?.length > 1 || sale.metodo_pago === "mixto" ? "mixed" : "simple",
+        payments:
+          sale.payments?.length > 0
+            ? sale.payments.map((payment) =>
+                createPaymentDraft(
+                  payment.metodo,
+                  payment.monto != null ? String(payment.monto) : "",
+                  payment.referencia ?? "",
+                ),
+              )
+            : sale.metodo_pago === "mixto"
+              ? [createPaymentDraft("efectivo", "", "")]
+              : [],
+        monto_recibido:
+          sale.payments?.length === 1 && sale.payments[0].metodo === "efectivo"
+            ? String(sale.payments[0].monto ?? "")
+            : "",
+        descuento_global:
+          sale.descuento_global != null && Number(sale.descuento_global) > 0
+            ? String(sale.descuento_global)
+            : "",
         notas: sale.notas ?? "",
       });
       setResumedSaleId(sale.id);
@@ -860,12 +1079,24 @@ export default function PosPage() {
       setError("No hay stock suficiente.");
       return;
     }
+    if (cartHasInvalidDiscount) {
+      setError("El descuento no puede superar el subtotal.");
+      return;
+    }
     if (cartHasMissingPrice) {
       setError("Captura precio de venta para continuar.");
       return;
     }
-    if (saleForm.metodo_pago === "efectivo" && cashReceived < cartTotal) {
-      setError("El monto recibido debe cubrir el total para pago en efectivo.");
+    if (usesMixedPayments && paymentRows.some((payment) => Number(payment.monto || 0) <= 0)) {
+      setError("El monto del pago debe ser mayor a cero.");
+      return;
+    }
+    if (usesMixedPayments && nonCashOverageWithoutCash) {
+      setError("El cambio solo puede generarse con efectivo.");
+      return;
+    }
+    if (paidPreview < cartTotal) {
+      setError("El total pagado no cubre el total de la venta.");
       return;
     }
 
@@ -876,11 +1107,12 @@ export default function PosPage() {
       almacen_id: selectedWarehouseId,
       cliente_nombre: saleForm.cliente_nombre || null,
       cliente_email: saleForm.cliente_email || null,
-      metodo_pago: saleForm.metodo_pago,
+      metodo_pago: usesMixedPayments ? "mixto" : saleForm.metodo_pago,
       monto_recibido:
-        saleForm.metodo_pago === "efectivo" && saleForm.monto_recibido !== ""
+        !usesMixedPayments && saleForm.metodo_pago === "efectivo" && saleForm.monto_recibido !== ""
           ? saleForm.monto_recibido
           : null,
+      descuento_global: saleForm.descuento_global === "" ? "0" : saleForm.descuento_global,
       notas: saleForm.notas || null,
       items: cart.map((item) => ({
         material_id: item.material_id,
@@ -888,6 +1120,13 @@ export default function PosPage() {
         precio_unitario: item.precio_unitario === "" ? "0" : item.precio_unitario,
         descuento_unitario: item.descuento_unitario || "0",
       })),
+      payments: usesMixedPayments
+        ? paymentRows.map((payment) => ({
+            metodo: payment.metodo,
+            monto: payment.monto,
+            referencia: payment.referencia || null,
+          }))
+        : [],
     };
 
     try {
@@ -1507,14 +1746,35 @@ export default function PosPage() {
                   <strong>{formatMoney(cartSubtotal)}</strong>
                 </div>
                 <div>
-                  <span>Descuento</span>
+                  <span>Descuentos de línea</span>
                   <strong>{formatMoney(cartDiscountTotal)}</strong>
                 </div>
+                <label className="pos-payment-inline-field">
+                  <span>Descuento global</span>
+                  <input
+                    className={`pos-input ${cartHasInvalidGlobalDiscount ? "is-warning" : ""}`}
+                    min="0"
+                    onChange={(event) =>
+                      setSaleForm((current) => ({
+                        ...current,
+                        descuento_global: normalizeDecimalInput(event.target.value),
+                      }))
+                    }
+                    placeholder="0.00"
+                    step="0.01"
+                    type="number"
+                    value={saleForm.descuento_global}
+                  />
+                </label>
                 <div className="is-total">
                   <span>Total</span>
                   <strong>{formatMoney(cartTotal)}</strong>
                 </div>
               </div>
+
+              {cartHasInvalidGlobalDiscount ? (
+                <p className="form-error">El descuento no puede superar el subtotal.</p>
+              ) : null}
 
               <label>
                 Cliente
@@ -1539,55 +1799,141 @@ export default function PosPage() {
               </label>
 
               <div className="pos-payment-methods">
-                <span className="inventory-field-label">Método de pago</span>
-                <div className="pos-payment-method-grid">
-                  {paymentMethodOptions.map((option) => (
-                    <button
-                      className={`register-step-pill ${saleForm.metodo_pago === option.value ? "is-active" : ""}`}
-                      key={option.value}
-                      onClick={() =>
-                        setSaleForm((current) => ({
-                          ...current,
-                          metodo_pago: option.value,
-                          monto_recibido: option.value === "efectivo" ? current.monto_recibido : "",
-                        }))
-                      }
-                      type="button"
-                    >
-                      {option.label}
-                    </button>
-                  ))}
+                <div className="pos-payment-mode-row">
+                  <span className="inventory-field-label">Cobro</span>
+                  <button
+                    className="link-button"
+                    onClick={usesMixedPayments ? disableMixedPayments : enableMixedPayments}
+                    type="button"
+                  >
+                    {usesMixedPayments ? "Volver a pago simple" : "Pago mixto"}
+                  </button>
                 </div>
-              </div>
 
-              <div className="pos-payment-inline">
-                <label>
-                  Monto recibido
-                  <input
-                    className="pos-input"
-                    disabled={saleForm.metodo_pago !== "efectivo"}
-                    min="0"
-                    onChange={(event) =>
-                      setSaleForm((current) => ({
-                        ...current,
-                        monto_recibido: normalizeDecimalInput(event.target.value),
-                      }))
-                    }
-                    placeholder={saleForm.metodo_pago === "efectivo" ? "0.00" : "Solo para efectivo"}
-                    step="0.01"
-                    type="number"
-                    value={saleForm.monto_recibido}
-                  />
-                </label>
+                {!usesMixedPayments ? (
+                  <>
+                    <div className="pos-payment-method-grid">
+                      {paymentMethodOptions.map((option) => (
+                        <button
+                          className={`register-step-pill ${saleForm.metodo_pago === option.value ? "is-active" : ""}`}
+                          key={option.value}
+                          onClick={() =>
+                            setSaleForm((current) => ({
+                              ...current,
+                              metodo_pago: option.value,
+                              payment_mode: "simple",
+                              payments: [],
+                              monto_recibido: option.value === "efectivo" ? current.monto_recibido : "",
+                            }))
+                          }
+                          type="button"
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
 
-                <button
-                  className="ghost-button"
-                  disabled={saleForm.metodo_pago !== "efectivo" || !hasCartItems}
-                  onClick={applyExactAmount}
-                  type="button"
-                >
-                  Exacto
-                </button>
+                    <div className="pos-payment-inline">
+                      <label>
+                        Monto recibido
+                        <input
+                          className="pos-input"
+                          disabled={saleForm.metodo_pago !== "efectivo"}
+                          min="0"
+                          onChange={(event) =>
+                            setSaleForm((current) => ({
+                              ...current,
+                              monto_recibido: normalizeDecimalInput(event.target.value),
+                            }))
+                          }
+                          placeholder={saleForm.metodo_pago === "efectivo" ? "0.00" : "Solo para efectivo"}
+                          step="0.01"
+                          type="number"
+                          value={saleForm.monto_recibido}
+                        />
+                      </label>
+
+                      <button
+                        className="ghost-button"
+                        disabled={saleForm.metodo_pago !== "efectivo" || !hasCartItems}
+                        onClick={applyExactAmount}
+                        type="button"
+                      >
+                        Exacto
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="pos-mixed-payments">
+                    <div className="pos-action-row">
+                      <button className="ghost-button" onClick={addPaymentRow} type="button">
+                        Agregar pago
+                      </button>
+                    </div>
+
+                    {(paymentRows ?? []).map((payment) => (
+                      <div className="pos-payment-row" key={payment.id}>
+                        <div className="pos-payment-grid">
+                          <label>
+                            Método
+                            <select
+                              className="pos-input"
+                              onChange={(event) => updatePaymentRow(payment.id, "metodo", event.target.value)}
+                              value={payment.metodo}
+                            >
+                              {paymentMethodOptions.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          <label>
+                            Monto
+                            <input
+                              className={`pos-input ${
+                                Number(payment.monto || 0) <= 0 ? "is-warning" : ""
+                              }`}
+                              min="0.01"
+                              onChange={(event) => updatePaymentRow(payment.id, "monto", event.target.value)}
+                              placeholder="0.00"
+                              step="0.01"
+                              type="number"
+                              value={payment.monto}
+                            />
+                          </label>
+
+                          <label>
+                            Referencia
+                            <input
+                              className="pos-input"
+                              onChange={(event) => updatePaymentRow(payment.id, "referencia", event.target.value)}
+                              placeholder="Opcional"
+                              type="text"
+                              value={payment.referencia}
+                            />
+                          </label>
+                        </div>
+
+                        <div className="pos-action-row">
+                          {payment.metodo === "efectivo" ? (
+                            <button className="ghost-button" onClick={() => applyExactToPayment(payment.id)} type="button">
+                              Exacto
+                            </button>
+                          ) : null}
+                          <button className="link-button" onClick={() => removePaymentRow(payment.id)} type="button">
+                            Quitar
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+
+                    {nonCashOverageWithoutCash ? (
+                      <p className="form-error">El cambio solo puede generarse con efectivo.</p>
+                    ) : null}
+                  </div>
+                )}
               </div>
 
               <div className="pos-payment-summary pos-payment-secondary">
@@ -1596,8 +1942,12 @@ export default function PosPage() {
                   <strong>{formatMoney(cartTotal)}</strong>
                 </div>
                 <div>
-                  <span>Pagado</span>
+                  <span>Total pagado</span>
                   <strong>{formatMoney(paidPreview)}</strong>
+                </div>
+                <div>
+                  <span>Pendiente</span>
+                  <strong>{formatMoney(paymentPendingPreview)}</strong>
                 </div>
                 <div>
                   <span>Cambio</span>
@@ -1747,6 +2097,11 @@ export default function PosPage() {
                           {record.estatus !== "suspendida" ? (
                             <button className="link-button" onClick={() => openTicket(record.id)} type="button">
                               Ver ticket
+                            </button>
+                          ) : null}
+                          {record.estatus === "pagada" ? (
+                            <button className="link-button" onClick={() => openSaleDetail(record)} type="button">
+                              Cancelar
                             </button>
                           ) : null}
                         </td>
@@ -1923,7 +2278,7 @@ export default function PosPage() {
 
               <div className="pos-kpi-grid pos-kpi-grid-compact">
                 <PosKpiCard icon={<Wallet size={18} />} label="Fondo inicial" meta={activeShift.folio} value={formatMoney(activeShift.fondo_inicial)} />
-                <PosKpiCard icon={<BadgeDollarSign size={18} />} label="Ventas totales" meta={`${activeShift.ventas_count} ventas`} value={formatMoney(activeShift.total_ventas)} />
+                <PosKpiCard icon={<BadgeDollarSign size={18} />} label="Ventas cobradas" meta={`${activeShift.ventas_count} ventas`} value={formatMoney(activeShift.total_bruto)} />
                 <PosKpiCard icon={<ReceiptText size={18} />} label="Núm. ventas" meta="Operaciones cobradas" value={formatNumber(activeShift.ventas_count)} />
                 <PosKpiCard icon={<Clock3 size={18} />} label="Apertura" meta="Inicio del turno" value={formatDateTime(activeShift.opened_at)} />
                 <PosKpiCard
@@ -2050,6 +2405,7 @@ export default function PosPage() {
                     <th>Producto</th>
                     <th>Cantidad</th>
                     <th>Precio</th>
+                    <th>Descuento</th>
                     <th>Total</th>
                   </tr>
                 </thead>
@@ -2060,6 +2416,7 @@ export default function PosPage() {
                       <td>{item.nombre_snapshot}</td>
                       <td>{formatNumber(item.cantidad)}</td>
                       <td>{formatMoney(item.precio_unitario)}</td>
+                      <td>{formatMoney(item.descuento_unitario)}</td>
                       <td>{formatMoney(item.total_linea)}</td>
                     </tr>
                   ))}
@@ -2069,11 +2426,19 @@ export default function PosPage() {
 
             <div className="module-board">
               <article className="mini-card">
-                <span className="eyebrow">Subtotal</span>
+                <span className="eyebrow">Subtotal bruto</span>
                 <strong>{formatMoney(selectedSale.subtotal)}</strong>
               </article>
               <article className="mini-card">
-                <span className="eyebrow">Descuento</span>
+                <span className="eyebrow">Descuentos de línea</span>
+                <strong>{formatMoney(selectedSale.descuento_lineas_total)}</strong>
+              </article>
+              <article className="mini-card">
+                <span className="eyebrow">Descuento global</span>
+                <strong>{formatMoney(selectedSale.descuento_global)}</strong>
+              </article>
+              <article className="mini-card">
+                <span className="eyebrow">Descuento total</span>
                 <strong>{formatMoney(selectedSale.descuento_total)}</strong>
               </article>
               <article className="mini-card">
@@ -2081,6 +2446,28 @@ export default function PosPage() {
                 <strong>{formatMoney(selectedSale.total)}</strong>
               </article>
             </div>
+
+            <section className="feature-card pos-note-card">
+              <div className="feature-header">
+                <p className="eyebrow">Pagos</p>
+                <h3>{selectedSale.metodo_pago === "mixto" ? "Pago mixto" : "Pago registrado"}</h3>
+              </div>
+              {selectedSale.payments?.length ? (
+                <div className="pos-payment-breakdown">
+                  {selectedSale.payments.map((payment) => (
+                    <div className="pos-payment-breakdown-row" key={payment.id}>
+                      <div>
+                        <strong>{getPaymentMethodLabel(payment.metodo)}</strong>
+                        <p>{payment.referencia || "Sin referencia"}</p>
+                      </div>
+                      <strong>{formatMoney(payment.monto)}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="table-note">Esta venta no tiene pagos registrados porque sigue suspendida.</p>
+              )}
+            </section>
 
             {selectedSale.notas ? (
               <div className="feature-card pos-note-card">
@@ -2154,6 +2541,11 @@ export default function PosPage() {
                 <strong>{getPaymentMethodLabel(selectedTicket.metodo_pago)}</strong>
                 <p>{selectedTicket.vendedor}</p>
               </article>
+              <article className="mini-card">
+                <span className="eyebrow">Cliente</span>
+                <strong>{selectedTicket.cliente_nombre || "Mostrador"}</strong>
+                <p>{selectedTicket.turno_folio || "Sin turno"}</p>
+              </article>
             </div>
 
             <div className="table-wrap">
@@ -2164,6 +2556,7 @@ export default function PosPage() {
                     <th>Producto</th>
                     <th>Cantidad</th>
                     <th>Precio</th>
+                    <th>Descuento</th>
                     <th>Total</th>
                   </tr>
                 </thead>
@@ -2174,6 +2567,7 @@ export default function PosPage() {
                       <td>{item.nombre}</td>
                       <td>{formatNumber(item.cantidad)}</td>
                       <td>{formatMoney(item.precio_unitario)}</td>
+                      <td>{formatMoney(item.descuento_unitario)}</td>
                       <td>{formatMoney(item.total_linea)}</td>
                     </tr>
                   ))}
@@ -2183,11 +2577,19 @@ export default function PosPage() {
 
             <div className="module-board">
               <article className="mini-card">
-                <span className="eyebrow">Subtotal</span>
+                <span className="eyebrow">Subtotal bruto</span>
                 <strong>{formatMoney(selectedTicket.subtotal)}</strong>
               </article>
               <article className="mini-card">
-                <span className="eyebrow">Descuento</span>
+                <span className="eyebrow">Descuentos de línea</span>
+                <strong>{formatMoney(selectedTicket.descuento_lineas_total)}</strong>
+              </article>
+              <article className="mini-card">
+                <span className="eyebrow">Descuento global</span>
+                <strong>{formatMoney(selectedTicket.descuento_global)}</strong>
+              </article>
+              <article className="mini-card">
+                <span className="eyebrow">Descuento total</span>
                 <strong>{formatMoney(selectedTicket.descuento_total)}</strong>
               </article>
               <article className="mini-card">
@@ -2199,6 +2601,24 @@ export default function PosPage() {
                 <strong>{formatMoney(selectedTicket.cambio)}</strong>
               </article>
             </div>
+
+            <section className="feature-card pos-note-card">
+              <div className="feature-header">
+                <p className="eyebrow">Pagos</p>
+                <h3>{selectedTicket.metodo_pago === "mixto" ? "Pago mixto" : "Pago registrado"}</h3>
+              </div>
+              <div className="pos-payment-breakdown">
+                {(selectedTicket.pagos ?? []).map((payment) => (
+                  <div className="pos-payment-breakdown-row" key={payment.id}>
+                    <div>
+                      <strong>{getPaymentMethodLabel(payment.metodo)}</strong>
+                      <p>{payment.referencia || "Sin referencia"}</p>
+                    </div>
+                    <strong>{formatMoney(payment.monto)}</strong>
+                  </div>
+                ))}
+              </div>
+            </section>
 
             {selectedTicket.notas ? (
               <div className="feature-card pos-note-card">

@@ -1546,12 +1546,22 @@ Las órdenes de compra ya siguen el flujo base:
 - En esta fase no se permite cancelar una venta pagada de un turno cerrado.
 - Caja / Turnos ya muestra ventas canceladas, total neto y mantiene ingresos/retiros manuales dentro del resumen del turno.
 
+## POS Fase 4 - Pagos mixtos, descuentos y ticket formal
+
+- El POS ya acepta pagos mixtos por venta con desglose por `efectivo`, `tarjeta`, `transferencia` y `otro`.
+- Los cobros validan en backend que la suma de pagos cubra el total y que el cambio solo salga de efectivo.
+- El descuento por línea se mantiene y ahora también existe descuento global fijo por venta.
+- El backend calcula `subtotal`, descuentos y total final; no confía en totales enviados por frontend.
+- El ticket ya muestra productos, descuentos, pagos desglosados, cambio, estado de la venta y texto final imprimible.
+- Caja / Turnos acumula cada método de pago sin duplicar montos y revierte el desglose correcto cuando se cancela una venta.
+- Las ventas antiguas sin registros de pagos múltiples siguen abriendo historial y ticket con fallback al método principal.
+
 ### Pendientes POS
 
-- Pagos mixtos formales
-- Descuentos avanzados
-- Ticket imprimible formal
 - Cancelación segura de ventas cobradas en turnos ya cerrados
+- Pagos mixtos con notas avanzadas por pago
+- Descuentos promocionales/reglas avanzadas
+- PDF de ticket
 - Conexión con facturación fiscal
 
 ## Placeholders actuales

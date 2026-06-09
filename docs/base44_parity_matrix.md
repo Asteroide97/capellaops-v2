@@ -118,11 +118,11 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Integraciones | Sincronizacion de stock | Pendiente | Alta | Integraciones F2 | No implementado. | Sobreventa o stock incorrecto fuera del sistema. |
 | Integraciones | Canales externos | Pendiente | Media | Integraciones F3 | No implementado. | Escalabilidad comercial limitada. |
 | Integraciones | Webhooks futuros | Pendiente | Media | Integraciones F2 | No implementado. | Integraciones manuales o fragiles. |
-| POS | Punto de venta | Parcial | Critica | POS F3 | Venta base, caja obligatoria, ticket básico, ventas suspendidas persistentes y cancelación con reversa ya existen; aún faltan pagos mixtos y ticket formal imprimible. | Operacion de mostrador incompleta frente al alcance final. |
+| POS | Punto de venta | Parcial | Critica | POS F4 | Venta base, caja obligatoria, pagos mixtos, descuentos y ticket formal imprimible con `window.print` ya existen; aún faltan controles más avanzados para cierre fiscal. | Operacion de mostrador aún limitada frente al alcance final. |
 | POS | Carrito | Implementado | Alta | POS F1 | Carrito funcional en frontend. | Flujo de cobro incompleto. |
 | POS | Ventas | Implementado | Critica | POS F1 | Venta persistida y calculada en backend. | Sin transacciones comerciales reales. |
-| POS | Metodos de pago | Parcial | Alta | POS F2 | Existe metodo simple y turnos acumulan totales por forma de pago; pagos mixtos completos siguen pendientes. | Cobro limitado en escenarios reales. |
-| POS | Tickets | Parcial | Media | POS F3 | Ticket básico disponible para ventas pagadas y ventas canceladas muestran estado cancelado; la versión imprimible formal sigue pendiente. | Cierre comercial debil. |
+| POS | Metodos de pago | Implementado | Alta | POS F4 | Las ventas ya aceptan pago unico o mixto, con desglose por método y ajuste correcto del turno. | Cobro incompleto si falla el desglose por método. |
+| POS | Tickets | Implementado | Media | POS F4 | El ticket muestra descuentos, pagos, cambio, estado cancelado y usa impresión formal con `window.print`. | Cierre comercial débil si la impresión falla. |
 | POS | Corte de caja | Implementado | Alta | POS F3 | Turno/caja MVP con apertura, cierre, ingresos, retiros, ventas canceladas y total neto dentro del resumen. | Riesgo operativo si no se refinan arqueos y controles avanzados. |
 | POS | Salida automatica de inventario | Implementado | Critica | POS F1 | Cada venta pagada genera salida de inventario. | Stock falso despues de vender. |
 | POS | Venta pendiente / cancelacion | Implementado | Alta | POS F3 | Las ventas suspendidas ya se persisten en backend, pueden reanudarse y la cancelación pagada revierte inventario y ajusta turno abierto. | Caja rigida para escenarios reales. |
@@ -132,6 +132,10 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | POS | Ajuste de caja por cancelación | Implementado | Alta | POS F3 | Cancelar una venta pagada con turno abierto descuenta totales y forma de pago del turno. | Arqueo incorrecto al final del turno. |
 | POS | Corte de caja avanzado | Parcial | Media | POS F3 | El resumen ya muestra cancelaciones y total neto, pero faltan controles más finos para turnos cerrados y arqueos avanzados. | Cierres operativos todavía limitados en escenarios complejos. |
 | POS | Precio de venta separado de costo | Implementado | Alta | POS F2 | POS usa `precio_venta`; los costos de inventario quedan separados y el precio puede ajustarse en el carrito. | Cobros incorrectos si se mezcla costo interno con precio al cliente. |
+| POS | Pagos mixtos | Implementado MVP | Alta | POS F4 | Una venta puede combinar efectivo, tarjeta, transferencia y otro, con validación de suma y cambio solo por efectivo. | Cobro incorrecto en mostrador si no existe pago combinado. |
+| POS | Descuento global | Implementado MVP | Alta | POS F4 | El panel de pago acepta descuento global fijo y backend recalcula total de forma autoritativa. | Riesgo de cobro inconsistente si no existe descuento de venta. |
+| POS | Ticket imprimible formal | Implementado MVP | Media | POS F4 | El ticket ya incluye productos, descuentos, pagos, cambio y marca de cancelación con CSS de impresión dedicada. | Entrega de comprobantes débil ante clientes. |
+| POS | PDF de ticket | Pendiente | Baja | POS futura | No implementado. | Salida documental limitada fuera de impresión del navegador. |
 | POS | Escaner en POS | Parcial | Media | POS F1 + UX | El catalogo POS ya busca por `codigo_barras`, soporta lector USB y camara para agregar cuando hay coincidencia unica. | Cobro mas lento si el escaner no resuelve el producto. |
 | POS | Facturacion via POS | Pendiente | Alta | Facturacion F2 | No implementado. | Venta desconectada del CFDI. |
 | Facturacion | CFDI 4.0 | Congelado | Critica | Facturacion futura | Fuera de esta etapa. | No se puede facturar fiscalmente. |

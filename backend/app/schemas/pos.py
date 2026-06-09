@@ -12,14 +12,23 @@ class SaleCreateLineRequest(BaseModel):
     descuento_unitario: Decimal = Field(default=Decimal("0"), ge=0)
 
 
+class SalePaymentRequest(BaseModel):
+    metodo: Literal["efectivo", "tarjeta", "transferencia", "otro"]
+    monto: Decimal = Field(gt=0)
+    referencia: str | None = Field(default=None, max_length=255)
+    notas: str | None = Field(default=None, max_length=2000)
+
+
 class SaleCreateRequest(BaseModel):
     almacen_id: str = Field(min_length=1, max_length=64)
     cliente_nombre: str | None = Field(default=None, max_length=160)
     cliente_email: str | None = Field(default=None, max_length=255)
-    metodo_pago: Literal["efectivo", "tarjeta", "transferencia", "mixto", "otro"]
+    metodo_pago: Literal["efectivo", "tarjeta", "transferencia", "mixto", "otro"] | None = None
     monto_recibido: Decimal | None = Field(default=None, ge=0)
+    descuento_global: Decimal = Field(default=Decimal("0"), ge=0)
     notas: str | None = Field(default=None, max_length=2000)
     items: list[SaleCreateLineRequest] = Field(min_length=1)
+    payments: list[SalePaymentRequest] = Field(default_factory=list)
 
 
 class SaleCancelRequest(BaseModel):
@@ -42,6 +51,15 @@ class SaleDetailItem(BaseModel):
     stock_actual: Decimal | None = None
 
 
+class SalePaymentItem(BaseModel):
+    id: str
+    metodo: str
+    monto: Decimal
+    referencia: str | None = None
+    notas: str | None = None
+    created_at: datetime | None = None
+
+
 class SaleItem(BaseModel):
     id: str
     empresa_id: str
@@ -55,11 +73,14 @@ class SaleItem(BaseModel):
     cliente_nombre: str | None = None
     cliente_email: str | None = None
     subtotal: Decimal
+    descuento_lineas_total: Decimal = Decimal("0")
+    descuento_global: Decimal = Decimal("0")
     descuento_total: Decimal
     impuesto_total: Decimal
     total: Decimal
     metodo_pago: str
     monto_recibido: Decimal | None = None
+    monto_pagado: Decimal | None = None
     cambio: Decimal | None = None
     estatus: str
     notas: str | None = None
@@ -73,6 +94,7 @@ class SaleItem(BaseModel):
 
 class SaleResponse(SaleItem):
     details: list[SaleDetailItem]
+    payments: list[SalePaymentItem] = Field(default_factory=list)
 
 
 class SaleListResponse(BaseModel):
@@ -123,16 +145,20 @@ class PosTicketResponse(BaseModel):
     cliente_email: str | None = None
     productos: list[TicketLineItem]
     subtotal: Decimal
+    descuento_lineas_total: Decimal = Decimal("0")
+    descuento_global: Decimal = Decimal("0")
     descuento_total: Decimal
     impuesto_total: Decimal
     total: Decimal
     metodo_pago: str
     monto_recibido: Decimal | None = None
+    monto_pagado: Decimal | None = None
     cambio: Decimal | None = None
     estatus: str
     notas: str | None = None
     cancel_reason: str | None = None
     cancelled_at: datetime | None = None
+    pagos: list[SalePaymentItem] = Field(default_factory=list)
 
 
 class PosShiftMovementResponse(BaseModel):
@@ -173,6 +199,7 @@ class PosShiftResponse(BaseModel):
     closed_at: datetime | None = None
     ventas_count: int
     ventas_canceladas_count: int = 0
+    total_bruto: Decimal = Decimal("0")
     ventas_canceladas_total: Decimal = Decimal("0")
     total_neto: Decimal = Decimal("0")
     movimientos: list[PosShiftMovementResponse] = Field(default_factory=list)

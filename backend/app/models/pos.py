@@ -160,6 +160,8 @@ class Venta(UUIDPrimaryKeyMixin, Base):
         ),
         CheckConstraint("estatus IN ('pagada', 'cancelada', 'suspendida')", name="ck_venta_estatus"),
         CheckConstraint("subtotal >= 0", name="ck_venta_subtotal_nonnegative"),
+        CheckConstraint("descuento_lineas_total >= 0", name="ck_venta_descuento_lineas_nonnegative"),
+        CheckConstraint("descuento_global >= 0", name="ck_venta_descuento_global_nonnegative"),
         CheckConstraint("descuento_total >= 0", name="ck_venta_descuento_nonnegative"),
         CheckConstraint("impuesto_total >= 0", name="ck_venta_impuesto_nonnegative"),
         CheckConstraint("total >= 0", name="ck_venta_total_nonnegative"),
@@ -178,6 +180,18 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     cliente_nombre: Mapped[str | None] = mapped_column(String(160), nullable=True)
     cliente_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
+    descuento_lineas_total: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    descuento_global: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
     descuento_total: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     impuesto_total: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     total: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
@@ -209,6 +223,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     usuario = relationship("Usuario", foreign_keys=[usuario_id])
     cancelled_by_user = relationship("Usuario", foreign_keys=[cancelled_by_user_id])
     detalles = relationship("VentaDetalle", back_populates="venta", cascade="all, delete-orphan")
+    pagos = relationship("VentaPago", back_populates="venta", cascade="all, delete-orphan")
 
 
 class VentaDetalle(UUIDPrimaryKeyMixin, Base):
@@ -244,3 +259,32 @@ class VentaDetalle(UUIDPrimaryKeyMixin, Base):
     venta = relationship("Venta", back_populates="detalles")
     material = relationship("Material")
     movimiento_inventario = relationship("MovimientoInventario")
+
+
+class VentaPago(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "ventas_pagos"
+    __table_args__ = (
+        CheckConstraint(
+            "metodo IN ('efectivo', 'tarjeta', 'transferencia', 'otro')",
+            name="ck_venta_pago_metodo",
+        ),
+        CheckConstraint("monto > 0", name="ck_venta_pago_monto_positive"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    venta_id: Mapped[str] = mapped_column(ForeignKey("ventas.id"), nullable=False, index=True)
+    turno_id: Mapped[str | None] = mapped_column(ForeignKey("pos_turnos_caja.id"), nullable=True, index=True)
+    metodo: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    monto: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    referencia: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+
+    empresa = relationship("Empresa")
+    venta = relationship("Venta", back_populates="pagos")
+    turno = relationship("PosTurnoCaja")

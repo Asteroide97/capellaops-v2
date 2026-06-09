@@ -1328,6 +1328,14 @@ textarea {
   gap: 0.9rem;
 }
 
+.pos-payment-mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
 .pos-payment-summary {
   display: grid;
   gap: 0.7rem;
@@ -1355,6 +1363,11 @@ textarea {
 .pos-payment-summary .is-total {
   padding-top: 0.8rem;
   border-top: 1px solid rgba(20, 92, 67, 0.1);
+}
+
+.pos-payment-inline-field {
+  display: grid;
+  gap: 0.45rem;
 }
 
 .pos-payment-secondary {
@@ -1410,6 +1423,55 @@ textarea {
   gap: 0.85rem;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
+}
+
+.pos-mixed-payments {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pos-payment-row {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface-muted);
+}
+
+.pos-payment-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.pos-payment-breakdown {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.pos-payment-breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.85rem;
+  align-items: flex-start;
+  padding: 0.7rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.pos-payment-breakdown-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.pos-payment-breakdown-row > div {
+  display: grid;
+  gap: 0.22rem;
+}
+
+.pos-payment-breakdown-row p {
+  margin: 0;
+  color: var(--text-secondary);
 }
 
 .pos-charge-button {
@@ -1650,6 +1712,63 @@ textarea {
   text-align: center;
   justify-items: center;
   background: linear-gradient(180deg, rgba(20, 92, 67, 0.04), rgba(255, 255, 255, 0.75));
+}
+
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+
+  .inventory-modal-backdrop,
+  .inventory-modal-shell,
+  .pos-ticket-printable,
+  .pos-ticket-printable * {
+    visibility: visible !important;
+  }
+
+  .inventory-modal-backdrop {
+    position: static !important;
+    inset: auto !important;
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  .inventory-modal-shell {
+    width: 100% !important;
+    max-width: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .inventory-modal-header,
+  .inventory-modal-footer {
+    display: none !important;
+  }
+
+  .inventory-modal-body {
+    padding: 0 !important;
+  }
+
+  .pos-ticket-printable {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    background: white;
+    color: black;
+  }
+
+  .pos-ticket-printable .inventory-table th,
+  .pos-ticket-printable .inventory-table td,
+  .pos-ticket-printable .table-note,
+  .pos-ticket-printable p,
+  .pos-ticket-printable strong,
+  .pos-ticket-printable span {
+    color: black !important;
+  }
 }
 
 .pos-empty-state {
@@ -4488,6 +4607,7 @@ body.pm-is-dragging {
   }
 
   .pos-cart-grid,
+  .pos-payment-grid,
   .pos-payment-method-grid,
   .pos-history-filters,
   .pos-form-grid,

@@ -8,7 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models import AuditLog, Empresa, PosTurnoCaja, PosTurnoCajaMovimiento, Usuario, Venta, VentaDetalle
+from app.models import AuditLog, Empresa, PosTurnoCaja, PosTurnoCajaMovimiento, Usuario, Venta, VentaDetalle, VentaPago
 from app.models.inventory import Almacen, Existencia, Material
 from app.schemas.pos import (
     PosActiveShiftResponse,
@@ -18,6 +18,7 @@ from app.schemas.pos import (
     PosTicketResponse,
     SaleDetailItem,
     SaleItem,
+    SalePaymentItem,
     SaleResponse,
     TicketLineItem,
 )
@@ -36,7 +37,8 @@ from app.services.inventory import (
 )
 
 
-PENDING_PAYMENT_METHODS = {"mixto"}
+PAYMENT_METHODS = {"efectivo", "tarjeta", "transferencia", "otro"}
+LEGACY_MIXED_PAYMENT_METHODS = {"mixto"}
 
 
 def validate_pos_access(user: Usuario, empresa: Empresa) -> None:
@@ -82,6 +84,18 @@ def normalize_customer_email(value: str | None) -> str | None:
     if normalized is None:
         return None
     return normalized.lower()
+
+
+def calculate_sale_paid_amount(sale: Venta) -> Decimal | None:
+    if sale.monto_recibido is not None:
+        return Decimal(sale.monto_recibido or ZERO)
+    if sale.estatus == "suspendida":
+        return None
+    return Decimal(sale.total or ZERO)
+
+
+def normalize_payment_reference(value: str | None) -> str | None:
+    return normalize_optional_text(value)
 
 
 def ensure_unique_sale_folio(db: Session, empresa_id: str, folio: str, sale_id: str | None = None) -> None:
@@ -239,6 +253,50 @@ def serialize_sale_detail(detail: VentaDetalle, *, stock_actual: Decimal | None 
     )
 
 
+def serialize_sale_payment(payment: VentaPago) -> SalePaymentItem:
+    return SalePaymentItem(
+        id=payment.id,
+        metodo=payment.metodo,
+        monto=payment.monto,
+        referencia=payment.referencia,
+        notas=payment.notas,
+        created_at=payment.created_at,
+    )
+
+
+def build_legacy_sale_payment(sale: Venta) -> list[SalePaymentItem]:
+    if sale.estatus == "suspendida":
+        return []
+    amount = Decimal(sale.monto_recibido or sale.total or ZERO)
+    if amount <= ZERO:
+        return []
+    return [
+        SalePaymentItem(
+            id=f"legacy-{sale.id}",
+            metodo=sale.metodo_pago,
+            monto=amount,
+            referencia=None,
+            notas=None,
+            created_at=sale.paid_at or sale.created_at,
+        )
+    ]
+
+
+def load_sale_payments(db: Session, sale_id: str) -> list[VentaPago]:
+    return db.scalars(
+        select(VentaPago)
+        .where(VentaPago.venta_id == sale_id)
+        .order_by(VentaPago.created_at.asc(), VentaPago.id.asc())
+    ).all()
+
+
+def get_serialized_sale_payments(db: Session, sale: Venta) -> list[SalePaymentItem]:
+    payments = load_sale_payments(db, sale.id)
+    if payments:
+        return [serialize_sale_payment(payment) for payment in payments]
+    return build_legacy_sale_payment(sale)
+
+
 def build_sale_item(
     sale: Venta,
     almacen_nombre: str,
@@ -260,11 +318,14 @@ def build_sale_item(
         cliente_nombre=sale.cliente_nombre,
         cliente_email=sale.cliente_email,
         subtotal=sale.subtotal,
+        descuento_lineas_total=sale.descuento_lineas_total,
+        descuento_global=sale.descuento_global,
         descuento_total=sale.descuento_total,
         impuesto_total=sale.impuesto_total,
         total=sale.total,
         metodo_pago=sale.metodo_pago,
         monto_recibido=sale.monto_recibido,
+        monto_pagado=calculate_sale_paid_amount(sale),
         cambio=sale.cambio,
         estatus=sale.estatus,
         notas=sale.notas,
@@ -283,6 +344,7 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
         .where(VentaDetalle.venta_id == sale.id)
         .order_by(VentaDetalle.nombre_snapshot.asc(), VentaDetalle.sku_snapshot.asc(), VentaDetalle.id.asc())
     ).all()
+    payments = get_serialized_sale_payments(db, sale)
     stock_map = build_sale_stock_map(
         db,
         empresa_id=sale.empresa_id,
@@ -298,6 +360,7 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
     )
     return SaleResponse(
         **summary.model_dump(),
+        payments=payments,
         details=[
             serialize_sale_detail(detail, stock_actual=stock_map.get(detail.material_id, ZERO))
             for detail in details
@@ -316,6 +379,7 @@ def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
         .where(VentaDetalle.venta_id == sale.id)
         .order_by(VentaDetalle.nombre_snapshot.asc(), VentaDetalle.sku_snapshot.asc(), VentaDetalle.id.asc())
     ).all()
+    serialized_payments = get_serialized_sale_payments(db, sale)
     return PosTicketResponse(
         id=sale.id,
         folio=sale.folio,
@@ -340,16 +404,20 @@ def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
             for detail in details
         ],
         subtotal=sale.subtotal,
+        descuento_lineas_total=sale.descuento_lineas_total,
+        descuento_global=sale.descuento_global,
         descuento_total=sale.descuento_total,
         impuesto_total=sale.impuesto_total,
         total=sale.total,
         metodo_pago=sale.metodo_pago,
         monto_recibido=sale.monto_recibido,
+        monto_pagado=calculate_sale_paid_amount(sale),
         cambio=sale.cambio,
         estatus=sale.estatus,
         notas=sale.notas,
         cancel_reason=sale.cancel_reason,
         cancelled_at=sale.cancelled_at,
+        pagos=serialized_payments,
     )
 
 
@@ -538,6 +606,8 @@ def serialize_shift_response(db: Session, shift: PosTurnoCaja) -> PosShiftRespon
         .order_by(desc(PosTurnoCajaMovimiento.created_at), desc(PosTurnoCajaMovimiento.id))
     ).all()
     cancelled_count, cancelled_total = get_shift_cancelled_summary(db, shift.id)
+    total_neto = Decimal(shift.total_ventas or ZERO)
+    total_bruto = total_neto + cancelled_total
     return PosShiftResponse(
         id=shift.id,
         empresa_id=shift.empresa_id,
@@ -566,8 +636,9 @@ def serialize_shift_response(db: Session, shift: PosTurnoCaja) -> PosShiftRespon
         closed_at=shift.closed_at,
         ventas_count=get_shift_sales_count(db, shift.id),
         ventas_canceladas_count=cancelled_count,
+        total_bruto=total_bruto,
         ventas_canceladas_total=cancelled_total,
-        total_neto=Decimal(shift.total_ventas or ZERO),
+        total_neto=total_neto,
         movimientos=[serialize_shift_movement(movement) for movement in movements],
     )
 
@@ -583,37 +654,22 @@ def adjust_shift_totals_for_sale(
     *,
     sale_total: Decimal,
     payment_method: str,
+    monto_recibido: Decimal | None = None,
+    change_amount: Decimal | None = None,
     reverse: bool = False,
 ) -> None:
-    multiplier = Decimal("-1") if reverse else Decimal("1")
-    amount = Decimal(sale_total) * multiplier
-    next_total_ventas = Decimal(shift.total_ventas or ZERO) + amount
-    if next_total_ventas < ZERO:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="No se pudo ajustar el turno para esta venta.",
-        )
-    shift.total_ventas = next_total_ventas
     if payment_method == "efectivo":
-        next_value = Decimal(shift.total_efectivo or ZERO) + amount
-        if next_value < ZERO:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo ajustar el turno para esta venta.")
-        shift.total_efectivo = next_value
-    elif payment_method == "tarjeta":
-        next_value = Decimal(shift.total_tarjeta or ZERO) + amount
-        if next_value < ZERO:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo ajustar el turno para esta venta.")
-        shift.total_tarjeta = next_value
-    elif payment_method == "transferencia":
-        next_value = Decimal(shift.total_transferencia or ZERO) + amount
-        if next_value < ZERO:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo ajustar el turno para esta venta.")
-        shift.total_transferencia = next_value
+        payment_amount = Decimal(monto_recibido or sale_total or ZERO)
     else:
-        next_value = Decimal(shift.total_otro or ZERO) + amount
-        if next_value < ZERO:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No se pudo ajustar el turno para esta venta.")
-        shift.total_otro = next_value
+        payment_amount = Decimal(sale_total or ZERO)
+    payments = [{"metodo": payment_method, "monto": payment_amount}]
+    adjust_shift_totals_for_payments(
+        shift,
+        sale_total=sale_total,
+        payments=payments,
+        change_amount=change_amount,
+        reverse=reverse,
+    )
 
 
 def refresh_closed_shift_difference(shift: PosTurnoCaja) -> None:
@@ -785,12 +841,12 @@ def resolve_sale_lines(
     warehouse_id: str,
     items: list,
     validate_stock: bool,
-) -> tuple[Almacen, list[dict], Decimal, Decimal, Decimal]:
+) -> tuple[Almacen, list[dict], Decimal, Decimal]:
     warehouse = get_active_sale_warehouse(db, empresa_id, warehouse_id)
     resolved_lines: list[dict] = []
     required_stock: dict[str, Decimal] = {}
-    subtotal = ZERO
-    descuento_total = ZERO
+    subtotal_bruto = ZERO
+    descuento_lineas_total = ZERO
 
     for item in items:
         material = get_active_sale_material(db, empresa_id, item.material_id)
@@ -820,8 +876,8 @@ def resolve_sale_lines(
         line_discount_total = discount * quantity
         line_total = line_subtotal - line_discount_total
 
-        subtotal += line_subtotal
-        descuento_total += line_discount_total
+        subtotal_bruto += line_subtotal
+        descuento_lineas_total += line_discount_total
         required_stock[material.id] = required_stock.get(material.id, ZERO) + quantity
         resolved_lines.append(
             {
@@ -843,43 +899,271 @@ def resolve_sale_lines(
                     detail="No hay stock suficiente.",
                 )
 
-    impuesto_total = ZERO
-    total = subtotal - descuento_total + impuesto_total
+    subtotal_despues_descuentos = subtotal_bruto - descuento_lineas_total
+    if subtotal_despues_descuentos < ZERO:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El total de la venta no puede ser negativo.",
+        )
+
+    return warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total
+
+
+def resolve_sale_totals(
+    *,
+    subtotal_bruto: Decimal,
+    descuento_lineas_total: Decimal,
+    descuento_global: Decimal | None,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    normalized_global_discount = Decimal(descuento_global or ZERO)
+    if normalized_global_discount < ZERO:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El descuento global no puede ser negativo.",
+        )
+
+    subtotal_despues_descuentos_linea = subtotal_bruto - descuento_lineas_total
+    if normalized_global_discount > subtotal_despues_descuentos_linea:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El descuento no puede superar el subtotal.",
+        )
+
+    descuento_total = descuento_lineas_total + normalized_global_discount
+    total = subtotal_despues_descuentos_linea - normalized_global_discount
     if total < ZERO:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El total de la venta no puede ser negativo.",
         )
 
-    return warehouse, resolved_lines, subtotal, descuento_total, total
+    return subtotal_despues_descuentos_linea, normalized_global_discount, descuento_total, total
+
+
+def resolve_sale_payments(
+    *,
+    metodo_pago: str | None,
+    monto_recibido: Decimal | None,
+    payments: list | None,
+    total: Decimal,
+    require_payment_validation: bool,
+) -> tuple[list[dict], str, Decimal | None, Decimal | None]:
+    raw_payments = [payment for payment in (payments or []) if payment is not None]
+
+    if not raw_payments and metodo_pago in LEGACY_MIXED_PAYMENT_METHODS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agrega los pagos para completar un cobro mixto.",
+        )
+
+    resolved_payments: list[dict] = []
+    if raw_payments:
+        for payment in raw_payments:
+            method = str(payment.metodo or "").strip().lower()
+            if method not in PAYMENT_METHODS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selecciona un metodo de pago valido.",
+                )
+            amount = Decimal(payment.monto or ZERO)
+            if amount <= ZERO:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="El monto del pago debe ser mayor a cero.",
+                )
+            resolved_payments.append(
+                {
+                    "metodo": method,
+                    "monto": amount,
+                    "referencia": normalize_payment_reference(getattr(payment, "referencia", None)),
+                    "notas": normalize_optional_text(getattr(payment, "notas", None)),
+                }
+            )
+    else:
+        method = str(metodo_pago or "").strip().lower()
+        if method in LEGACY_MIXED_PAYMENT_METHODS or method not in PAYMENT_METHODS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selecciona un metodo de pago valido.",
+            )
+        if method == "efectivo":
+            tendered_amount = Decimal(monto_recibido or ZERO)
+            if require_payment_validation and tendered_amount < total:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="El total pagado no cubre el total de la venta.",
+                )
+        else:
+            tendered_amount = Decimal(monto_recibido or total or ZERO)
+            if tendered_amount <= ZERO:
+                tendered_amount = Decimal(total or ZERO)
+        if tendered_amount <= ZERO and require_payment_validation:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El monto del pago debe ser mayor a cero.",
+            )
+        resolved_payments.append(
+            {
+                "metodo": method,
+                "monto": tendered_amount,
+                "referencia": None,
+                "notas": None,
+            }
+        )
+
+    if not require_payment_validation:
+        principal_method = resolved_payments[0]["metodo"] if len(resolved_payments) == 1 else "mixto"
+        paid_amount = sum((Decimal(payment["monto"]) for payment in resolved_payments), ZERO)
+        return resolved_payments, principal_method, paid_amount or None, None
+
+    total_paid = sum((Decimal(payment["monto"]) for payment in resolved_payments), ZERO)
+    if total_paid < total:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El total pagado no cubre el total de la venta.",
+        )
+
+    cash_total = sum(
+        (Decimal(payment["monto"]) for payment in resolved_payments if payment["metodo"] == "efectivo"),
+        ZERO,
+    )
+    change_amount = total_paid - total
+    if change_amount > ZERO and change_amount > cash_total:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El cambio solo puede generarse con efectivo.",
+        )
+
+    principal_method = resolved_payments[0]["metodo"] if len(resolved_payments) == 1 else "mixto"
+    return resolved_payments, principal_method, total_paid, change_amount if change_amount > ZERO else ZERO
+
+
+def replace_sale_payments(
+    db: Session,
+    *,
+    sale: Venta,
+    payments: list[dict],
+    turno_id: str | None,
+) -> None:
+    existing_payments = db.scalars(
+        select(VentaPago).where(VentaPago.venta_id == sale.id).order_by(VentaPago.created_at.asc(), VentaPago.id.asc())
+    ).all()
+    for payment in existing_payments:
+        db.delete(payment)
+    db.flush()
+
+    for payment in payments:
+        db.add(
+            VentaPago(
+                empresa_id=sale.empresa_id,
+                venta_id=sale.id,
+                turno_id=turno_id,
+                metodo=payment["metodo"],
+                monto=payment["monto"],
+                referencia=payment.get("referencia"),
+                notas=payment.get("notas"),
+            )
+        )
+    db.flush()
+
+
+def get_sale_payment_breakdown(
+    db: Session,
+    *,
+    sale: Venta,
+) -> list[dict]:
+    payments = load_sale_payments(db, sale.id)
+    if payments:
+        return [
+            {
+                "metodo": payment.metodo,
+                "monto": Decimal(payment.monto or ZERO),
+                "referencia": payment.referencia,
+                "notas": payment.notas,
+            }
+            for payment in payments
+        ]
+
+    fallback_amount = Decimal(sale.monto_recibido or sale.total or ZERO)
+    if fallback_amount <= ZERO or sale.estatus == "suspendida":
+        return []
+
+    return [
+        {
+            "metodo": sale.metodo_pago,
+            "monto": fallback_amount,
+            "referencia": None,
+            "notas": None,
+        }
+    ]
+
+
+def calculate_shift_payment_totals(
+    payments: list[dict],
+    *,
+    change_amount: Decimal | None = None,
+) -> dict[str, Decimal]:
+    totals = {method: ZERO for method in PAYMENT_METHODS}
+    for payment in payments:
+        method = payment["metodo"]
+        if method not in totals:
+            continue
+        totals[method] += Decimal(payment["monto"] or ZERO)
+
+    if change_amount and change_amount > ZERO:
+        totals["efectivo"] -= Decimal(change_amount)
+        if totals["efectivo"] < ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No se pudo ajustar el turno para esta venta.",
+            )
+    return totals
+
+
+def adjust_shift_totals_for_payments(
+    shift: PosTurnoCaja,
+    *,
+    sale_total: Decimal,
+    payments: list[dict],
+    change_amount: Decimal | None = None,
+    reverse: bool = False,
+) -> None:
+    multiplier = Decimal("-1") if reverse else Decimal("1")
+    amount = Decimal(sale_total) * multiplier
+    next_total_ventas = Decimal(shift.total_ventas or ZERO) + amount
+    if next_total_ventas < ZERO:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se pudo ajustar el turno para esta venta.",
+        )
+    shift.total_ventas = next_total_ventas
+
+    payment_totals = calculate_shift_payment_totals(payments, change_amount=change_amount)
+    for method, method_total in payment_totals.items():
+        next_value = getattr(shift, f"total_{method}") + (method_total * multiplier)
+        if next_value < ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="No se pudo ajustar el turno para esta venta.",
+            )
+        setattr(shift, f"total_{method}", next_value)
 
 
 def resolve_sale_payment(
     *,
-    metodo_pago: str,
+    metodo_pago: str | None,
     monto_recibido: Decimal | None,
+    payments: list | None,
     total: Decimal,
     require_payment_validation: bool,
-) -> tuple[Decimal | None, Decimal | None]:
-    if metodo_pago in PENDING_PAYMENT_METHODS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Pagos mixtos quedan pendientes en esta fase.",
-        )
-
-    if not require_payment_validation:
-        return None, None
-
-    received_amount = Decimal(monto_recibido) if monto_recibido is not None else None
-    change_amount: Decimal | None = None
-    if metodo_pago == "efectivo":
-        if received_amount is None or received_amount < total:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El monto recibido debe cubrir el total para pago en efectivo.",
-            )
-        change_amount = received_amount - total
-    return received_amount, change_amount
+) -> tuple[list[dict], str, Decimal | None, Decimal | None]:
+    return resolve_sale_payments(
+        metodo_pago=metodo_pago,
+        monto_recibido=monto_recibido,
+        payments=payments,
+        total=total,
+        require_payment_validation=require_payment_validation,
+    )
 
 
 def replace_sale_details(
@@ -942,19 +1226,26 @@ def create_sale(
     almacen_id: str,
     cliente_nombre: str | None,
     cliente_email: str | None,
-    metodo_pago: str,
+    metodo_pago: str | None,
     monto_recibido: Decimal | None,
+    descuento_global: Decimal | None,
     notas: str | None,
     items: list,
+    payments: list | None,
     ip_address: str | None,
 ) -> SaleResponse:
     validate_pos_access(user, empresa)
-    warehouse, resolved_lines, subtotal, descuento_total, total = resolve_sale_lines(
+    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total = resolve_sale_lines(
         db,
         empresa_id=empresa.id,
         warehouse_id=almacen_id,
         items=items,
         validate_stock=True,
+    )
+    subtotal_neto_lineas, normalized_global_discount, descuento_total, total = resolve_sale_totals(
+        subtotal_bruto=subtotal_bruto,
+        descuento_lineas_total=descuento_lineas_total,
+        descuento_global=descuento_global,
     )
     shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
     if not shift:
@@ -963,9 +1254,10 @@ def create_sale(
             detail="Abre caja para poder cobrar ventas.",
         )
 
-    received_amount, change_amount = resolve_sale_payment(
+    resolved_payments, resolved_payment_method, received_amount, change_amount = resolve_sale_payment(
         metodo_pago=metodo_pago,
         monto_recibido=monto_recibido,
+        payments=payments,
         total=total,
         require_payment_validation=True,
     )
@@ -981,11 +1273,13 @@ def create_sale(
         usuario_id=user.id,
         cliente_nombre=normalize_optional_text(cliente_nombre),
         cliente_email=normalize_customer_email(cliente_email),
-        subtotal=subtotal,
+        subtotal=subtotal_bruto,
+        descuento_lineas_total=descuento_lineas_total,
+        descuento_global=normalized_global_discount,
         descuento_total=descuento_total,
         impuesto_total=ZERO,
         total=total,
-        metodo_pago=metodo_pago,
+        metodo_pago=resolved_payment_method,
         monto_recibido=received_amount,
         cambio=change_amount,
         estatus="pagada",
@@ -1006,7 +1300,14 @@ def create_sale(
         ip_address=ip_address,
     )
 
-    adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=False)
+    replace_sale_payments(db, sale=sale, payments=resolved_payments, turno_id=shift.id)
+    adjust_shift_totals_for_payments(
+        shift,
+        sale_total=sale.total,
+        payments=resolved_payments,
+        change_amount=change_amount,
+        reverse=False,
+    )
     refresh_closed_shift_difference(shift)
 
     create_audit_log(
@@ -1022,9 +1323,13 @@ def create_sale(
             "almacen_id": sale.almacen_id,
             "turno_id": sale.turno_id,
             "metodo_pago": sale.metodo_pago,
-            "subtotal": str(sale.subtotal),
+            "subtotal": str(subtotal_neto_lineas),
+            "subtotal_bruto": str(sale.subtotal),
+            "descuento_lineas_total": str(sale.descuento_lineas_total),
+            "descuento_global": str(sale.descuento_global),
             "descuento_total": str(sale.descuento_total),
             "total": str(sale.total),
+            "payments_count": len(resolved_payments),
             "items_count": len(resolved_lines),
         },
     )
@@ -1041,24 +1346,33 @@ def create_suspended_sale(
     almacen_id: str,
     cliente_nombre: str | None,
     cliente_email: str | None,
-    metodo_pago: str,
+    metodo_pago: str | None,
+    descuento_global: Decimal | None,
     notas: str | None,
     items: list,
+    payments: list | None,
     ip_address: str | None,
 ) -> SaleResponse:
     validate_pos_access(user, empresa)
-    warehouse, resolved_lines, subtotal, descuento_total, total = resolve_sale_lines(
+    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total = resolve_sale_lines(
         db,
         empresa_id=empresa.id,
         warehouse_id=almacen_id,
         items=items,
         validate_stock=False,
     )
-    if metodo_pago in PENDING_PAYMENT_METHODS:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Pagos mixtos quedan pendientes en esta fase.",
-        )
+    _, normalized_global_discount, descuento_total, total = resolve_sale_totals(
+        subtotal_bruto=subtotal_bruto,
+        descuento_lineas_total=descuento_lineas_total,
+        descuento_global=descuento_global,
+    )
+    suspended_payment_method = "efectivo"
+    if payments:
+        suspended_payment_method = "mixto" if len(payments) > 1 else str(payments[0].metodo or "efectivo").lower()
+    elif metodo_pago:
+        candidate_method = str(metodo_pago).strip().lower()
+        if candidate_method in PAYMENT_METHODS or candidate_method in LEGACY_MIXED_PAYMENT_METHODS:
+            suspended_payment_method = candidate_method
 
     folio = normalize_sale_folio(None)
     ensure_unique_sale_folio(db, empresa.id, folio)
@@ -1070,11 +1384,13 @@ def create_suspended_sale(
         usuario_id=user.id,
         cliente_nombre=normalize_optional_text(cliente_nombre),
         cliente_email=normalize_customer_email(cliente_email),
-        subtotal=subtotal,
+        subtotal=subtotal_bruto,
+        descuento_lineas_total=descuento_lineas_total,
+        descuento_global=normalized_global_discount,
         descuento_total=descuento_total,
         impuesto_total=ZERO,
         total=total,
-        metodo_pago=metodo_pago,
+        metodo_pago=suspended_payment_method,
         monto_recibido=None,
         cambio=None,
         estatus="suspendida",
@@ -1142,10 +1458,12 @@ def pay_suspended_sale(
     almacen_id: str,
     cliente_nombre: str | None,
     cliente_email: str | None,
-    metodo_pago: str,
+    metodo_pago: str | None,
     monto_recibido: Decimal | None,
+    descuento_global: Decimal | None,
     notas: str | None,
     items: list,
+    payments: list | None,
     ip_address: str | None,
 ) -> SaleResponse:
     validate_pos_access(user, empresa)
@@ -1161,12 +1479,17 @@ def pay_suspended_sale(
             detail="Solo se pueden cobrar ventas suspendidas.",
         )
 
-    warehouse, resolved_lines, subtotal, descuento_total, total = resolve_sale_lines(
+    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total = resolve_sale_lines(
         db,
         empresa_id=empresa.id,
         warehouse_id=almacen_id,
         items=items,
         validate_stock=True,
+    )
+    _, normalized_global_discount, descuento_total, total = resolve_sale_totals(
+        subtotal_bruto=subtotal_bruto,
+        descuento_lineas_total=descuento_lineas_total,
+        descuento_global=descuento_global,
     )
     shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
     if not shift:
@@ -1175,9 +1498,10 @@ def pay_suspended_sale(
             detail="Abre caja para cobrar esta venta.",
         )
 
-    received_amount, change_amount = resolve_sale_payment(
+    resolved_payments, resolved_payment_method, received_amount, change_amount = resolve_sale_payment(
         metodo_pago=metodo_pago,
         monto_recibido=monto_recibido,
+        payments=payments,
         total=total,
         require_payment_validation=True,
     )
@@ -1187,11 +1511,13 @@ def pay_suspended_sale(
     sale.usuario_id = user.id
     sale.cliente_nombre = normalize_optional_text(cliente_nombre)
     sale.cliente_email = normalize_customer_email(cliente_email)
-    sale.subtotal = subtotal
+    sale.subtotal = subtotal_bruto
+    sale.descuento_lineas_total = descuento_lineas_total
+    sale.descuento_global = normalized_global_discount
     sale.descuento_total = descuento_total
     sale.impuesto_total = ZERO
     sale.total = total
-    sale.metodo_pago = metodo_pago
+    sale.metodo_pago = resolved_payment_method
     sale.monto_recibido = received_amount
     sale.cambio = change_amount
     sale.estatus = "pagada"
@@ -1213,7 +1539,14 @@ def pay_suspended_sale(
         ip_address=ip_address,
     )
 
-    adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=False)
+    replace_sale_payments(db, sale=sale, payments=resolved_payments, turno_id=shift.id)
+    adjust_shift_totals_for_payments(
+        shift,
+        sale_total=sale.total,
+        payments=resolved_payments,
+        change_amount=change_amount,
+        reverse=False,
+    )
     refresh_closed_shift_difference(shift)
 
     create_audit_log(
@@ -1230,6 +1563,7 @@ def pay_suspended_sale(
             "turno_id": sale.turno_id,
             "metodo_pago": sale.metodo_pago,
             "total": str(sale.total),
+            "payments_count": len(resolved_payments),
             "items_count": len(resolved_lines),
         },
     )
@@ -1259,6 +1593,7 @@ def cancel_sale(
     cancel_reason = normalize_required_text(reason, "Razon")
 
     if sale.estatus == "pagada":
+        payment_breakdown = get_sale_payment_breakdown(db, sale=sale)
         detail_rows = db.scalars(
             select(VentaDetalle).where(VentaDetalle.venta_id == sale.id).order_by(VentaDetalle.id.asc())
         ).all()
@@ -1270,7 +1605,13 @@ def cancel_sale(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="No se puede cancelar una venta de un turno cerrado en esta fase.",
                 )
-            adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=True)
+            adjust_shift_totals_for_payments(
+                shift,
+                sale_total=sale.total,
+                payments=payment_breakdown,
+                change_amount=sale.cambio,
+                reverse=True,
+            )
             refresh_closed_shift_difference(shift)
 
         for detail in detail_rows:
