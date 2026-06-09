@@ -773,26 +773,6 @@ export function getPosTicket({ saleId, token, empresaId }) {
 }
 
 
-export function sendPosTicketEmail({ saleId, token, empresaId, payload }) {
-  return apiRequest(`/pos/ticket/${saleId}/send-email`, {
-    method: "POST",
-    body: payload,
-    token,
-    empresaId,
-  });
-}
-
-
-export function sendPosTicketSms({ saleId, token, empresaId, payload }) {
-  return apiRequest(`/pos/ticket/${saleId}/send-sms`, {
-    method: "POST",
-    body: payload,
-    token,
-    empresaId,
-  });
-}
-
-
 export function getCompanyUsers({ token, empresaId }) {
   return apiRequest("/company/users", { token, empresaId });
 }

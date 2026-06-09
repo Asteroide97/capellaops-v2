@@ -60,33 +60,6 @@ class SalePaymentItem(BaseModel):
     created_at: datetime | None = None
 
 
-class PosTicketDeliveryItem(BaseModel):
-    id: str
-    canal: str
-    destino: str
-    estatus: str
-    proveedor: str | None = None
-    error_message: str | None = None
-    sent_by_user_id: str
-    sent_by_user_nombre: str | None = None
-    created_at: datetime
-
-
-class PosTicketSendEmailRequest(BaseModel):
-    email: str = Field(min_length=3, max_length=255)
-    nombre: str | None = Field(default=None, max_length=160)
-
-
-class PosTicketSendSmsRequest(BaseModel):
-    phone: str = Field(min_length=8, max_length=20)
-
-
-class PosTicketDeliveryResponse(BaseModel):
-    sent: bool
-    message: str
-    delivery: PosTicketDeliveryItem | None = None
-
-
 class SaleItem(BaseModel):
     id: str
     empresa_id: str
@@ -186,7 +159,6 @@ class PosTicketResponse(BaseModel):
     cancel_reason: str | None = None
     cancelled_at: datetime | None = None
     pagos: list[SalePaymentItem] = Field(default_factory=list)
-    deliveries: list[PosTicketDeliveryItem] = Field(default_factory=list)
 
 
 class PosShiftMovementResponse(BaseModel):

@@ -1851,61 +1851,6 @@ textarea {
   margin: 0;
 }
 
-.pos-ticket-delivery-card {
-  display: grid;
-  gap: 1rem;
-}
-
-.pos-ticket-delivery-grid {
-  display: grid;
-  gap: 1rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.pos-ticket-delivery-form {
-  display: grid;
-  gap: 0.7rem;
-}
-
-.pos-ticket-delivery-form label {
-  display: grid;
-  gap: 0.45rem;
-  color: var(--muted);
-}
-
-.pos-ticket-delivery-history {
-  display: grid;
-  gap: 0.8rem;
-}
-
-.pos-ticket-delivery-list {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.pos-ticket-delivery-item {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.9rem 1rem;
-  border-radius: 1rem;
-  border: 1px solid rgba(16, 24, 40, 0.08);
-  background: rgba(255, 255, 255, 0.96);
-}
-
-.pos-ticket-delivery-item > div {
-  display: grid;
-  gap: 0.25rem;
-  min-width: 0;
-}
-
-.pos-ticket-delivery-item p,
-.pos-ticket-delivery-item strong {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
 .pos-ticket-printable .mini-card,
 .pos-modal-stack .mini-card {
   gap: 0.35rem;
@@ -4795,12 +4740,7 @@ body.pm-is-dragging {
     grid-template-columns: 1fr;
   }
 
-  .pos-ticket-delivery-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .pos-ticket-receipt-head,
-  .pos-ticket-delivery-item {
+  .pos-ticket-receipt-head {
     flex-direction: column;
     align-items: flex-start;
   }

@@ -9,8 +9,6 @@ import {
   CreditCard,
   History,
   LockKeyhole,
-  Mail,
-  MessageSquare,
   PackageSearch,
   Plus,
   Printer,
@@ -40,8 +38,6 @@ import {
   openPosShift,
   paySuspendedPosSale,
   resumePosSale,
-  sendPosTicketEmail,
-  sendPosTicketSms,
   suspendPosSale,
 } from "../api/client";
 
@@ -102,11 +98,6 @@ const defaultCloseShiftForm = {
   notas: "",
 };
 
-const defaultTicketDeliveryForm = {
-  email: "",
-  phone: "",
-};
-
 
 function formatDateTime(value) {
   if (!value) {
@@ -141,16 +132,6 @@ function formatNumber(value) {
 
 function normalizeDecimalInput(value) {
   return String(value ?? "").replace(",", ".").replace(/[^\d.]/g, "");
-}
-
-
-function isValidEmailInput(value) {
-  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(value || "").trim());
-}
-
-
-function isValidPhoneInput(value) {
-  return /^\+[1-9]\d{7,14}$/.test(String(value || "").trim());
 }
 
 
@@ -226,12 +207,6 @@ function getPosUiError(requestError, fallback) {
   }
   if (normalized.includes("total pagado") || normalized.includes("no cubre")) {
     return "El total pagado no cubre el total de la venta.";
-  }
-  if (normalized.includes("email no esta configurado")) {
-    return "El envío de email no está configurado.";
-  }
-  if (normalized.includes("sms no esta configurado")) {
-    return "El envío de SMS no está configurado.";
   }
   return rawMessage || fallback;
 }
@@ -504,9 +479,6 @@ export default function PosPage() {
   const [closeShiftForm, setCloseShiftForm] = useState(defaultCloseShiftForm);
   const [selectedSale, setSelectedSale] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
-  const [ticketDeliveryForm, setTicketDeliveryForm] = useState(defaultTicketDeliveryForm);
-  const [ticketDeliverySubmitting, setTicketDeliverySubmitting] = useState("");
-  const [ticketDeliveryFeedback, setTicketDeliveryFeedback] = useState({ tone: "", message: "" });
   const [cancelReason, setCancelReason] = useState("");
   const [scannerOpen, setScannerOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -813,15 +785,6 @@ export default function PosPage() {
       },
     );
   }, [selectedWarehouseId]);
-
-  useEffect(() => {
-    setTicketDeliveryForm({
-      email: selectedTicket?.cliente_email ?? "",
-      phone: "",
-    });
-    setTicketDeliverySubmitting("");
-    setTicketDeliveryFeedback({ tone: "", message: "" });
-  }, [selectedTicket?.id]);
 
   function addToCart(item) {
     if (Number(item.existencia) <= 0) {
@@ -1411,88 +1374,6 @@ export default function PosPage() {
 
   function printTicket() {
     window.print();
-  }
-
-  function applyTicketDeliveryResult(response) {
-    if (response?.delivery) {
-      setSelectedTicket((current) => {
-        if (!current) {
-          return current;
-        }
-        const currentDeliveries = Array.isArray(current.deliveries) ? current.deliveries : [];
-        return {
-          ...current,
-          deliveries: [response.delivery, ...currentDeliveries.filter((item) => item.id !== response.delivery.id)],
-        };
-      });
-    }
-    setTicketDeliveryFeedback({
-      tone: response?.sent ? "success" : "error",
-      message: response?.message || "No se pudo enviar el ticket.",
-    });
-  }
-
-  async function handleSendTicketEmail() {
-    if (!selectedTicket?.id) {
-      return;
-    }
-    const email = String(ticketDeliveryForm.email || "").trim();
-    if (!isValidEmailInput(email)) {
-      setTicketDeliveryFeedback({ tone: "error", message: "Ingresa un email válido." });
-      return;
-    }
-
-    setTicketDeliverySubmitting("email");
-    setTicketDeliveryFeedback({ tone: "", message: "" });
-    try {
-      const response = await sendPosTicketEmail({
-        saleId: selectedTicket.id,
-        token,
-        empresaId,
-        payload: {
-          email,
-          nombre: selectedTicket.cliente_nombre || null,
-        },
-      });
-      applyTicketDeliveryResult(response);
-    } catch (requestError) {
-      setTicketDeliveryFeedback({
-        tone: "error",
-        message: getPosUiError(requestError, "No se pudo enviar el ticket por email."),
-      });
-    } finally {
-      setTicketDeliverySubmitting("");
-    }
-  }
-
-  async function handleSendTicketSms() {
-    if (!selectedTicket?.id) {
-      return;
-    }
-    const phone = String(ticketDeliveryForm.phone || "").trim();
-    if (!isValidPhoneInput(phone)) {
-      setTicketDeliveryFeedback({ tone: "error", message: "Ingresa un teléfono válido." });
-      return;
-    }
-
-    setTicketDeliverySubmitting("sms");
-    setTicketDeliveryFeedback({ tone: "", message: "" });
-    try {
-      const response = await sendPosTicketSms({
-        saleId: selectedTicket.id,
-        token,
-        empresaId,
-        payload: { phone },
-      });
-      applyTicketDeliveryResult(response);
-    } catch (requestError) {
-      setTicketDeliveryFeedback({
-        tone: "error",
-        message: getPosUiError(requestError, "No se pudo enviar el ticket por SMS."),
-      });
-    } finally {
-      setTicketDeliverySubmitting("");
-    }
   }
 
   const historyDetailFooter = selectedSale ? (
@@ -2765,100 +2646,6 @@ export default function PosPage() {
               </div>
             </article>
 
-            <section className="feature-card pos-ticket-delivery-card">
-              <div className="feature-header">
-                <p className="eyebrow">Ticket digital</p>
-                <h3>Enviar comprobante</h3>
-              </div>
-              {ticketDeliveryFeedback.message ? (
-                <div className={`pos-warning-box ${ticketDeliveryFeedback.tone === "success" ? "is-success" : "is-error"}`}>
-                  <strong>{ticketDeliveryFeedback.tone === "success" ? "Envío completado" : "No se pudo completar el envío"}</strong>
-                  <p>{ticketDeliveryFeedback.message}</p>
-                </div>
-              ) : null}
-              <div className="pos-ticket-delivery-grid">
-                <div className="pos-ticket-delivery-form">
-                  <label>
-                    Email
-                    <input
-                      className="pos-input"
-                      onChange={(event) =>
-                        setTicketDeliveryForm((current) => ({
-                          ...current,
-                          email: event.target.value,
-                        }))
-                      }
-                      placeholder="cliente@dominio.com"
-                      type="email"
-                      value={ticketDeliveryForm.email}
-                    />
-                  </label>
-                  <button
-                    className="ghost-button"
-                    disabled={ticketDeliverySubmitting === "email"}
-                    onClick={handleSendTicketEmail}
-                    type="button"
-                  >
-                    <Mail size={16} />
-                    <span>{ticketDeliverySubmitting === "email" ? "Enviando..." : "Enviar email"}</span>
-                  </button>
-                </div>
-                <div className="pos-ticket-delivery-form">
-                  <label>
-                    SMS
-                    <input
-                      className="pos-input"
-                      onChange={(event) =>
-                        setTicketDeliveryForm((current) => ({
-                          ...current,
-                          phone: event.target.value,
-                        }))
-                      }
-                      placeholder="+528711234567"
-                      type="tel"
-                      value={ticketDeliveryForm.phone}
-                    />
-                  </label>
-                  <button
-                    className="ghost-button"
-                    disabled={ticketDeliverySubmitting === "sms"}
-                    onClick={handleSendTicketSms}
-                    type="button"
-                  >
-                    <MessageSquare size={16} />
-                    <span>{ticketDeliverySubmitting === "sms" ? "Enviando..." : "Enviar SMS"}</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="pos-ticket-delivery-history">
-                <div className="feature-header">
-                  <p className="eyebrow">Trazabilidad</p>
-                  <h3>Historial de envíos</h3>
-                </div>
-                {selectedTicket.deliveries?.length ? (
-                  <div className="pos-ticket-delivery-list">
-                    {selectedTicket.deliveries.map((delivery) => (
-                      <div className="pos-ticket-delivery-item" key={delivery.id}>
-                        <div>
-                          <strong>{delivery.canal === "email" ? "Email" : "SMS"}</strong>
-                          <p>{delivery.destino}</p>
-                        </div>
-                        <div>
-                          <StatusBadge
-                            label={delivery.estatus === "enviado" ? "Enviado" : "Fallido"}
-                            tone={delivery.estatus === "enviado" ? "success" : "warning"}
-                          />
-                          <p>{formatDateTime(delivery.created_at)}</p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="table-note">Todavía no hay envíos registrados para este ticket.</p>
-                )}
-              </div>
-            </section>
           </div>
         )}
       </PosModal>

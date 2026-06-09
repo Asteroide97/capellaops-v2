@@ -10,9 +10,6 @@ from app.api.deps import TenantContext, get_tenant_context
 from app.db.session import get_db
 from app.schemas.pos import (
     PosActiveShiftResponse,
-    PosTicketDeliveryResponse,
-    PosTicketSendEmailRequest,
-    PosTicketSendSmsRequest,
     PosCatalogResponse,
     PosShiftCloseRequest,
     PosShiftManualMovementRequest,
@@ -39,8 +36,6 @@ from app.services.pos import (
     open_shift,
     pay_suspended_sale,
     resume_suspended_sale,
-    send_sale_ticket_email,
-    send_sale_ticket_sms,
     serialize_sale_response,
     validate_pos_access,
 )
@@ -378,44 +373,3 @@ def sale_ticket(
 ) -> PosTicketResponse:
     sale = get_sale_for_company(db, context.empresa.id, sale_id)
     return get_sale_ticket(db, sale)
-
-
-@router.post("/ticket/{sale_id}/send-email", response_model=PosTicketDeliveryResponse)
-def send_ticket_email_endpoint(
-    sale_id: str,
-    payload: PosTicketSendEmailRequest,
-    context: TenantContext = Depends(get_pos_context),
-    db: Session = Depends(get_db),
-) -> PosTicketDeliveryResponse:
-    return run_pos_write(
-        db,
-        "send_ticket_email",
-        lambda: send_sale_ticket_email(
-            db,
-            empresa=context.empresa,
-            user=context.user,
-            sale_id=sale_id,
-            email=payload.email,
-            recipient_name=payload.nombre,
-        ),
-    )
-
-
-@router.post("/ticket/{sale_id}/send-sms", response_model=PosTicketDeliveryResponse)
-def send_ticket_sms_endpoint(
-    sale_id: str,
-    payload: PosTicketSendSmsRequest,
-    context: TenantContext = Depends(get_pos_context),
-    db: Session = Depends(get_db),
-) -> PosTicketDeliveryResponse:
-    return run_pos_write(
-        db,
-        "send_ticket_sms",
-        lambda: send_sale_ticket_sms(
-            db,
-            empresa=context.empresa,
-            user=context.user,
-            sale_id=sale_id,
-            phone=payload.phone,
-        ),
-    )
