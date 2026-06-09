@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 from app.api.deps import TenantContext, get_tenant_context
 from app.db.session import get_db
 from app.schemas.pos import (
+    PosActiveShiftResponse,
     PosCatalogResponse,
+    PosShiftCloseRequest,
+    PosShiftManualMovementRequest,
+    PosShiftOpenRequest,
+    PosShiftResponse,
     PosTicketResponse,
     SaleCancelRequest,
     SaleCreateRequest,
@@ -18,12 +23,16 @@ from app.schemas.pos import (
 )
 from app.services.inventory import get_warehouse_for_company
 from app.services.pos import (
+    add_shift_manual_movement,
     cancel_sale,
+    close_shift,
     create_sale,
+    get_active_shift_response,
     get_pos_catalog,
     get_sale_for_company,
     get_sale_ticket,
     list_sales,
+    open_shift,
     serialize_sale_response,
     validate_pos_access,
 )
@@ -69,6 +78,105 @@ def validate_date_range(fecha_desde: datetime | None, fecha_hasta: datetime | No
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="fecha_hasta no puede ser menor que fecha_desde.",
         )
+
+
+@router.get("/shift/active", response_model=PosActiveShiftResponse)
+def get_active_shift(
+    warehouse_id: str,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosActiveShiftResponse:
+    return get_active_shift_response(db, context.empresa.id, warehouse_id)
+
+
+@router.post("/shift/open", response_model=PosShiftResponse, status_code=status.HTTP_201_CREATED)
+def open_shift_endpoint(
+    payload: PosShiftOpenRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosShiftResponse:
+    return run_pos_write(
+        db,
+        "open_shift",
+        lambda: open_shift(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            warehouse_id=payload.warehouse_id,
+            fondo_inicial=payload.fondo_inicial,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/shift/close", response_model=PosShiftResponse)
+def close_shift_endpoint(
+    payload: PosShiftCloseRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosShiftResponse:
+    return run_pos_write(
+        db,
+        "close_shift",
+        lambda: close_shift(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            warehouse_id=payload.warehouse_id,
+            efectivo_contado=payload.efectivo_contado,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/shift/manual-income", response_model=PosShiftResponse)
+def manual_income_endpoint(
+    payload: PosShiftManualMovementRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosShiftResponse:
+    return run_pos_write(
+        db,
+        "manual_income",
+        lambda: add_shift_manual_movement(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            warehouse_id=payload.warehouse_id,
+            movement_type="ingreso",
+            amount=payload.monto,
+            reason=payload.motivo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/shift/manual-withdrawal", response_model=PosShiftResponse)
+def manual_withdrawal_endpoint(
+    payload: PosShiftManualMovementRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosShiftResponse:
+    return run_pos_write(
+        db,
+        "manual_withdrawal",
+        lambda: add_shift_manual_movement(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            warehouse_id=payload.warehouse_id,
+            movement_type="retiro",
+            amount=payload.monto,
+            reason=payload.motivo,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.get("/catalog", response_model=PosCatalogResponse)

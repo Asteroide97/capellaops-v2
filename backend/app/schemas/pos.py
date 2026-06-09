@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class SaleCreateLineRequest(BaseModel):
     material_id: str = Field(min_length=1, max_length=64)
     cantidad: Decimal = Field(gt=0)
+    precio_unitario: Decimal | None = Field(default=None, ge=0)
     descuento_unitario: Decimal = Field(default=Decimal("0"), ge=0)
 
 
@@ -45,6 +46,8 @@ class SaleItem(BaseModel):
     folio: str
     almacen_id: str
     almacen_nombre: str
+    turno_id: str | None = None
+    turno_folio: str | None = None
     usuario_id: str
     vendedor_nombre: str
     cliente_nombre: str | None = None
@@ -107,6 +110,7 @@ class TicketLineItem(BaseModel):
 class PosTicketResponse(BaseModel):
     id: str
     folio: str
+    turno_folio: str | None = None
     fecha: datetime
     empresa: str
     almacen: str
@@ -125,3 +129,65 @@ class PosTicketResponse(BaseModel):
     notas: str | None = None
     cancel_reason: str | None = None
     cancelled_at: datetime | None = None
+
+
+class PosShiftMovementResponse(BaseModel):
+    id: str
+    tipo: str
+    monto: Decimal
+    motivo: str
+    usuario_id: str
+    usuario_nombre: str
+    created_at: datetime
+
+
+class PosShiftResponse(BaseModel):
+    id: str
+    empresa_id: str
+    almacen_id: str
+    almacen_nombre: str
+    folio: str
+    estatus: str
+    usuario_apertura_id: str
+    usuario_apertura_nombre: str
+    usuario_cierre_id: str | None = None
+    usuario_cierre_nombre: str | None = None
+    fondo_inicial: Decimal
+    total_ventas: Decimal
+    total_efectivo: Decimal
+    total_tarjeta: Decimal
+    total_transferencia: Decimal
+    total_otro: Decimal
+    ingresos_manuales: Decimal
+    retiros_manuales: Decimal
+    efectivo_esperado: Decimal
+    efectivo_contado: Decimal | None = None
+    diferencia: Decimal | None = None
+    notas_apertura: str | None = None
+    notas_cierre: str | None = None
+    opened_at: datetime
+    closed_at: datetime | None = None
+    ventas_count: int
+    movimientos: list[PosShiftMovementResponse] = Field(default_factory=list)
+
+
+class PosActiveShiftResponse(BaseModel):
+    active_shift: PosShiftResponse | None = None
+
+
+class PosShiftOpenRequest(BaseModel):
+    warehouse_id: str = Field(min_length=1, max_length=64)
+    fondo_inicial: Decimal = Field(ge=0)
+    notas: str | None = Field(default=None, max_length=2000)
+
+
+class PosShiftCloseRequest(BaseModel):
+    warehouse_id: str = Field(min_length=1, max_length=64)
+    efectivo_contado: Decimal = Field(ge=0)
+    notas: str | None = Field(default=None, max_length=2000)
+
+
+class PosShiftManualMovementRequest(BaseModel):
+    warehouse_id: str = Field(min_length=1, max_length=64)
+    monto: Decimal = Field(gt=0)
+    motivo: str = Field(min_length=1, max_length=2000)

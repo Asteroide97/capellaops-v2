@@ -652,6 +652,53 @@ export function getPosCatalog({ token, empresaId, almacenId, filters = {} }) {
 }
 
 
+export function getPosActiveShift({ token, empresaId, warehouseId }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "warehouse_id", warehouseId);
+  return apiRequest(`/pos/shift/active?${query.toString()}`, { token, empresaId });
+}
+
+
+export function openPosShift({ token, empresaId, payload }) {
+  return apiRequest("/pos/shift/open", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function closePosShift({ token, empresaId, payload }) {
+  return apiRequest("/pos/shift/close", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPosShiftManualIncome({ token, empresaId, payload }) {
+  return apiRequest("/pos/shift/manual-income", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPosShiftManualWithdrawal({ token, empresaId, payload }) {
+  return apiRequest("/pos/shift/manual-withdrawal", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function getPosSales({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);

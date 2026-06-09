@@ -118,14 +118,15 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Integraciones | Sincronizacion de stock | Pendiente | Alta | Integraciones F2 | No implementado. | Sobreventa o stock incorrecto fuera del sistema. |
 | Integraciones | Canales externos | Pendiente | Media | Integraciones F3 | No implementado. | Escalabilidad comercial limitada. |
 | Integraciones | Webhooks futuros | Pendiente | Media | Integraciones F2 | No implementado. | Integraciones manuales o fragiles. |
-| POS | Punto de venta | Parcial | Critica | POS F1 | Venta base, catalogo, ticket basico y cancelacion basica ya existen. | Operacion de mostrador incompleta frente al alcance final. |
+| POS | Punto de venta | Parcial | Critica | POS F2 | Venta base, catalogo, ticket basico, cancelacion basica y bloqueo sin caja abierta ya existen. | Operacion de mostrador incompleta frente al alcance final. |
 | POS | Carrito | Implementado | Alta | POS F1 | Carrito funcional en frontend. | Flujo de cobro incompleto. |
 | POS | Ventas | Implementado | Critica | POS F1 | Venta persistida y calculada en backend. | Sin transacciones comerciales reales. |
-| POS | Metodos de pago | Parcial | Alta | POS F2 | Existe metodo simple; pagos mixtos completos siguen pendientes. | Cobro limitado en escenarios reales. |
+| POS | Metodos de pago | Parcial | Alta | POS F2 | Existe metodo simple y turnos acumulan totales por forma de pago; pagos mixtos completos siguen pendientes. | Cobro limitado en escenarios reales. |
 | POS | Tickets | Parcial | Media | POS F2 | Ticket basico disponible; version imprimible formal pendiente. | Cierre comercial debil. |
-| POS | Corte de caja | Pendiente | Alta | POS F2 | No implementado. | Riesgo operativo y financiero. |
+| POS | Corte de caja | Implementado | Alta | POS F2 | Turno/caja MVP con apertura, cierre, ingresos y retiros manuales. | Riesgo operativo si no se refinan arqueos y controles avanzados. |
 | POS | Salida automatica de inventario | Implementado | Critica | POS F1 | Cada venta pagada genera salida de inventario. | Stock falso despues de vender. |
-| POS | Venta pendiente / cancelacion | Parcial | Alta | POS F2 | Existe cancelacion basica; venta pendiente formal sigue pendiente. | Caja rigida para escenarios reales. |
+| POS | Venta pendiente / cancelacion | Parcial | Alta | POS F2 | Existe cancelacion basica; venta suspendida UI y venta pendiente formal siguen pendientes. | Caja rigida para escenarios reales. |
+| POS | Precio de venta separado de costo | Implementado | Alta | POS F2 | POS usa `precio_venta`; los costos de inventario quedan separados y el precio puede ajustarse en el carrito. | Cobros incorrectos si se mezcla costo interno con precio al cliente. |
 | POS | Escaner en POS | Parcial | Media | POS F1 + UX | El catalogo POS ya busca por `codigo_barras`, soporta lector USB y camara para agregar cuando hay coincidencia unica. | Cobro mas lento si el escaner no resuelve el producto. |
 | POS | Facturacion via POS | Pendiente | Alta | Facturacion F2 | No implementado. | Venta desconectada del CFDI. |
 | Facturacion | CFDI 4.0 | Congelado | Critica | Facturacion futura | Fuera de esta etapa. | No se puede facturar fiscalmente. |

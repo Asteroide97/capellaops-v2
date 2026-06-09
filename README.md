@@ -1524,19 +1524,23 @@ Las órdenes de compra ya siguen el flujo base:
 - cuentas por pagar
 - adjuntos y remisiones
 
-## POS Fase 1
+## POS Fase 2 - Caja obligatoria y precio de venta separado
 
 - Todo endpoint POS valida autenticación, contexto de empresa y acceso al módulo `pos`.
 - Toda venta se calcula en backend.
 - Toda venta pagada descuenta inventario automáticamente.
-- Existe ticket básico y cancelación básica con retorno de stock.
+- El POS requiere un turno de caja abierto para cobrar ventas.
+- El precio de venta del catálogo sale de `precio_venta`.
+- `costo_unitario` y `costo_promedio_actual` quedan como costos internos de inventario.
+- El precio de venta puede editarse en Materiales y también ajustarse en el carrito POS como snapshot de la venta.
+- Existe ticket básico, cancelación básica con retorno de stock y turno/caja MVP con apertura, ingresos manuales, retiros manuales y cierre.
 
 ### Pendientes POS
 
-- Corte de caja
 - Pagos mixtos formales
 - Descuentos avanzados
 - Ticket imprimible formal
+- Ajuste fino de cancelaciones contra turnos cerrados
 - Conexión con facturación fiscal
 
 ## Placeholders actuales

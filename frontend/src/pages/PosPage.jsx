@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   BadgeDollarSign,
+  BanknoteArrowDown,
+  BanknoteArrowUp,
+  CircleDollarSign,
   Clock3,
   CreditCard,
   History,
+  LockKeyhole,
   PackageSearch,
   Plus,
   ReceiptText,
@@ -19,18 +24,22 @@ import { useAuth } from "../auth/AuthContext";
 import BarcodeScannerModal from "../components/BarcodeScannerModal";
 import {
   cancelPosSale,
+  closePosShift,
   createPosSale,
+  createPosShiftManualIncome,
+  createPosShiftManualWithdrawal,
+  getPosActiveShift,
   getPosCatalog,
   getPosSaleDetail,
   getPosSales,
   getPosTicket,
   getWarehouses,
+  openPosShift,
 } from "../api/client";
 
 
 const DEFAULT_PAGE_SIZE = 25;
 const POS_VIEWS = ["sell", "history", "tickets", "cash"];
-const TURNOS_AVAILABLE = false;
 
 const paymentMethodOptions = [
   { value: "efectivo", label: "Efectivo" },
@@ -59,10 +68,33 @@ const saleFilterDefaults = {
   offset: 0,
 };
 
+const defaultSaleForm = {
+  cliente_nombre: "",
+  cliente_email: "",
+  metodo_pago: "efectivo",
+  monto_recibido: "",
+  notas: "",
+};
+
+const defaultOpenShiftForm = {
+  fondo_inicial: "",
+  notas: "",
+};
+
+const defaultShiftMovementForm = {
+  monto: "",
+  motivo: "",
+};
+
+const defaultCloseShiftForm = {
+  efectivo_contado: "",
+  notas: "",
+};
+
 
 function formatDateTime(value) {
   if (!value) {
-    return "—";
+    return "-";
   }
 
   return new Intl.DateTimeFormat("es-MX", {
@@ -96,7 +128,7 @@ function normalizeDecimalInput(value) {
 }
 
 
-function safeText(value, fallback = "—") {
+function safeText(value, fallback = "-") {
   if (value === null || value === undefined || value === "") {
     return fallback;
   }
@@ -254,6 +286,7 @@ function recordMatchesSearch(record, search) {
     record.cliente_email,
     record.vendedor_nombre,
     record.almacen_nombre,
+    record.turno_folio,
     record.notas,
   ]
     .filter(Boolean)
@@ -360,11 +393,13 @@ export default function PosPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [shiftSubmitting, setShiftSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
   const [warehouses, setWarehouses] = useState([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState("");
+  const [activeShift, setActiveShift] = useState(null);
 
   const [catalogFilters, setCatalogFilters] = useState(catalogFilterDefaults);
   const [catalogItems, setCatalogItems] = useState([]);
@@ -383,13 +418,10 @@ export default function PosPage() {
   });
 
   const [cart, setCart] = useState([]);
-  const [saleForm, setSaleForm] = useState({
-    cliente_nombre: "",
-    cliente_email: "",
-    metodo_pago: "efectivo",
-    monto_recibido: "",
-    notas: "",
-  });
+  const [saleForm, setSaleForm] = useState(defaultSaleForm);
+  const [openShiftForm, setOpenShiftForm] = useState(defaultOpenShiftForm);
+  const [shiftMovementForm, setShiftMovementForm] = useState(defaultShiftMovementForm);
+  const [closeShiftForm, setCloseShiftForm] = useState(defaultCloseShiftForm);
   const [selectedSale, setSelectedSale] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [cancelReason, setCancelReason] = useState("");
@@ -398,12 +430,15 @@ export default function PosPage() {
   const [ticketModalOpen, setTicketModalOpen] = useState(false);
   const [selectedDraft, setSelectedDraft] = useState(null);
   const [suspendedDrafts, setSuspendedDrafts] = useState([]);
+  const [shiftMovementModalType, setShiftMovementModalType] = useState("");
+  const [closeShiftModalOpen, setCloseShiftModalOpen] = useState(false);
 
   const selectedWarehouse = useMemo(
     () => warehouses.find((warehouse) => warehouse.id === selectedWarehouseId) ?? null,
     [warehouses, selectedWarehouseId],
   );
 
+  const hasActiveShift = Boolean(activeShift?.id);
   const cartSubtotal = useMemo(
     () =>
       cart.reduce(
@@ -427,16 +462,22 @@ export default function PosPage() {
     saleForm.metodo_pago === "efectivo" && saleForm.monto_recibido !== ""
       ? Math.max(0, cashReceived - cartTotal)
       : 0;
+  const expectedCash = Number(activeShift?.efectivo_esperado || 0);
+  const countedCash = Number(closeShiftForm.efectivo_contado || 0);
+  const closeShiftDifference = countedCash - expectedCash;
 
   const hasCartItems = cart.length > 0;
   const cartHasInvalidQuantity = cart.some((item) => {
     const quantity = Number(item.cantidad || 0);
     return quantity <= 0 || Number.isNaN(quantity) || quantity > Number(item.existencia || 0);
   });
+  const cartHasMissingPrice = cart.some((item) => Number(item.precio_unitario || 0) <= 0);
   const canCharge =
     Boolean(selectedWarehouseId) &&
+    hasActiveShift &&
     hasCartItems &&
     !cartHasInvalidQuantity &&
+    !cartHasMissingPrice &&
     (saleForm.metodo_pago !== "efectivo" || Number(saleForm.monto_recibido || 0) >= cartTotal);
 
   const historyRecords = useMemo(() => {
@@ -483,13 +524,7 @@ export default function PosPage() {
 
   function clearCart() {
     setCart([]);
-    setSaleForm({
-      cliente_nombre: "",
-      cliente_email: "",
-      metodo_pago: "efectivo",
-      monto_recibido: "",
-      notas: "",
-    });
+    setSaleForm(defaultSaleForm);
   }
 
   function handleNewSale() {
@@ -532,6 +567,20 @@ export default function PosPage() {
       setSelectedWarehouseId(response.items[0].id);
     }
     return response.items ?? [];
+  }
+
+  async function loadActiveShift(warehouseId = selectedWarehouseId) {
+    if (!warehouseId) {
+      setActiveShift(null);
+      return null;
+    }
+    const response = await getPosActiveShift({
+      token,
+      empresaId,
+      warehouseId,
+    });
+    setActiveShift(response.active_shift ?? null);
+    return response.active_shift ?? null;
   }
 
   async function loadCatalog(warehouseId = selectedWarehouseId, nextFilters = catalogFilters) {
@@ -600,7 +649,7 @@ export default function PosPage() {
     try {
       const warehouseItems = await loadWarehousesOptions();
       const nextWarehouseId = selectedWarehouseId || warehouseItems[0]?.id || "";
-      await Promise.all([loadCatalog(nextWarehouseId, catalogFilters), loadSales(saleFilters)]);
+      await Promise.all([loadCatalog(nextWarehouseId, catalogFilters), loadSales(saleFilters), loadActiveShift(nextWarehouseId)]);
     } catch (requestError) {
       setError(requestError.message || "No se pudo cargar Punto de Venta.");
     } finally {
@@ -616,7 +665,7 @@ export default function PosPage() {
     setRefreshing(true);
     clearFeedback();
     try {
-      await Promise.all([loadCatalog(selectedWarehouseId, catalogFilters), loadSales(saleFilters)]);
+      await Promise.all([loadCatalog(selectedWarehouseId, catalogFilters), loadSales(saleFilters), loadActiveShift(selectedWarehouseId)]);
       if (keepTicket && selectedSale?.id) {
         await loadSaleArtifacts(selectedSale.id);
       }
@@ -640,9 +689,11 @@ export default function PosPage() {
       return;
     }
 
-    loadCatalog(selectedWarehouseId, catalogFilters).catch((requestError) => {
-      setError(requestError.message || "No se pudo cargar el catálogo POS.");
-    });
+    Promise.all([loadCatalog(selectedWarehouseId, catalogFilters), loadActiveShift(selectedWarehouseId)]).catch(
+      (requestError) => {
+        setError(requestError.message || "No se pudo cargar el catálogo POS.");
+      },
+    );
   }, [selectedWarehouseId]);
 
   function addToCart(item) {
@@ -670,7 +721,7 @@ export default function PosPage() {
           sku: item.sku,
           nombre: item.nombre,
           unidad: item.unidad,
-          precio_unitario: String(item.precio),
+          precio_unitario: String(item.precio ?? 0),
           descuento_unitario: "0",
           cantidad: "1",
           existencia: item.existencia,
@@ -689,6 +740,10 @@ export default function PosPage() {
 
         if (field === "cantidad") {
           return { ...line, cantidad: normalizeDecimalInput(value) };
+        }
+
+        if (field === "precio_unitario") {
+          return { ...line, precio_unitario: normalizeDecimalInput(value) };
         }
 
         if (field === "descuento_unitario") {
@@ -764,12 +819,20 @@ export default function PosPage() {
       setError("Selecciona un almacén para vender.");
       return;
     }
+    if (!hasActiveShift) {
+      setError("Abre caja para poder cobrar ventas.");
+      return;
+    }
     if (!hasCartItems) {
       setError("Agrega productos al carrito antes de cobrar.");
       return;
     }
     if (cartHasInvalidQuantity) {
       setError("Revisa las cantidades del carrito. No pueden exceder el stock disponible.");
+      return;
+    }
+    if (cartHasMissingPrice) {
+      setError("Configura o captura un precio de venta para este producto.");
       return;
     }
     if (saleForm.metodo_pago === "efectivo" && cashReceived < cartTotal) {
@@ -793,6 +856,7 @@ export default function PosPage() {
       items: cart.map((item) => ({
         material_id: item.material_id,
         cantidad: item.cantidad,
+        precio_unitario: item.precio_unitario === "" ? "0" : item.precio_unitario,
         descuento_unitario: item.descuento_unitario || "0",
       })),
     };
@@ -809,6 +873,103 @@ export default function PosPage() {
       setError(requestError.message || "No se pudo registrar la venta.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleOpenShift(event) {
+    event.preventDefault();
+    if (!selectedWarehouseId) {
+      setError("Selecciona un almacén para abrir caja.");
+      return;
+    }
+
+    setShiftSubmitting(true);
+    clearFeedback();
+    try {
+      const shift = await openPosShift({
+        token,
+        empresaId,
+        payload: {
+          warehouse_id: selectedWarehouseId,
+          fondo_inicial: openShiftForm.fondo_inicial === "" ? "0" : openShiftForm.fondo_inicial,
+          notas: openShiftForm.notas || null,
+        },
+      });
+      setActiveShift(shift);
+      setOpenShiftForm(defaultOpenShiftForm);
+      setSuccess(`Turno ${shift.folio} abierto.`);
+      await refreshPosData({ keepTicket: false });
+      updateView("sell");
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo abrir el turno.");
+    } finally {
+      setShiftSubmitting(false);
+    }
+  }
+
+  async function handleShiftMovementSubmit(event) {
+    event.preventDefault();
+    if (!selectedWarehouseId) {
+      setError("Selecciona un almacén para registrar el movimiento.");
+      return;
+    }
+
+    const payload = {
+      warehouse_id: selectedWarehouseId,
+      monto: shiftMovementForm.monto,
+      motivo: shiftMovementForm.motivo,
+    };
+
+    setShiftSubmitting(true);
+    clearFeedback();
+    try {
+      const shift =
+        shiftMovementModalType === "ingreso"
+          ? await createPosShiftManualIncome({ token, empresaId, payload })
+          : await createPosShiftManualWithdrawal({ token, empresaId, payload });
+      setActiveShift(shift);
+      setShiftMovementForm(defaultShiftMovementForm);
+      setShiftMovementModalType("");
+      setSuccess(
+        shiftMovementModalType === "ingreso"
+          ? "Ingreso manual registrado."
+          : "Retiro manual registrado.",
+      );
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo registrar el movimiento de caja.");
+    } finally {
+      setShiftSubmitting(false);
+    }
+  }
+
+  async function handleCloseShiftSubmit(event) {
+    event.preventDefault();
+    if (!selectedWarehouseId) {
+      setError("Selecciona un almacén para cerrar caja.");
+      return;
+    }
+
+    setShiftSubmitting(true);
+    clearFeedback();
+    try {
+      const shift = await closePosShift({
+        token,
+        empresaId,
+        payload: {
+          warehouse_id: selectedWarehouseId,
+          efectivo_contado: closeShiftForm.efectivo_contado === "" ? "0" : closeShiftForm.efectivo_contado,
+          notas: closeShiftForm.notas || null,
+        },
+      });
+      setActiveShift(null);
+      setCloseShiftForm(defaultCloseShiftForm);
+      setCloseShiftModalOpen(false);
+      setSuccess(`Turno ${shift.folio} cerrado.`);
+      await refreshPosData({ keepTicket: false });
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo cerrar el turno.");
+    } finally {
+      setShiftSubmitting(false);
     }
   }
 
@@ -924,10 +1085,7 @@ export default function PosPage() {
     setSubmitting(true);
     clearFeedback();
     try {
-      const { saleDetail, ticket } = await loadSaleArtifacts(record.id);
-      setSelectedSale(saleDetail);
-      setSelectedTicket(ticket);
-      setSelectedDraft(null);
+      await loadSaleArtifacts(record.id);
       setDetailModalOpen(true);
     } catch (requestError) {
       setError(requestError.message || "No se pudo cargar la venta.");
@@ -988,10 +1146,7 @@ export default function PosPage() {
         </div>
 
         <div className="pos-page-header-meta">
-          <StatusBadge
-            label={TURNOS_AVAILABLE ? "Turno activo" : "Sin turno"}
-            tone={TURNOS_AVAILABLE ? "success" : "warning"}
-          />
+          <StatusBadge label={hasActiveShift ? "Turno activo" : "Sin turno"} tone={hasActiveShift ? "success" : "warning"} />
           <label className="pos-warehouse-selector">
             <span>Almacén activo</span>
             <select
@@ -1095,34 +1250,49 @@ export default function PosPage() {
               ) : (
                 <>
                   <div className="pos-catalog-grid">
-                    {catalogItems.map((item) => (
-                      <article className="pos-catalog-card" key={item.material_id}>
-                        <div className="pos-catalog-card-top">
-                          <div>
-                            <strong>{item.nombre}</strong>
-                            <p className="table-note">{item.sku}</p>
+                    {catalogItems.map((item) => {
+                      const hasPrice = Number(item.precio || 0) > 0;
+                      return (
+                        <article className="pos-catalog-card" key={item.material_id}>
+                          <div className="pos-catalog-card-top">
+                            <div>
+                              <strong>{item.nombre}</strong>
+                              <p className="table-note">{item.sku}</p>
+                            </div>
+                            <div className="inventory-badge-stack">
+                              <StatusBadge
+                                label={Number(item.existencia || 0) > 0 ? "Disponible" : "Agotado"}
+                                tone={
+                                  Number(item.existencia || 0) > 0
+                                    ? item.stock_bajo
+                                      ? "warning"
+                                      : "success"
+                                    : "danger"
+                                }
+                              />
+                              {!hasPrice ? <StatusBadge label="Sin precio" tone="warning" /> : null}
+                            </div>
                           </div>
-                          <StatusBadge
-                            label={Number(item.existencia || 0) > 0 ? "Disponible" : "Agotado"}
-                            tone={Number(item.existencia || 0) > 0 ? (item.stock_bajo ? "warning" : "success") : "danger"}
-                          />
-                        </div>
-                        <div className="pos-catalog-card-meta">
-                          <span>{formatMoney(item.precio)}</span>
-                          <span>
-                            {formatNumber(item.existencia)} {item.unidad}
-                          </span>
-                        </div>
-                        <button
-                          className="ghost-button"
-                          disabled={Number(item.existencia || 0) <= 0}
-                          onClick={() => addToCart(item)}
-                          type="button"
-                        >
-                          Agregar
-                        </button>
-                      </article>
-                    ))}
+                          <div className="pos-catalog-card-meta">
+                            <span>{formatMoney(item.precio)}</span>
+                            <span>
+                              {formatNumber(item.existencia)} {item.unidad}
+                            </span>
+                          </div>
+                          {!hasPrice ? (
+                            <p className="table-note">Este producto no tiene precio de venta configurado.</p>
+                          ) : null}
+                          <button
+                            className="ghost-button"
+                            disabled={Number(item.existencia || 0) <= 0}
+                            onClick={() => addToCart(item)}
+                            type="button"
+                          >
+                            Agregar
+                          </button>
+                        </article>
+                      );
+                    })}
                   </div>
 
                   <PaginationControls
@@ -1148,6 +1318,7 @@ export default function PosPage() {
                 <div className="pos-cart-list">
                   {cart.map((item) => {
                     const lineHasStockIssue = Number(item.cantidad || 0) > Number(item.existencia || 0);
+                    const lineHasMissingPrice = Number(item.precio_unitario || 0) <= 0;
                     return (
                       <article className="pos-cart-row" key={item.material_id}>
                         <div className="pos-cart-main">
@@ -1173,7 +1344,16 @@ export default function PosPage() {
                           </label>
                           <label>
                             Precio
-                            <input disabled type="text" value={formatMoney(item.precio_unitario)} />
+                            <input
+                              min="0"
+                              onChange={(event) =>
+                                updateCartLine(item.material_id, "precio_unitario", event.target.value)
+                              }
+                              placeholder="0.00"
+                              step="0.01"
+                              type="number"
+                              value={item.precio_unitario}
+                            />
                           </label>
                           <label>
                             Descuento
@@ -1191,6 +1371,11 @@ export default function PosPage() {
                             <span className="table-note">
                               Disponible: {formatNumber(item.existencia)} {item.unidad}
                             </span>
+                            {lineHasMissingPrice ? (
+                              <span className="form-error">
+                                Configura o captura un precio de venta para este producto.
+                              </span>
+                            ) : null}
                             {lineHasStockIssue ? (
                               <span className="form-error">La cantidad excede el stock disponible.</span>
                             ) : null}
@@ -1220,11 +1405,26 @@ export default function PosPage() {
                 <p className="eyebrow">Pago</p>
                 <h2>Pago</h2>
                 <p className="table-note">
-                  {TURNOS_AVAILABLE
-                    ? "Turno activo para cobrar."
-                    : "Esta fase cobra directo desde el almacén activo. Caja / Turnos queda pendiente."}
+                  {hasActiveShift
+                    ? `Turno activo: ${safeText(activeShift?.folio)}`
+                    : "Abre caja para poder cobrar ventas."}
                 </p>
               </div>
+
+              {!hasActiveShift ? (
+                <div className="inventory-form-note inventory-form-note-warning pos-shift-warning">
+                  <div className="pos-inline-alert">
+                    <LockKeyhole size={18} />
+                    <div>
+                      <strong>Abre caja para poder cobrar ventas.</strong>
+                      <p className="table-note">Puedes armar el carrito, pero el cobro se habilita hasta abrir turno.</p>
+                    </div>
+                  </div>
+                  <button className="ghost-button" onClick={() => updateView("cash")} type="button">
+                    Abrir caja
+                  </button>
+                </div>
+              ) : null}
 
               <div className="pos-payment-summary">
                 <div>
@@ -1338,6 +1538,10 @@ export default function PosPage() {
               </label>
 
               {!selectedWarehouseId ? <p className="form-error">Selecciona un almacén para vender.</p> : null}
+              {!hasActiveShift && selectedWarehouseId ? <p className="form-error">Abre caja para poder cobrar ventas.</p> : null}
+              {cartHasMissingPrice ? (
+                <p className="form-error">Configura o captura un precio de venta para este producto.</p>
+              ) : null}
               {cartHasInvalidQuantity ? (
                 <p className="form-error">Revisa las cantidades del carrito. No pueden exceder el stock disponible.</p>
               ) : null}
@@ -1539,16 +1743,161 @@ export default function PosPage() {
             </div>
 
             <div className="inventory-metric-grid-3">
-              <MetricCard icon={<Clock3 size={18} />} label="Estado actual" meta="Disponible en una fase siguiente" value="Sin turno" />
-              <MetricCard icon={<Store size={18} />} label="Almacén activo" meta="Las ventas actuales operan desde este almacén" value={selectedWarehouse?.nombre ?? "Sin selección"} />
-              <MetricCard icon={<CreditCard size={18} />} label="Cobro operativo" meta="Ventas directas disponibles hoy" value="Activo" />
+              <MetricCard
+                icon={<Clock3 size={18} />}
+                label="Estado actual"
+                meta={selectedWarehouse?.nombre ? `Almacén: ${selectedWarehouse.nombre}` : "Selecciona un almacén"}
+                value={hasActiveShift ? "Turno activo" : "Sin turno"}
+              />
+              <MetricCard
+                icon={<Store size={18} />}
+                label="Almacén activo"
+                meta="Las ventas POS usan este almacén"
+                value={selectedWarehouse?.nombre ?? "Sin selección"}
+              />
+              <MetricCard
+                icon={<CircleDollarSign size={18} />}
+                label="Efectivo esperado"
+                meta="Fondo inicial + ventas en efectivo + ingresos - retiros"
+                value={hasActiveShift ? formatMoney(activeShift?.efectivo_esperado) : formatMoney(0)}
+              />
             </div>
-
-            <EmptyState
-              note="Cuando Caja / Turnos esté disponible, aquí se mostrarán apertura, ingresos, retiros y cierre."
-              title="No hay turno activo"
-            />
           </section>
+
+          {!selectedWarehouseId ? (
+            <section className="feature-card">
+              <EmptyState note="Selecciona un almacén para operar caja." title="Sin almacén activo" />
+            </section>
+          ) : null}
+
+          {selectedWarehouseId && !hasActiveShift ? (
+            <section className="feature-card">
+              <div className="feature-header">
+                <h2>No hay turno activo</h2>
+                <p className="table-note">Abre caja para habilitar el cobro en Punto de Venta.</p>
+              </div>
+
+              <form className="pos-cash-form" onSubmit={handleOpenShift}>
+                <label>
+                  Fondo inicial
+                  <input
+                    min="0"
+                    onChange={(event) =>
+                      setOpenShiftForm((current) => ({
+                        ...current,
+                        fondo_inicial: normalizeDecimalInput(event.target.value),
+                      }))
+                    }
+                    placeholder="0.00"
+                    step="0.01"
+                    type="number"
+                    value={openShiftForm.fondo_inicial}
+                  />
+                </label>
+
+                <label>
+                  Notas de apertura
+                  <textarea
+                    onChange={(event) =>
+                      setOpenShiftForm((current) => ({
+                        ...current,
+                        notas: event.target.value,
+                      }))
+                    }
+                    placeholder="Opcional"
+                    rows={3}
+                    value={openShiftForm.notas}
+                  />
+                </label>
+
+                <div className="pos-bottom-actions">
+                  <button className="primary-button" disabled={shiftSubmitting} type="submit">
+                    {shiftSubmitting ? "Abriendo..." : "Abrir turno"}
+                  </button>
+                </div>
+              </form>
+            </section>
+          ) : null}
+
+          {selectedWarehouseId && hasActiveShift ? (
+            <section className="feature-card">
+              <div className="feature-header">
+                <h2>Turno en curso</h2>
+                <p className="table-note">Resumen operativo de la caja actual.</p>
+              </div>
+
+              <div className="inventory-metric-grid-4">
+                <MetricCard icon={<Wallet size={18} />} label="Fondo inicial" meta={activeShift.folio} value={formatMoney(activeShift.fondo_inicial)} />
+                <MetricCard icon={<BadgeDollarSign size={18} />} label="Ventas totales" meta={`${activeShift.ventas_count} ventas`} value={formatMoney(activeShift.total_ventas)} />
+                <MetricCard icon={<BanknoteArrowUp size={18} />} label="Ingresos manuales" meta="Ajustes de caja" value={formatMoney(activeShift.ingresos_manuales)} />
+                <MetricCard icon={<BanknoteArrowDown size={18} />} label="Retiros manuales" meta="Salidas manuales" value={formatMoney(activeShift.retiros_manuales)} />
+              </div>
+
+              <div className="inventory-metric-grid-4">
+                <MetricCard icon={<CircleDollarSign size={18} />} label="Efectivo" meta="Ventas en efectivo" value={formatMoney(activeShift.total_efectivo)} />
+                <MetricCard icon={<CreditCard size={18} />} label="Tarjeta" meta="Ventas con tarjeta" value={formatMoney(activeShift.total_tarjeta)} />
+                <MetricCard icon={<ReceiptText size={18} />} label="Transferencia" meta="Ventas por transferencia" value={formatMoney(activeShift.total_transferencia)} />
+                <MetricCard icon={<Ticket size={18} />} label="Otro" meta="Otros cobros" value={formatMoney(activeShift.total_otro)} />
+              </div>
+
+              <div className="inventory-actions">
+                <button className="ghost-button" onClick={() => setShiftMovementModalType("ingreso")} type="button">
+                  <BanknoteArrowUp size={16} />
+                  <span>Ingreso manual</span>
+                </button>
+                <button className="ghost-button" onClick={() => setShiftMovementModalType("retiro")} type="button">
+                  <BanknoteArrowDown size={16} />
+                  <span>Retiro manual</span>
+                </button>
+                <button
+                  className="primary-button"
+                  onClick={() => {
+                    setCloseShiftForm((current) => ({
+                      ...current,
+                      efectivo_contado: expectedCash ? String(expectedCash.toFixed(2)) : "",
+                    }));
+                    setCloseShiftModalOpen(true);
+                  }}
+                  type="button"
+                >
+                  Cerrar turno
+                </button>
+              </div>
+
+              <div className="table-wrap">
+                <table className="inventory-table">
+                  <thead>
+                    <tr>
+                      <th>Tipo</th>
+                      <th>Monto</th>
+                      <th>Motivo</th>
+                      <th>Usuario</th>
+                      <th>Fecha</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeShift.movimientos.length === 0 ? (
+                      <tr>
+                        <td colSpan={5}>
+                          <p className="table-note">No hay movimientos manuales en este turno.</p>
+                        </td>
+                      </tr>
+                    ) : (
+                      activeShift.movimientos.map((movement) => (
+                        <tr key={movement.id}>
+                          <td>{movement.tipo === "ingreso" ? "Ingreso manual" : "Retiro manual"}</td>
+                          <td>{formatMoney(movement.monto)}</td>
+                          <td>{movement.motivo}</td>
+                          <td>{movement.usuario_nombre}</td>
+                          <td>{formatDateTime(movement.created_at)}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ) : null}
         </div>
       ) : null}
 
@@ -1773,6 +2122,127 @@ export default function PosPage() {
             ) : null}
           </div>
         )}
+      </PosModal>
+
+      <PosModal
+        footer={
+          <div className="inventory-actions">
+            <button className="ghost-button" onClick={() => setShiftMovementModalType("")} type="button">
+              Cancelar
+            </button>
+            <button className="primary-button" disabled={shiftSubmitting} form="pos-shift-movement-form" type="submit">
+              {shiftSubmitting
+                ? "Guardando..."
+                : shiftMovementModalType === "ingreso"
+                  ? "Registrar ingreso"
+                  : "Registrar retiro"}
+            </button>
+          </div>
+        }
+        onClose={() => setShiftMovementModalType("")}
+        open={Boolean(shiftMovementModalType)}
+        subtitle="Ajusta caja sin afectar inventario."
+        title={shiftMovementModalType === "ingreso" ? "Ingreso manual" : "Retiro manual"}
+      >
+        <form className="pos-cash-form" id="pos-shift-movement-form" onSubmit={handleShiftMovementSubmit}>
+          <label>
+            Monto
+            <input
+              min="0.01"
+              onChange={(event) =>
+                setShiftMovementForm((current) => ({
+                  ...current,
+                  monto: normalizeDecimalInput(event.target.value),
+                }))
+              }
+              placeholder="0.00"
+              step="0.01"
+              type="number"
+              value={shiftMovementForm.monto}
+            />
+          </label>
+
+          <label>
+            Motivo
+            <textarea
+              onChange={(event) =>
+                setShiftMovementForm((current) => ({
+                  ...current,
+                  motivo: event.target.value,
+                }))
+              }
+              placeholder="Describe el motivo"
+              rows={3}
+              value={shiftMovementForm.motivo}
+            />
+          </label>
+        </form>
+      </PosModal>
+
+      <PosModal
+        footer={
+          <div className="inventory-actions">
+            <button className="ghost-button" onClick={() => setCloseShiftModalOpen(false)} type="button">
+              Cancelar
+            </button>
+            <button className="primary-button" disabled={shiftSubmitting} form="pos-close-shift-form" type="submit">
+              {shiftSubmitting ? "Cerrando..." : "Confirmar cierre"}
+            </button>
+          </div>
+        }
+        onClose={() => setCloseShiftModalOpen(false)}
+        open={closeShiftModalOpen}
+        subtitle="Confirma el efectivo contado y cierra el turno actual."
+        title="Cerrar turno"
+      >
+        <form className="pos-cash-form" id="pos-close-shift-form" onSubmit={handleCloseShiftSubmit}>
+          <div className="pos-payment-summary pos-payment-secondary">
+            <div>
+              <span>Efectivo esperado</span>
+              <strong>{formatMoney(expectedCash)}</strong>
+            </div>
+            <div>
+              <span>Efectivo contado</span>
+              <strong>{formatMoney(countedCash)}</strong>
+            </div>
+            <div className={closeShiftDifference === 0 ? "" : closeShiftDifference > 0 ? "inventory-value-positive" : "inventory-value-negative"}>
+              <span>Diferencia</span>
+              <strong>{formatMoney(closeShiftDifference)}</strong>
+            </div>
+          </div>
+
+          <label>
+            Efectivo contado
+            <input
+              min="0"
+              onChange={(event) =>
+                setCloseShiftForm((current) => ({
+                  ...current,
+                  efectivo_contado: normalizeDecimalInput(event.target.value),
+                }))
+              }
+              placeholder="0.00"
+              step="0.01"
+              type="number"
+              value={closeShiftForm.efectivo_contado}
+            />
+          </label>
+
+          <label>
+            Notas de cierre
+            <textarea
+              onChange={(event) =>
+                setCloseShiftForm((current) => ({
+                  ...current,
+                  notas: event.target.value,
+                }))
+              }
+              placeholder="Opcional"
+              rows={3}
+              value={closeShiftForm.notas}
+            />
+          </label>
+        </form>
       </PosModal>
 
       <BarcodeScannerModal

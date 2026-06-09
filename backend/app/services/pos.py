@@ -6,12 +6,15 @@ from uuid import uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import desc, func, select
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 
-from app.models import AuditLog, Empresa, Usuario, Venta, VentaDetalle
+from app.models import AuditLog, Empresa, PosTurnoCaja, PosTurnoCajaMovimiento, Usuario, Venta, VentaDetalle
 from app.models.inventory import Almacen, Existencia, Material
 from app.schemas.pos import (
+    PosActiveShiftResponse,
     PosCatalogItem,
+    PosShiftMovementResponse,
+    PosShiftResponse,
     PosTicketResponse,
     SaleDetailItem,
     SaleItem,
@@ -29,7 +32,6 @@ from app.services.inventory import (
     get_warehouse_for_company,
     normalize_code,
     normalize_optional_text,
-    normalize_query_text,
     normalize_required_text,
 )
 
@@ -51,12 +53,27 @@ def generate_sale_folio() -> str:
     return f"VTA-{timestamp}-{suffix}"
 
 
+def generate_shift_folio() -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    suffix = str(uuid4())[:6].upper()
+    return f"CAJA-{timestamp}-{suffix}"
+
+
 def normalize_sale_folio(value: str | None) -> str:
     if value is None:
         return generate_sale_folio()
     cleaned = value.strip()
     if not cleaned:
         return generate_sale_folio()
+    return normalize_code(cleaned, "Folio")
+
+
+def normalize_shift_folio(value: str | None) -> str:
+    if value is None:
+        return generate_shift_folio()
+    cleaned = value.strip()
+    if not cleaned:
+        return generate_shift_folio()
     return normalize_code(cleaned, "Folio")
 
 
@@ -79,6 +96,18 @@ def ensure_unique_sale_folio(db: Session, empresa_id: str, folio: str, sale_id: 
         )
 
 
+def ensure_unique_shift_folio(db: Session, empresa_id: str, folio: str, shift_id: str | None = None) -> None:
+    query = select(PosTurnoCaja.id).where(PosTurnoCaja.empresa_id == empresa_id, PosTurnoCaja.folio == folio)
+    if shift_id:
+        query = query.where(PosTurnoCaja.id != shift_id)
+    existing = db.scalar(query)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El folio del turno ya existe en esta empresa.",
+        )
+
+
 def get_sale_for_company(
     db: Session,
     empresa_id: str,
@@ -93,6 +122,39 @@ def get_sale_for_company(
     if not sale:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venta no encontrada.")
     return sale
+
+
+def get_shift_for_company(
+    db: Session,
+    empresa_id: str,
+    shift_id: str,
+    *,
+    for_update: bool = False,
+) -> PosTurnoCaja:
+    query = select(PosTurnoCaja).where(PosTurnoCaja.id == shift_id, PosTurnoCaja.empresa_id == empresa_id)
+    if for_update:
+        query = query.with_for_update()
+    shift = db.scalar(query)
+    if not shift:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Turno de caja no encontrado.")
+    return shift
+
+
+def get_active_shift_for_company(
+    db: Session,
+    empresa_id: str,
+    warehouse_id: str,
+    *,
+    for_update: bool = False,
+) -> PosTurnoCaja | None:
+    query = select(PosTurnoCaja).where(
+        PosTurnoCaja.empresa_id == empresa_id,
+        PosTurnoCaja.almacen_id == warehouse_id,
+        PosTurnoCaja.estatus == "abierta",
+    )
+    if for_update:
+        query = query.with_for_update()
+    return db.scalar(query.order_by(desc(PosTurnoCaja.opened_at), desc(PosTurnoCaja.id)))
 
 
 def get_active_sale_warehouse(db: Session, empresa_id: str, warehouse_id: str) -> Almacen:
@@ -155,13 +217,22 @@ def serialize_sale_detail(detail: VentaDetalle) -> SaleDetailItem:
     )
 
 
-def build_sale_item(sale: Venta, almacen_nombre: str, vendedor_nombre: str, items_count: int) -> SaleItem:
+def build_sale_item(
+    sale: Venta,
+    almacen_nombre: str,
+    vendedor_nombre: str,
+    items_count: int,
+    *,
+    turno_folio: str | None = None,
+) -> SaleItem:
     return SaleItem(
         id=sale.id,
         empresa_id=sale.empresa_id,
         folio=sale.folio,
         almacen_id=sale.almacen_id,
         almacen_nombre=almacen_nombre,
+        turno_id=sale.turno_id,
+        turno_folio=turno_folio,
         usuario_id=sale.usuario_id,
         vendedor_nombre=vendedor_nombre,
         cliente_nombre=sale.cliente_nombre,
@@ -189,7 +260,13 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
         .where(VentaDetalle.venta_id == sale.id)
         .order_by(VentaDetalle.nombre_snapshot.asc(), VentaDetalle.sku_snapshot.asc(), VentaDetalle.id.asc())
     ).all()
-    summary = build_sale_item(sale, sale.almacen.nombre, sale.usuario.full_name, len(details))
+    summary = build_sale_item(
+        sale,
+        sale.almacen.nombre,
+        sale.usuario.full_name,
+        len(details),
+        turno_folio=sale.turno.folio if sale.turno else None,
+    )
     return SaleResponse(**summary.model_dump(), details=[serialize_sale_detail(detail) for detail in details])
 
 
@@ -202,6 +279,7 @@ def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
     return PosTicketResponse(
         id=sale.id,
         folio=sale.folio,
+        turno_folio=sale.turno.folio if sale.turno else None,
         fecha=sale.created_at,
         empresa=sale.empresa.name,
         almacen=sale.almacen.nombre,
@@ -283,18 +361,20 @@ def list_sales(
             Venta,
             Almacen.nombre.label("almacen_nombre"),
             Usuario.full_name.label("vendedor_nombre"),
+            PosTurnoCaja.folio.label("turno_folio"),
             func.coalesce(detail_count_subquery.c.detail_count, 0).label("detail_count"),
         )
         .join(Almacen, Venta.almacen_id == Almacen.id)
         .join(Usuario, Venta.usuario_id == Usuario.id)
+        .outerjoin(PosTurnoCaja, Venta.turno_id == PosTurnoCaja.id)
         .outerjoin(detail_count_subquery, detail_count_subquery.c.venta_id == Venta.id)
         .where(Venta.id.in_(page_ids))
         .order_by(desc(Venta.created_at), desc(Venta.id))
     ).all()
 
     items = [
-        build_sale_item(sale, almacen_nombre, vendedor_nombre, int(detail_count))
-        for sale, almacen_nombre, vendedor_nombre, detail_count in rows
+        build_sale_item(sale, almacen_nombre, vendedor_nombre, int(detail_count), turno_folio=turno_folio)
+        for sale, almacen_nombre, vendedor_nombre, turno_folio, detail_count in rows
     ]
     return total, items
 
@@ -353,7 +433,7 @@ def get_pos_catalog(
             sku=material.sku,
             nombre=material.nombre,
             unidad=material.unidad,
-            precio=material.precio_venta,
+            precio=material.precio_venta or ZERO,
             existencia=cantidad,
             stock_minimo=material.stock_minimo,
             stock_bajo=Decimal(cantidad) <= Decimal(material.stock_minimo),
@@ -361,6 +441,264 @@ def get_pos_catalog(
         for material, cantidad in rows
     ]
     return total, items
+
+
+def calculate_expected_cash(shift: PosTurnoCaja) -> Decimal:
+    return (
+        Decimal(shift.fondo_inicial or ZERO)
+        + Decimal(shift.total_efectivo or ZERO)
+        + Decimal(shift.ingresos_manuales or ZERO)
+        - Decimal(shift.retiros_manuales or ZERO)
+    )
+
+
+def get_shift_sales_count(db: Session, shift_id: str) -> int:
+    return int(
+        db.scalar(
+            select(func.count(Venta.id)).where(
+                Venta.turno_id == shift_id,
+                Venta.estatus == "pagada",
+            )
+        )
+        or 0
+    )
+
+
+def serialize_shift_movement(movement: PosTurnoCajaMovimiento) -> PosShiftMovementResponse:
+    return PosShiftMovementResponse(
+        id=movement.id,
+        tipo=movement.tipo,
+        monto=movement.monto,
+        motivo=movement.motivo,
+        usuario_id=movement.usuario_id,
+        usuario_nombre=movement.usuario.full_name,
+        created_at=movement.created_at,
+    )
+
+
+def serialize_shift_response(db: Session, shift: PosTurnoCaja) -> PosShiftResponse:
+    movements = db.scalars(
+        select(PosTurnoCajaMovimiento)
+        .where(PosTurnoCajaMovimiento.turno_id == shift.id)
+        .order_by(desc(PosTurnoCajaMovimiento.created_at), desc(PosTurnoCajaMovimiento.id))
+    ).all()
+    return PosShiftResponse(
+        id=shift.id,
+        empresa_id=shift.empresa_id,
+        almacen_id=shift.almacen_id,
+        almacen_nombre=shift.almacen.nombre,
+        folio=shift.folio,
+        estatus=shift.estatus,
+        usuario_apertura_id=shift.usuario_apertura_id,
+        usuario_apertura_nombre=shift.usuario_apertura.full_name,
+        usuario_cierre_id=shift.usuario_cierre_id,
+        usuario_cierre_nombre=shift.usuario_cierre.full_name if shift.usuario_cierre else None,
+        fondo_inicial=shift.fondo_inicial,
+        total_ventas=shift.total_ventas,
+        total_efectivo=shift.total_efectivo,
+        total_tarjeta=shift.total_tarjeta,
+        total_transferencia=shift.total_transferencia,
+        total_otro=shift.total_otro,
+        ingresos_manuales=shift.ingresos_manuales,
+        retiros_manuales=shift.retiros_manuales,
+        efectivo_esperado=calculate_expected_cash(shift),
+        efectivo_contado=shift.efectivo_contado,
+        diferencia=shift.diferencia,
+        notas_apertura=shift.notas_apertura,
+        notas_cierre=shift.notas_cierre,
+        opened_at=shift.opened_at,
+        closed_at=shift.closed_at,
+        ventas_count=get_shift_sales_count(db, shift.id),
+        movimientos=[serialize_shift_movement(movement) for movement in movements],
+    )
+
+
+def get_active_shift_response(db: Session, empresa_id: str, warehouse_id: str) -> PosActiveShiftResponse:
+    get_warehouse_for_company(db, empresa_id, warehouse_id)
+    shift = get_active_shift_for_company(db, empresa_id, warehouse_id)
+    return PosActiveShiftResponse(active_shift=serialize_shift_response(db, shift) if shift else None)
+
+
+def adjust_shift_totals_for_sale(
+    shift: PosTurnoCaja,
+    *,
+    sale_total: Decimal,
+    payment_method: str,
+    reverse: bool = False,
+) -> None:
+    multiplier = Decimal("-1") if reverse else Decimal("1")
+    amount = Decimal(sale_total) * multiplier
+    shift.total_ventas = Decimal(shift.total_ventas or ZERO) + amount
+    if payment_method == "efectivo":
+        shift.total_efectivo = Decimal(shift.total_efectivo or ZERO) + amount
+    elif payment_method == "tarjeta":
+        shift.total_tarjeta = Decimal(shift.total_tarjeta or ZERO) + amount
+    elif payment_method == "transferencia":
+        shift.total_transferencia = Decimal(shift.total_transferencia or ZERO) + amount
+    else:
+        shift.total_otro = Decimal(shift.total_otro or ZERO) + amount
+
+
+def refresh_closed_shift_difference(shift: PosTurnoCaja) -> None:
+    if shift.efectivo_contado is None:
+        shift.diferencia = None
+        return
+    shift.diferencia = Decimal(shift.efectivo_contado) - calculate_expected_cash(shift)
+
+
+def open_shift(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    warehouse_id: str,
+    fondo_inicial: Decimal,
+    notas: str | None,
+    ip_address: str | None,
+) -> PosShiftResponse:
+    validate_pos_access(user, empresa)
+    warehouse = get_active_sale_warehouse(db, empresa.id, warehouse_id)
+
+    existing_shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
+    if existing_shift:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe un turno abierto para este almacen.",
+        )
+
+    folio = normalize_shift_folio(None)
+    ensure_unique_shift_folio(db, empresa.id, folio)
+    opened_at = datetime.now(timezone.utc)
+    shift = PosTurnoCaja(
+        empresa_id=empresa.id,
+        almacen_id=warehouse.id,
+        folio=folio,
+        usuario_apertura_id=user.id,
+        estatus="abierta",
+        fondo_inicial=Decimal(fondo_inicial or ZERO),
+        notas_apertura=normalize_optional_text(notas),
+        opened_at=opened_at,
+    )
+    db.add(shift)
+    db.flush()
+
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.shift.open",
+        entity_name="pos_turno_caja",
+        entity_id=shift.id,
+        ip_address=ip_address,
+        metadata_json={
+            "folio": shift.folio,
+            "almacen_id": shift.almacen_id,
+            "fondo_inicial": str(shift.fondo_inicial),
+        },
+    )
+    db.refresh(shift)
+    return serialize_shift_response(db, shift)
+
+
+def close_shift(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    warehouse_id: str,
+    efectivo_contado: Decimal,
+    notas: str | None,
+    ip_address: str | None,
+) -> PosShiftResponse:
+    validate_pos_access(user, empresa)
+    get_warehouse_for_company(db, empresa.id, warehouse_id)
+    shift = get_active_shift_for_company(db, empresa.id, warehouse_id, for_update=True)
+    if not shift:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No hay turno activo para este almacen.",
+        )
+
+    shift.efectivo_contado = Decimal(efectivo_contado or ZERO)
+    shift.notas_cierre = normalize_optional_text(notas)
+    shift.usuario_cierre_id = user.id
+    shift.closed_at = datetime.now(timezone.utc)
+    shift.estatus = "cerrada"
+    refresh_closed_shift_difference(shift)
+    db.flush()
+
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.shift.close",
+        entity_name="pos_turno_caja",
+        entity_id=shift.id,
+        ip_address=ip_address,
+        metadata_json={
+            "folio": shift.folio,
+            "efectivo_contado": str(shift.efectivo_contado),
+            "diferencia": str(shift.diferencia or ZERO),
+        },
+    )
+    db.refresh(shift)
+    return serialize_shift_response(db, shift)
+
+
+def add_shift_manual_movement(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    warehouse_id: str,
+    movement_type: str,
+    amount: Decimal,
+    reason: str,
+    ip_address: str | None,
+) -> PosShiftResponse:
+    validate_pos_access(user, empresa)
+    get_warehouse_for_company(db, empresa.id, warehouse_id)
+    shift = get_active_shift_for_company(db, empresa.id, warehouse_id, for_update=True)
+    if not shift:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No hay turno activo para este almacen.",
+        )
+
+    normalized_reason = normalize_required_text(reason, "Motivo")
+    movement = PosTurnoCajaMovimiento(
+        empresa_id=empresa.id,
+        turno_id=shift.id,
+        tipo=movement_type,
+        monto=Decimal(amount),
+        motivo=normalized_reason,
+        usuario_id=user.id,
+    )
+    db.add(movement)
+
+    if movement_type == "ingreso":
+        shift.ingresos_manuales = Decimal(shift.ingresos_manuales or ZERO) + Decimal(amount)
+    else:
+        shift.retiros_manuales = Decimal(shift.retiros_manuales or ZERO) + Decimal(amount)
+    refresh_closed_shift_difference(shift)
+    db.flush()
+
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action=f"pos.shift.{movement_type}",
+        entity_name="pos_turno_caja",
+        entity_id=shift.id,
+        ip_address=ip_address,
+        metadata_json={
+            "folio": shift.folio,
+            "monto": str(amount),
+            "motivo": normalized_reason,
+        },
+    )
+    db.refresh(shift)
+    return serialize_shift_response(db, shift)
 
 
 def create_sale(
@@ -386,6 +724,12 @@ def create_sale(
         )
 
     warehouse = get_active_sale_warehouse(db, empresa.id, almacen_id)
+    shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
+    if not shift:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Abre caja para poder cobrar ventas.",
+        )
 
     resolved_lines: list[dict] = []
     required_stock: dict[str, Decimal] = {}
@@ -401,7 +745,14 @@ def create_sale(
                 detail="La cantidad debe ser mayor a 0.",
             )
 
-        price = Decimal(material.precio_venta)
+        price_override = getattr(item, "precio_unitario", None)
+        price = Decimal(price_override) if price_override is not None else Decimal(material.precio_venta or ZERO)
+        if price < ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El precio unitario no puede ser negativo.",
+            )
+
         discount = Decimal(item.descuento_unitario or ZERO)
         if discount > price:
             raise HTTPException(
@@ -457,6 +808,7 @@ def create_sale(
         empresa_id=empresa.id,
         folio=folio,
         almacen_id=warehouse.id,
+        turno_id=shift.id,
         usuario_id=user.id,
         cliente_nombre=normalize_optional_text(cliente_nombre),
         cliente_email=normalize_customer_email(cliente_email),
@@ -505,6 +857,9 @@ def create_sale(
         )
         detail.movimiento_inventario_id = movement.id
 
+    adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=False)
+    refresh_closed_shift_difference(shift)
+
     create_audit_log(
         db,
         empresa_id=empresa.id,
@@ -516,6 +871,7 @@ def create_sale(
         metadata_json={
             "folio": sale.folio,
             "almacen_id": sale.almacen_id,
+            "turno_id": sale.turno_id,
             "metodo_pago": sale.metodo_pago,
             "subtotal": str(sale.subtotal),
             "descuento_total": str(sale.descuento_total),
@@ -571,6 +927,11 @@ def cancel_sale(
             notas=f"Cancelacion de venta {sale.folio}",
             ip_address=ip_address,
         )
+
+    if sale.turno_id:
+        shift = get_shift_for_company(db, empresa.id, sale.turno_id, for_update=True)
+        adjust_shift_totals_for_sale(shift, sale_total=sale.total, payment_method=sale.metodo_pago, reverse=True)
+        refresh_closed_shift_difference(shift)
 
     sale.estatus = "cancelada"
     sale.cancelled_at = datetime.now(timezone.utc)

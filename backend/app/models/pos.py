@@ -18,6 +18,138 @@ from app.models.base import Base
 from app.models.mixins import UUIDPrimaryKeyMixin, utcnow
 
 
+class PosTurnoCaja(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "pos_turnos_caja"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", "folio", name="uq_pos_turno_empresa_folio"),
+        CheckConstraint("estatus IN ('abierta', 'cerrada', 'cancelada')", name="ck_pos_turno_estatus"),
+        CheckConstraint("fondo_inicial >= 0", name="ck_pos_turno_fondo_inicial_nonnegative"),
+        CheckConstraint("total_ventas >= 0", name="ck_pos_turno_total_ventas_nonnegative"),
+        CheckConstraint("total_efectivo >= 0", name="ck_pos_turno_total_efectivo_nonnegative"),
+        CheckConstraint("total_tarjeta >= 0", name="ck_pos_turno_total_tarjeta_nonnegative"),
+        CheckConstraint("total_transferencia >= 0", name="ck_pos_turno_total_transferencia_nonnegative"),
+        CheckConstraint("total_otro >= 0", name="ck_pos_turno_total_otro_nonnegative"),
+        CheckConstraint("ingresos_manuales >= 0", name="ck_pos_turno_ingresos_nonnegative"),
+        CheckConstraint("retiros_manuales >= 0", name="ck_pos_turno_retiros_nonnegative"),
+        CheckConstraint(
+            "efectivo_contado IS NULL OR efectivo_contado >= 0",
+            name="ck_pos_turno_efectivo_contado_nonnegative",
+        ),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    almacen_id: Mapped[str] = mapped_column(ForeignKey("almacenes.id"), nullable=False, index=True)
+    folio: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
+    usuario_apertura_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
+    usuario_cierre_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    estatus: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="abierta",
+        server_default=text("'abierta'"),
+        index=True,
+    )
+    fondo_inicial: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
+    total_ventas: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    total_efectivo: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    total_tarjeta: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    total_transferencia: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    total_otro: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    ingresos_manuales: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    retiros_manuales: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    efectivo_contado: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    diferencia: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    notas_apertura: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notas_cierre: Mapped[str | None] = mapped_column(Text, nullable=True)
+    opened_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+        server_default=func.now(),
+    )
+
+    empresa = relationship("Empresa")
+    almacen = relationship("Almacen")
+    usuario_apertura = relationship("Usuario", foreign_keys=[usuario_apertura_id])
+    usuario_cierre = relationship("Usuario", foreign_keys=[usuario_cierre_id])
+    movimientos = relationship("PosTurnoCajaMovimiento", back_populates="turno", cascade="all, delete-orphan")
+    ventas = relationship("Venta", back_populates="turno")
+
+
+class PosTurnoCajaMovimiento(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "pos_turnos_caja_movimientos"
+    __table_args__ = (
+        CheckConstraint("tipo IN ('ingreso', 'retiro')", name="ck_pos_turno_mov_tipo"),
+        CheckConstraint("monto > 0", name="ck_pos_turno_mov_monto_positive"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    turno_id: Mapped[str] = mapped_column(ForeignKey("pos_turnos_caja.id"), nullable=False, index=True)
+    tipo: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    monto: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    motivo: Mapped[str] = mapped_column(Text, nullable=False)
+    usuario_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+
+    empresa = relationship("Empresa")
+    turno = relationship("PosTurnoCaja", back_populates="movimientos")
+    usuario = relationship("Usuario")
+
+
 class Venta(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "ventas"
     __table_args__ = (
@@ -41,6 +173,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
     folio: Mapped[str] = mapped_column(String(60), nullable=False, index=True)
     almacen_id: Mapped[str] = mapped_column(ForeignKey("almacenes.id"), nullable=False, index=True)
+    turno_id: Mapped[str | None] = mapped_column(ForeignKey("pos_turnos_caja.id"), nullable=True, index=True)
     usuario_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
     cliente_nombre: Mapped[str | None] = mapped_column(String(160), nullable=True)
     cliente_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -71,6 +204,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
 
     empresa = relationship("Empresa")
     almacen = relationship("Almacen")
+    turno = relationship("PosTurnoCaja", back_populates="ventas")
     usuario = relationship("Usuario", foreign_keys=[usuario_id])
     cancelled_by_user = relationship("Usuario", foreign_keys=[cancelled_by_user_id])
     detalles = relationship("VentaDetalle", back_populates="venta", cascade="all, delete-orphan")

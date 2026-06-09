@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
@@ -760,7 +760,8 @@ export default function MaterialsPage() {
                 { key: "stock", label: "Stock actual" },
                 { key: "minimo", label: "Stock mínimo" },
                 { key: "unidad", label: "Unidad" },
-                { key: "costo", label: "Costo promedio" },
+                { key: "costo", label: "Costo de referencia" },
+                { key: "precio", label: "Precio de venta" },
                 { key: "valor", label: "Valor inventario" },
                 { key: "estado", label: "Estado" },
                 { key: "acciones", label: "Acciones" },
@@ -804,7 +805,8 @@ export default function MaterialsPage() {
                       <td>{formatNumber(material.stock_total)}</td>
                       <td>{formatNumber(material.stock_minimo)}</td>
                       <td>{safeDisplayText(material.unidad)}</td>
-                      <td>{formatMoney(material.costo_promedio_actual ?? material.costo_unitario)}</td>
+                      <td>{formatMoney(material.costo_unitario)}</td>
+                      <td>{formatMoney(material.precio_venta)}</td>
                       <td>{formatMoney(material.valor_inventario)}</td>
                       <td>
                         <div className="inventory-badge-stack">
@@ -820,7 +822,7 @@ export default function MaterialsPage() {
                         </button>
                         {material.stock_bajo ? (
                           <button className="link-button" onClick={() => handleCreateRequisition(material)} type="button">
-                            Crear requisicion
+                            Crear requisición
                           </button>
                         ) : null}
                         <button className="link-button" onClick={() => toggleMaterialStatus(material)} type="button">
@@ -1006,7 +1008,7 @@ export default function MaterialsPage() {
                 />
               </Field>
 
-              <Field hint="Déjalo vacío para usar el costo actual del material." label="Costo de referencia, opcional">
+              <Field hint="Se usa para costos internos e inventario. Déjalo vacío para usar el costo actual del material." label="Costo de referencia, opcional">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -1022,7 +1024,7 @@ export default function MaterialsPage() {
                 />
               </Field>
 
-              <Field hint="Opcional. Se usa como referencia si ya conoces el costo actual." label="Costo promedio actual">
+              <Field hint="Opcional. Se usa como referencia interna si ya conoces el costo actual." label="Costo promedio actual">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -1038,7 +1040,7 @@ export default function MaterialsPage() {
                 />
               </Field>
 
-              <Field hint="Opcional" label="Precio de venta, opcional">
+              <Field hint="Se usa en POS para cobrar al cliente." label="Precio de venta, opcional">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -1213,3 +1215,7 @@ export default function MaterialsPage() {
     </div>
   );
 }
+
+
+
+
