@@ -2,7 +2,7 @@ import logging
 from datetime import date
 from typing import Callable, Literal, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,7 @@ from app.schemas.procurement import (
     SupplierUpdateRequest,
 )
 from app.services.inventory import get_warehouse_for_company, validate_inventory_access
+from app.services.documents_pdf import build_purchase_order_pdf
 from app.services.procurement import (
     add_purchase_order_detail,
     add_requisition_detail,
@@ -583,6 +584,22 @@ def purchase_order_detail(
 ) -> PurchaseOrderResponse:
     order = get_purchase_order_for_company(db, context.empresa.id, order_id)
     return serialize_purchase_order_response(db, order)
+
+
+@router.get("/purchase-orders/{order_id}/pdf")
+def purchase_order_pdf(
+    order_id: str,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> Response:
+    order = get_purchase_order_for_company(db, context.empresa.id, order_id)
+    response = serialize_purchase_order_response(db, order)
+    pdf_bytes, filename = build_purchase_order_pdf(context.empresa, response)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/purchase-orders/{order_id}", response_model=PurchaseOrderResponse)

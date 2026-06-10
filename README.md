@@ -1604,6 +1604,16 @@ Las órdenes de compra ya siguen el flujo base:
 - `POS > Facturación` sigue siendo la bandeja operativa de mostrador y ahora enlaza a la bandeja fiscal central.
 - Esta fase no timbra CFDI, no genera XML fiscal y no integra Factura.com.
 
+## Documentos PDF Fase 1 - Estimaciones PM y ordenes de compra
+
+- Las estimaciones PM ya pueden exportarse como PDF desde su listado y su detalle.
+- Las ordenes de compra ya pueden exportarse como PDF desde Inventario / Compras.
+- Ambos documentos usan los datos disponibles de la empresa: nombre comercial, razon social, RFC, direccion, email y telefono.
+- Si la empresa no tiene logo disponible, el documento cae en un encabezado textual sin romper la exportacion.
+- La estimacion PDF incluye proyecto, cliente, periodo, partidas, subtotal, retencion, anticipo, total neto y notas.
+- La orden de compra PDF incluye proveedor, almacen destino, renglones, subtotal, impuestos, total y notas.
+- Ambos PDFs incluyen la leyenda `Documento operativo. No es comprobante fiscal.`.
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados

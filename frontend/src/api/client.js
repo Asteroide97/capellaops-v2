@@ -254,6 +254,79 @@ export async function uploadFormDataRequest(path, { formData, token, empresaId }
 }
 
 
+function extractFilenameFromDisposition(value, fallback = "documento.pdf") {
+  const disposition = String(value || "");
+  const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utfMatch?.[1]) {
+    try {
+      return decodeURIComponent(utfMatch[1]);
+    } catch {
+      return utfMatch[1];
+    }
+  }
+  const basicMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  if (basicMatch?.[1]) {
+    return basicMatch[1];
+  }
+  return fallback;
+}
+
+
+export async function downloadFileRequest(path, { token, empresaId, filenameFallback = "documento.pdf" } = {}) {
+  const url = `${API_URL}${path}`;
+  const headers = {};
+
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  if (empresaId) {
+    headers["X-Empresa-Id"] = empresaId;
+  }
+
+  logApiDebug("request", {
+    url,
+    method: "GET",
+    body: null,
+    has_auth: Boolean(token),
+    has_empresa_id: Boolean(empresaId),
+  });
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      headers,
+    });
+  } catch {
+    throw new ApiError("No se pudo conectar con el backend");
+  }
+
+  if (!response.ok) {
+    const isJson = response.headers.get("content-type")?.includes("application/json");
+    const data = isJson ? await response.json() : null;
+    const text = isJson ? "" : (await response.text()).trim();
+    const detailMessage = normalizeApiMessage(data?.detail, "");
+    throw new ApiError(
+      detailMessage || text || (response.status >= 500 ? "Error interno de servidor" : "No se pudo completar la solicitud."),
+      response.status,
+    );
+  }
+
+  const blob = await response.blob();
+  const filename = extractFilenameFromDisposition(response.headers.get("content-disposition"), filenameFallback);
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  URL.revokeObjectURL(objectUrl);
+  return { filename };
+}
+
+
 function appendQueryValue(query, key, value) {
   if (value !== undefined && value !== null && value !== "") {
     query.set(key, key === "limit" ? String(clampLimit(value)) : String(value));
@@ -1638,6 +1711,15 @@ export function getPmEstimation({ estimationId, token, empresaId }) {
 }
 
 
+export function downloadPmEstimationPdf({ estimationId, token, empresaId }) {
+  return downloadFileRequest(`/pm/estimations/${estimationId}/pdf`, {
+    token,
+    empresaId,
+    filenameFallback: "estimacion.pdf",
+  });
+}
+
+
 export function updatePmEstimation({ estimationId, token, empresaId, payload }) {
   return apiRequest(`/pm/estimations/${estimationId}`, {
     method: "PUT",
@@ -2278,6 +2360,15 @@ export function listPurchaseOrders({ token, empresaId, filters = {} }) {
 
 export function getPurchaseOrderDetail({ orderId, token, empresaId }) {
   return apiRequest(`/inventory/purchase-orders/${orderId}`, { token, empresaId });
+}
+
+
+export function downloadPurchaseOrderPdf({ orderId, token, empresaId }) {
+  return downloadFileRequest(`/inventory/purchase-orders/${orderId}/pdf`, {
+    token,
+    empresaId,
+    filenameFallback: "orden-compra.pdf",
+  });
 }
 
 

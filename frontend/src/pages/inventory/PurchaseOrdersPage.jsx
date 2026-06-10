@@ -5,6 +5,7 @@ import {
   ClipboardList,
   DollarSign,
   Eye,
+  FileDown,
   PackageCheck,
   Pencil,
   Plus,
@@ -20,6 +21,7 @@ import {
   cancelPurchaseOrder,
   createPurchaseOrder,
   deletePurchaseOrderDetail,
+  downloadPurchaseOrderPdf,
   getMaterials,
   getPurchaseOrderDetail,
   getSuppliers,
@@ -203,6 +205,7 @@ export default function PurchaseOrdersPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [receiveOpen, setReceiveOpen] = useState(false);
   const [selectedOrder, setSelectedOrder] = useState(null);
+  const [pdfLoadingId, setPdfLoadingId] = useState("");
   const [editorForm, setEditorForm] = useState(defaultEditorForm);
   const [editorLines, setEditorLines] = useState([]);
   const [materialSearch, setMaterialSearch] = useState("");
@@ -299,6 +302,25 @@ export default function PurchaseOrdersPage() {
       setError(requestError.message || "No se pudo cargar el detalle de la orden.");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleDownloadOrderPdf(orderId) {
+    if (!orderId) {
+      return;
+    }
+    setPdfLoadingId(orderId);
+    setError("");
+    setSuccess("");
+    try {
+      await downloadPurchaseOrderPdf({ empresaId, orderId, token });
+      const knownOrder = orders.find((item) => item.id === orderId) || selectedOrder;
+      const folio = knownOrder?.folio || "la orden";
+      setSuccess(`PDF de ${folio} listo para descarga.`);
+    } catch (requestError) {
+      setError(requestError.message || "No se pudo exportar la orden de compra en PDF.");
+    } finally {
+      setPdfLoadingId("");
     }
   }
 
@@ -844,6 +866,9 @@ export default function PurchaseOrdersPage() {
                       <button className="link-button" onClick={() => openDetailModal(order.id)} type="button">
                         Ver detalle
                       </button>
+                      <button className="link-button" onClick={() => handleDownloadOrderPdf(order.id)} type="button">
+                        Exportar PDF
+                      </button>
                       {canEditOrder(order) ? (
                         <button className="link-button" onClick={() => openEditModal(order.id)} type="button">
                           Editar
@@ -1094,6 +1119,16 @@ export default function PurchaseOrdersPage() {
       <ModalShell
         footer={
           <>
+            {selectedOrder ? (
+              <ActionButton
+                disabled={pdfLoadingId === selectedOrder.id}
+                icon={<FileDown size={16} />}
+                onClick={() => handleDownloadOrderPdf(selectedOrder.id)}
+                type="button"
+              >
+                Exportar PDF
+              </ActionButton>
+            ) : null}
             {selectedOrder && canEditOrder(selectedOrder) ? (
               <ActionButton
                 icon={<Pencil size={16} />}

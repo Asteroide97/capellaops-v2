@@ -100,7 +100,7 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | Inventario | OC recepcion total | Implementado | Alta | Compras F1 | Ya cierra la orden como `recibida` cuando todo el documento fue recibido. | Cierre operativo incompleto. |
 | Inventario | OC -> Inventario | Implementado | Alta | Compras F1 | La recepcion crea entradas y aumenta existencias desde backend transaccional. | Stock no conectado al documento fuente. |
 | Inventario | OC -> Kardex / movimientos | Parcial | Alta | Compras F1 | La trazabilidad ya existe por `movimientos_inventario` con `purchase_order_receive`, pero aun no hay historial formal de recepciones separado. | Auditoria documental menos clara. |
-| Inventario | PDF OC | Pendiente | Media | Compras F2 | No implementado. | Envio manual o externo del documento. |
+| Inventario | PDF OC | Implementado MVP | Media | Documentos PDF F1 | La orden de compra ya puede exportarse como PDF operativo con datos de empresa, proveedor, renglones, totales y notas. | Sigue sin ser CFDI ni documento fiscal. |
 | Inventario | Email proveedor | Pendiente | Media | Compras F2 | No implementado. | Seguimiento manual con el proveedor. |
 | Inventario | Historial formal de recepciones | Pendiente | Media | Compras F2 | La trazabilidad vive en movimientos, no en una bitacora documental propia de recepciones. | Revision historica menos directa. |
 | Inventario | Cancelacion avanzada de OC | Pendiente | Media | Compras F2 | Solo existe cancelacion basica sin recepcion previa; no hay reversa de inventario para recepciones parciales. | Flujo de excepciones incompleto. |
@@ -252,7 +252,7 @@ Cuando exista duda, el estado debe quedarse en `Parcial` o `Pendiente`. No se ma
 | PM | Facturacion / cobranza | Pendiente | Alta | PM comercial futura | PM no conecta todavia con facturacion ni cobranza. | Rentabilidad sin cierre comercial completo. |
 | PM | Facturación desde estimación | Pendiente | Alta | PM futura | La estimación todavía no genera documentos fiscales ni facturas. | Doble captura operativa entre PM y facturación. |
 | PM | Cobranza real | Pendiente | Alta | PM futura | Solo existe marca operativa de cobrada; no hay integración bancaria, conciliación ni cartera. | Cobranza con trazabilidad parcial. |
-| PM | PDF de estimación | Pendiente | Media | PM futura | No existe exportación formal a PDF para compartir estados de pago. | Salida documental limitada. |
+| PM | PDF de estimación | Implementado MVP | Media | Documentos PDF F1 | La estimacion ya puede exportarse como PDF operativo con datos de empresa, proyecto, cliente, partidas, retencion, anticipo, neto y notas. | Sigue siendo un documento comercial interno, no fiscal. |
 | PM | Firma / aprobación cliente | Pendiente | Media | PM futura | La aprobación actual es interna y no incluye confirmación formal del cliente. | Cierre comercial menos auditable. |
 | PM | Aprobacion de horas | Pendiente | Media | PM F4 | No existe workflow formal de aprobacion o bloqueo previo al costeo. | Riesgo de capturas no validadas. |
 | PM | Documentos | Implementado | Media | PM F5 | El proyecto ya soporta carga de documentos a storage externo, clasificacion por tipo, visibilidad externa, edicion de metadatos y desactivacion logica. | Informacion dispersa. |

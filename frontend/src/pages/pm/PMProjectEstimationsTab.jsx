@@ -3,6 +3,7 @@ import {
   Ban,
   CheckCheck,
   Eye,
+  FileDown,
   Pencil,
   Plus,
   RefreshCw,
@@ -17,6 +18,7 @@ import {
   cancelPmEstimation,
   createPmProjectEstimation,
   deactivatePmEstimationDetail,
+  downloadPmEstimationPdf,
   getPmEstimation,
   getPmProjectBudget,
   getPmProjectEstimationsSummary,
@@ -704,6 +706,24 @@ export default function PMProjectEstimationsTab({
     }
   }
 
+  async function handleDownloadEstimationPdf(estimation) {
+    if (!estimation?.id) {
+      return;
+    }
+    const actionKey = `pdf:${estimation.id}`;
+    setActionLoading((current) => ({ ...current, [actionKey]: true }));
+    setError("");
+    setSuccess("");
+    try {
+      await downloadPmEstimationPdf({ empresaId, estimationId: estimation.id, token });
+      setSuccess(`PDF de estimacion ${safeDisplayText(estimation.folio, estimation.nombre)} listo para descarga.`);
+    } catch (downloadError) {
+      setError(getErrorMessage(downloadError, "No se pudo exportar la estimacion en PDF."));
+    } finally {
+      setActionLoading((current) => ({ ...current, [actionKey]: false }));
+    }
+  }
+
   const summaryCards = [
     { label: "Total estimado", value: formatMoney(summary?.total_estimado ?? 0), tone: "info", meta: "Monto neto registrado" },
     { label: "Total aprobado", value: formatMoney(summary?.total_aprobado ?? 0), tone: "success", meta: "Listo para envío o cobro" },
@@ -839,6 +859,14 @@ export default function PMProjectEstimationsTab({
                         <ActionButton onClick={() => loadEstimationDetail(item.id)} type="button">
                           <Eye size={14} />
                           Ver detalle
+                        </ActionButton>
+                        <ActionButton
+                          disabled={Boolean(actionLoading[`pdf:${item.id}`])}
+                          onClick={() => handleDownloadEstimationPdf(item)}
+                          type="button"
+                        >
+                          <FileDown size={14} />
+                          Exportar PDF
                         </ActionButton>
                         {estimationCanEdit(item) && canEditDrafts ? (
                           <ActionButton onClick={() => openEditModal(item)} type="button">
@@ -1094,6 +1122,14 @@ export default function PMProjectEstimationsTab({
                 {getDisplayedEstimationStatusLabel(selectedEstimation)}
               </StatusBadge>
               <div className="pm-estimation-actions">
+                <ActionButton
+                  disabled={Boolean(actionLoading[`pdf:${selectedEstimation.id}`])}
+                  onClick={() => handleDownloadEstimationPdf(selectedEstimation)}
+                  type="button"
+                >
+                  <FileDown size={14} />
+                  Exportar PDF
+                </ActionButton>
                 {estimationCanEdit(selectedEstimation) && canEditDrafts ? (
                   <ActionButton onClick={openAddDetailModal} tone="primary" type="button">
                     <Plus size={14} />

@@ -9,3 +9,4 @@ email-validator==2.2.0
 pyodbc==5.1.0
 python-multipart==0.0.20
 azure-storage-blob==12.26.0
+reportlab==4.5.1

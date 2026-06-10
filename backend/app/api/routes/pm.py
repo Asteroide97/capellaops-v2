@@ -2,7 +2,7 @@ import logging
 from datetime import date
 from typing import Callable, TypeVar
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -180,6 +180,7 @@ from app.services.pm import (
     get_project_change,
     get_project_estimation,
     get_project_estimations_summary,
+    get_project_for_company,
     get_project_requisition,
     get_project,
     get_project_costs,
@@ -246,6 +247,7 @@ from app.services.pm import (
     submit_project_change,
     submit_estimation,
 )
+from app.services.documents_pdf import build_pm_estimation_pdf
 from app.schemas.procurement import RequisitionListResponse, RequisitionResponse
 from app.services.storage import StorageConfigurationError
 
@@ -836,6 +838,22 @@ def get_project_estimation_endpoint(
     db: Session = Depends(get_db),
 ) -> PMEstimacionDetailOut:
     return get_project_estimation(db, pm_context, estimation_id=estimation_id)
+
+
+@router.get("/estimations/{estimation_id}/pdf")
+def export_project_estimation_pdf_endpoint(
+    estimation_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> Response:
+    estimation = get_project_estimation(db, pm_context, estimation_id=estimation_id)
+    project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
+    pdf_bytes, filename = build_pm_estimation_pdf(pm_context.empresa, project, estimation)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/estimations/{estimation_id}", response_model=PMEstimacionOut)
