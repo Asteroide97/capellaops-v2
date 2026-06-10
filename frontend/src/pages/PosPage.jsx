@@ -1,6 +1,7 @@
 ﻿import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  BarChart3,
   BadgeDollarSign,
   BanknoteArrowDown,
   BanknoteArrowUp,
@@ -31,6 +32,7 @@ import {
   createPosShiftManualWithdrawal,
   getPosActiveShift,
   getPosCatalog,
+  getPosReportSummary,
   getPosSaleDetail,
   getPosSales,
   getPosShiftReport,
@@ -45,7 +47,7 @@ import {
 
 
 const DEFAULT_PAGE_SIZE = 25;
-const POS_VIEWS = ["sell", "history", "tickets", "cash"];
+const POS_VIEWS = ["sell", "history", "tickets", "cash", "reports"];
 
 const paymentMethodOptions = [
   { value: "efectivo", label: "Efectivo" },
@@ -59,6 +61,7 @@ const viewTabs = [
   { value: "history", label: "Historial de Ventas", icon: <History size={16} /> },
   { value: "tickets", label: "Tickets", icon: <Ticket size={16} /> },
   { value: "cash", label: "Caja / Turnos", icon: <Wallet size={16} /> },
+  { value: "reports", label: "Reportes", icon: <BarChart3 size={16} /> },
 ];
 
 const catalogFilterDefaults = {
@@ -81,6 +84,15 @@ const shiftHistoryFilterDefaults = {
   fecha_hasta: "",
   limit: DEFAULT_PAGE_SIZE,
   offset: 0,
+};
+
+const reportFilterDefaults = {
+  fecha_desde: "",
+  fecha_hasta: "",
+  almacen_id: "",
+  usuario_id: "",
+  estatus: "",
+  agrupacion: "day",
 };
 
 const defaultSaleForm = {
@@ -134,6 +146,17 @@ function formatDurationLabel(totalSeconds) {
 }
 
 
+function formatDateOnly(value) {
+  if (!value) {
+    return "-";
+  }
+
+  return new Intl.DateTimeFormat("es-MX", {
+    dateStyle: "medium",
+  }).format(new Date(value));
+}
+
+
 function formatMoney(value) {
   const numericValue = Number(value ?? 0);
   return new Intl.NumberFormat("es-MX", {
@@ -176,12 +199,46 @@ function safeText(value, fallback = "-") {
 }
 
 
+function toReportDateStart(value) {
+  return value ? `${value}T00:00:00` : "";
+}
+
+
+function toReportDateEnd(value) {
+  return value ? `${value}T23:59:59` : "";
+}
+
+
+function escapeCsvValue(value) {
+  const stringValue = String(value ?? "");
+  if (/[",\n]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, '""')}"`;
+  }
+  return stringValue;
+}
+
+
+function downloadCsvFile(filename, rows) {
+  const csvContent = rows.map((row) => row.map(escapeCsvValue).join(",")).join("\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+
 function getViewTitle(view) {
   const titles = {
     sell: "Punto de Venta",
     history: "Historial de Ventas",
     tickets: "Tickets",
     cash: "Caja / Turnos",
+    reports: "Reportes POS",
   };
   return titles[view] ?? "Punto de Venta";
 }
@@ -193,6 +250,7 @@ function getViewSubtitle(view) {
     history: "Consulta ventas pagadas, canceladas y suspendidas.",
     tickets: "Consulta e imprime comprobantes de venta.",
     cash: "Consulta el estado del turno y prepara el flujo de caja.",
+    reports: "Analiza ventas, pagos, descuentos, cancelaciones y utilidad estimada.",
   };
   return subtitles[view] ?? "Cobra desde el almacén activo y descuenta inventario automáticamente.";
 }
@@ -516,6 +574,9 @@ export default function PosPage() {
     limit: DEFAULT_PAGE_SIZE,
     offset: 0,
   });
+  const [reportFilters, setReportFilters] = useState(reportFilterDefaults);
+  const [reportData, setReportData] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
 
   const [cart, setCart] = useState([]);
   const [saleForm, setSaleForm] = useState(defaultSaleForm);
@@ -663,6 +724,25 @@ export default function PosPage() {
     () => (activeShift?.opened_at ? formatDurationLabel((Date.now() - new Date(activeShift.opened_at).getTime()) / 1000) : "-"),
     [activeShift?.opened_at],
   );
+  const reportCashierOptions = useMemo(() => {
+    const baseOptions = (reportData?.ventas_por_cajero ?? []).map((item) => ({
+      value: item.usuario_id,
+      label: item.nombre,
+    }));
+
+    if (
+      reportFilters.usuario_id &&
+      !baseOptions.some((option) => option.value === reportFilters.usuario_id)
+    ) {
+      baseOptions.push({
+        value: reportFilters.usuario_id,
+        label: "Cajero seleccionado",
+      });
+    }
+
+    return baseOptions.filter((option) => option.value);
+  }, [reportData?.ventas_por_cajero, reportFilters.usuario_id]);
+  const hasReportSales = Number(reportData?.kpis?.ventas_count || 0) > 0;
 
   function updateView(view) {
     const next = new URLSearchParams(searchParams);
@@ -793,6 +873,28 @@ export default function PosPage() {
     return response;
   }
 
+  async function loadPosReport(nextFilters = reportFilters) {
+    setReportLoading(true);
+    try {
+      const response = await getPosReportSummary({
+        token,
+        empresaId,
+        filters: {
+          fecha_desde: toReportDateStart(nextFilters.fecha_desde),
+          fecha_hasta: toReportDateEnd(nextFilters.fecha_hasta),
+          almacen_id: nextFilters.almacen_id,
+          usuario_id: nextFilters.usuario_id,
+          estatus: nextFilters.estatus,
+          agrupacion: nextFilters.agrupacion || "day",
+        },
+      });
+      setReportData(response);
+      return response;
+    } finally {
+      setReportLoading(false);
+    }
+  }
+
   async function loadSaleArtifacts(saleId) {
     const saleDetail = await getPosSaleDetail({ saleId, token, empresaId });
     const ticket =
@@ -815,12 +917,16 @@ export default function PosPage() {
     try {
       const warehouseItems = await loadWarehousesOptions();
       const nextWarehouseId = selectedWarehouseId || warehouseItems[0]?.id || "";
-      await Promise.all([
+      const requests = [
         loadCatalog(nextWarehouseId, catalogFilters),
         loadSales(saleFilters),
         loadActiveShift(nextWarehouseId),
         loadShiftHistory(shiftHistoryFilters),
-      ]);
+      ];
+      if (activeView === "reports") {
+        requests.push(loadPosReport(reportFilters));
+      }
+      await Promise.all(requests);
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
@@ -838,12 +944,16 @@ export default function PosPage() {
       clearFeedback();
     }
     try {
-      await Promise.all([
+      const requests = [
         loadCatalog(selectedWarehouseId, catalogFilters),
         loadSales(saleFilters),
         loadActiveShift(selectedWarehouseId),
         loadShiftHistory(shiftHistoryFilters),
-      ]);
+      ];
+      if (activeView === "reports") {
+        requests.push(loadPosReport(reportFilters));
+      }
+      await Promise.all(requests);
       if (keepTicket && selectedSale?.id) {
         await loadSaleArtifacts(selectedSale.id);
       }
@@ -869,6 +979,16 @@ export default function PosPage() {
       },
     );
   }, [selectedWarehouseId]);
+
+  useEffect(() => {
+    if (activeView !== "reports" || !token || !empresaId) {
+      return;
+    }
+
+    loadPosReport(reportFilters).catch((requestError) => {
+      setError(getPosUiError(requestError, "No se pudo cargar el reporte. Intenta actualizar."));
+    });
+  }, [activeView, token, empresaId]);
 
   function addToCart(item) {
     if (Number(item.existencia) <= 0) {
@@ -1422,6 +1542,64 @@ export default function PosPage() {
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     }
+  }
+
+  async function handleReportSearch(event) {
+    event.preventDefault();
+    clearFeedback();
+    try {
+      await loadPosReport(reportFilters);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar el reporte. Intenta actualizar."));
+    }
+  }
+
+  async function handleReportReset() {
+    clearFeedback();
+    setReportFilters(reportFilterDefaults);
+    try {
+      await loadPosReport(reportFilterDefaults);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar el reporte. Intenta actualizar."));
+    }
+  }
+
+  function handleExportReportCsv() {
+    if (!reportData) {
+      return;
+    }
+
+    const rows = [
+      ["Seccion", "Campo", "Valor"],
+      ["KPIs", "Ventas netas", reportData.kpis.total_neto],
+      ["KPIs", "Ventas cobradas", reportData.kpis.ventas_pagadas_count],
+      ["KPIs", "Cancelaciones", reportData.kpis.ventas_canceladas_count],
+      ["KPIs", "Ticket promedio", reportData.kpis.ticket_promedio],
+      ["KPIs", "Descuentos", reportData.kpis.total_descuentos],
+      ["KPIs", "Utilidad estimada", reportData.kpis.utilidad_estimada],
+      [],
+      ["Ventas por día"],
+      ["Fecha", "Ventas", "Total neto", "Cancelado"],
+      ...(reportData.ventas_por_dia ?? []).map((item) => [
+        item.fecha,
+        item.ventas_count,
+        item.total_neto,
+        item.cancelado,
+      ]),
+      [],
+      ["Productos más vendidos"],
+      ["SKU", "Producto", "Cantidad", "Total vendido", "Costo estimado", "Utilidad estimada"],
+      ...(reportData.productos_mas_vendidos ?? []).map((item) => [
+        item.sku,
+        item.nombre,
+        item.cantidad,
+        item.total_venta,
+        item.costo_estimado,
+        item.utilidad_estimada,
+      ]),
+    ];
+
+    downloadCsvFile("pos-reportes.csv", rows);
   }
 
   async function handleCatalogPageChange(nextOffset) {
@@ -2663,6 +2841,404 @@ export default function PosPage() {
               </>
             )}
           </section>
+        </div>
+      ) : null}
+
+      {activeView === "reports" ? (
+        <div className="pos-view-stack pos-report-page">
+          <section className="feature-card pos-section-card">
+            <div className="feature-header">
+              <p className="eyebrow">Análisis</p>
+              <p className="table-note">Analiza ventas, pagos, descuentos, cancelaciones y utilidad estimada.</p>
+            </div>
+
+            <form className="pos-report-filters" onSubmit={handleReportSearch}>
+              <label>
+                Fecha desde
+                <input
+                  className="pos-input"
+                  onChange={(event) =>
+                    setReportFilters((current) => ({
+                      ...current,
+                      fecha_desde: event.target.value,
+                    }))
+                  }
+                  type="date"
+                  value={reportFilters.fecha_desde}
+                />
+              </label>
+
+              <label>
+                Fecha hasta
+                <input
+                  className="pos-input"
+                  onChange={(event) =>
+                    setReportFilters((current) => ({
+                      ...current,
+                      fecha_hasta: event.target.value,
+                    }))
+                  }
+                  type="date"
+                  value={reportFilters.fecha_hasta}
+                />
+              </label>
+
+              <label>
+                Almacén
+                <select
+                  className="pos-input"
+                  onChange={(event) =>
+                    setReportFilters((current) => ({
+                      ...current,
+                      almacen_id: event.target.value,
+                    }))
+                  }
+                  value={reportFilters.almacen_id}
+                >
+                  <option value="">Todos los almacenes</option>
+                  {warehouses.map((warehouse) => (
+                    <option key={warehouse.id} value={warehouse.id}>
+                      {warehouse.nombre}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Cajero
+                <select
+                  className="pos-input"
+                  onChange={(event) =>
+                    setReportFilters((current) => ({
+                      ...current,
+                      usuario_id: event.target.value,
+                    }))
+                  }
+                  value={reportFilters.usuario_id}
+                >
+                  <option value="">Todos los cajeros</option>
+                  {reportCashierOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Estatus
+                <select
+                  className="pos-input"
+                  onChange={(event) =>
+                    setReportFilters((current) => ({
+                      ...current,
+                      estatus: event.target.value,
+                    }))
+                  }
+                  value={reportFilters.estatus}
+                >
+                  <option value="">Todos</option>
+                  <option value="pagada">Pagada</option>
+                  <option value="cancelada">Cancelada</option>
+                  <option value="suspendida">Suspendida</option>
+                </select>
+              </label>
+
+              <label>
+                Agrupación
+                <select
+                  className="pos-input"
+                  onChange={(event) =>
+                    setReportFilters((current) => ({
+                      ...current,
+                      agrupacion: event.target.value,
+                    }))
+                  }
+                  value={reportFilters.agrupacion}
+                >
+                  <option value="day">Día</option>
+                  <option value="week">Semana</option>
+                  <option value="month">Mes</option>
+                </select>
+              </label>
+
+              <div className="pos-action-row">
+                <button className="ghost-button" disabled={reportLoading} type="submit">
+                  {reportLoading ? "Cargando..." : "Aplicar"}
+                </button>
+                <button className="ghost-button" onClick={handleReportReset} type="button">
+                  Limpiar
+                </button>
+                <button
+                  className="primary-button"
+                  disabled={reportLoading || !reportData}
+                  onClick={handleExportReportCsv}
+                  type="button"
+                >
+                  Exportar CSV
+                </button>
+              </div>
+            </form>
+          </section>
+
+          {reportLoading ? (
+            <section className="feature-card pos-section-card">
+              <p className="table-note">Cargando reporte...</p>
+            </section>
+          ) : !hasReportSales ? (
+            <section className="feature-card pos-section-card">
+              <EmptyState
+                icon={<BarChart3 size={18} />}
+                note="Ajusta los filtros o registra ventas para ver el resumen del POS."
+                title="No hay ventas en este periodo."
+              />
+            </section>
+          ) : (
+            <>
+              <section className="feature-card pos-section-card">
+                <div className="pos-kpi-grid pos-kpi-grid-compact">
+                  <PosKpiCard
+                    icon={<BadgeDollarSign size={18} />}
+                    label="Ventas netas"
+                    meta="Ventas pagadas menos cancelaciones"
+                    value={formatMoney(reportData.kpis.total_neto)}
+                  />
+                  <PosKpiCard
+                    icon={<ReceiptText size={18} />}
+                    label="Ventas cobradas"
+                    meta={formatMoney(reportData.kpis.total_bruto)}
+                    value={reportData.kpis.ventas_pagadas_count}
+                  />
+                  <PosKpiCard
+                    icon={<History size={18} />}
+                    label="Cancelaciones"
+                    meta={formatMoney(reportData.kpis.total_cancelado)}
+                    value={reportData.kpis.ventas_canceladas_count}
+                  />
+                  <PosKpiCard
+                    icon={<CircleDollarSign size={18} />}
+                    label="Ticket promedio"
+                    meta={`${reportData.kpis.ventas_count} ventas en el periodo`}
+                    value={formatMoney(reportData.kpis.ticket_promedio)}
+                  />
+                  <PosKpiCard
+                    icon={<BadgeDollarSign size={18} />}
+                    label="Descuentos"
+                    meta="Línea y global"
+                    value={formatMoney(reportData.kpis.total_descuentos)}
+                  />
+                  <PosKpiCard
+                    icon={<BarChart3 size={18} />}
+                    label="Utilidad estimada"
+                    meta="Basada en costo estimado"
+                    value={formatMoney(reportData.kpis.utilidad_estimada)}
+                  />
+                </div>
+              </section>
+
+              <section className="pos-report-grid">
+                <article className="feature-card pos-section-card pos-report-card">
+                  <div className="feature-header">
+                    <p className="eyebrow">Ventas por día</p>
+                    <p className="table-note">Comportamiento del periodo filtrado.</p>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="inventory-table pos-report-table">
+                      <thead>
+                        <tr>
+                          <th>Fecha</th>
+                          <th>Ventas</th>
+                          <th>Total neto</th>
+                          <th>Cancelado</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(reportData.ventas_por_dia ?? []).map((item) => (
+                          <tr key={item.fecha}>
+                            <td>{item.fecha}</td>
+                            <td>{formatNumber(item.ventas_count)}</td>
+                            <td>{formatMoney(item.total_neto)}</td>
+                            <td>{formatMoney(item.cancelado)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+
+                <article className="feature-card pos-section-card pos-report-card">
+                  <div className="feature-header">
+                    <p className="eyebrow">Métodos de pago</p>
+                    <p className="table-note">Desglose neto por forma de cobro.</p>
+                  </div>
+                  <div className="pos-report-grid pos-report-grid-mini">
+                    {(reportData.metodos_pago ?? []).map((item) => (
+                      <div className="mini-card" key={item.metodo}>
+                        <span className="eyebrow">{getPaymentMethodLabel(item.metodo)}</span>
+                        <strong>{formatMoney(item.total)}</strong>
+                        <p>{formatNumber(item.ventas_count)} ventas</p>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+              </section>
+
+              <section className="pos-report-grid">
+                <article className="feature-card pos-section-card pos-report-card">
+                  <div className="feature-header">
+                    <p className="eyebrow">Productos más vendidos</p>
+                    <p className="table-note">Incluye utilidad estimada según costo disponible.</p>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="inventory-table pos-report-table">
+                      <thead>
+                        <tr>
+                          <th>Producto</th>
+                          <th>SKU</th>
+                          <th>Cantidad</th>
+                          <th>Total vendido</th>
+                          <th>Utilidad estimada</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(reportData.productos_mas_vendidos ?? []).map((item) => (
+                          <tr key={item.material_id}>
+                            <td>{item.nombre}</td>
+                            <td>{item.sku}</td>
+                            <td>{formatNumber(item.cantidad)}</td>
+                            <td>{formatMoney(item.total_venta)}</td>
+                            <td>{formatMoney(item.utilidad_estimada)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+
+                <article className="feature-card pos-section-card pos-report-card">
+                  <div className="feature-header">
+                    <p className="eyebrow">Descuentos</p>
+                    <p className="table-note">Resumen otorgado en el periodo.</p>
+                  </div>
+                  <div className="pos-kpi-grid pos-kpi-grid-compact">
+                    <PosKpiCard
+                      icon={<BadgeDollarSign size={18} />}
+                      label="Descuentos de línea"
+                      meta="Aplicados por producto"
+                      value={formatMoney(reportData.descuentos.descuento_lineas_total)}
+                    />
+                    <PosKpiCard
+                      icon={<BadgeDollarSign size={18} />}
+                      label="Descuento global"
+                      meta="Aplicado a la venta"
+                      value={formatMoney(reportData.descuentos.descuento_global_total)}
+                    />
+                    <PosKpiCard
+                      icon={<BadgeDollarSign size={18} />}
+                      label="Descuento total"
+                      meta="Impacto total del periodo"
+                      value={formatMoney(reportData.descuentos.descuento_total)}
+                    />
+                  </div>
+                </article>
+              </section>
+
+              <section className="pos-report-grid">
+                <article className="feature-card pos-section-card pos-report-card">
+                  <div className="feature-header">
+                    <p className="eyebrow">Ventas por cajero</p>
+                    <p className="table-note">Desempeño neto por usuario.</p>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="inventory-table pos-report-table">
+                      <thead>
+                        <tr>
+                          <th>Cajero</th>
+                          <th>Ventas</th>
+                          <th>Total neto</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(reportData.ventas_por_cajero ?? []).map((item, index) => (
+                          <tr key={item.usuario_id || `cashier-${index}`}>
+                            <td>{item.nombre}</td>
+                            <td>{formatNumber(item.ventas_count)}</td>
+                            <td>{formatMoney(item.total_neto)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+
+                <article className="feature-card pos-section-card pos-report-card">
+                  <div className="feature-header">
+                    <p className="eyebrow">Ventas por almacén</p>
+                    <p className="table-note">Comparativo neto por origen de venta.</p>
+                  </div>
+                  <div className="table-wrap">
+                    <table className="inventory-table pos-report-table">
+                      <thead>
+                        <tr>
+                          <th>Almacén</th>
+                          <th>Ventas</th>
+                          <th>Total neto</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(reportData.ventas_por_almacen ?? []).map((item, index) => (
+                          <tr key={item.almacen_id || `warehouse-${index}`}>
+                            <td>{item.nombre}</td>
+                            <td>{formatNumber(item.ventas_count)}</td>
+                            <td>{formatMoney(item.total_neto)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+              </section>
+
+              <section className="feature-card pos-section-card pos-report-card">
+                <div className="feature-header">
+                  <p className="eyebrow">Cancelaciones recientes</p>
+                  <p className="table-note">Últimas cancelaciones dentro del periodo filtrado.</p>
+                </div>
+                {(reportData.cancelaciones ?? []).length === 0 ? (
+                  <EmptyState
+                    icon={<History size={18} />}
+                    note="No hay cancelaciones registradas en este periodo."
+                    title="Sin cancelaciones"
+                  />
+                ) : (
+                  <div className="table-wrap">
+                    <table className="inventory-table pos-report-table">
+                      <thead>
+                        <tr>
+                          <th>Folio</th>
+                          <th>Fecha</th>
+                          <th>Total</th>
+                          <th>Motivo</th>
+                          <th>Usuario</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {reportData.cancelaciones.map((item) => (
+                          <tr key={item.venta_id}>
+                            <td>{item.folio}</td>
+                            <td>{formatDateTime(item.fecha)}</td>
+                            <td>{formatMoney(item.total)}</td>
+                            <td>{item.motivo || "Sin motivo"}</td>
+                            <td>{item.usuario || "No registrado"}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </section>
+            </>
+          )}
         </div>
       ) : null}
 

@@ -1855,9 +1855,43 @@ textarea {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.pos-report-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.pos-report-filters {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: end;
+}
+
+.pos-report-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  align-items: start;
+}
+
+.pos-report-grid-mini {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.pos-report-card {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.pos-report-section {
+  display: grid;
+  gap: 0.85rem;
+}
+
 .pos-report-table th,
 .pos-report-table td {
   vertical-align: top;
+  white-space: normal;
 }
 
 .pos-ticket-table-wrap {
@@ -4910,6 +4944,8 @@ body.pm-is-dragging {
   .pos-payment-grid,
   .pos-payment-method-grid,
   .pos-history-filters,
+  .pos-report-filters,
+  .pos-report-grid,
   .pos-shift-history-filters,
   .pos-form-grid,
   .pos-kpi-grid,

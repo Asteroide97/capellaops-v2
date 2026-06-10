@@ -1,4 +1,5 @@
 import {
+  BarChart3,
   Clock3,
   History,
   ShoppingCart,
@@ -37,5 +38,12 @@ export const posNavItems = [
     path: "/pos?view=cash",
     view: "cash",
     icon: Clock3,
+  },
+  {
+    key: "reports",
+    label: "Reportes",
+    path: "/pos?view=reports",
+    view: "reports",
+    icon: BarChart3,
   },
 ];

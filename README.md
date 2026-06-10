@@ -1572,6 +1572,14 @@ Las órdenes de compra ya siguen el flujo base:
 - El corte incluye metodos de pago, movimientos manuales, ventas del turno y cancelaciones con trazabilidad basica.
 - La impresion del corte usa una superficie dedicada y no rompe la impresion del ticket.
 
+## POS Fase 6 - Reportes POS
+
+- `POS > Reportes` ya consolida KPIs operativos del modulo con filtros por fechas, almacen, cajero, estatus y agrupacion.
+- El resumen muestra ventas netas, ventas cobradas, cancelaciones, ticket promedio, descuentos y utilidad estimada.
+- El reporte incluye ventas por dia, ventas por cajero, ventas por almacen, metodos de pago, productos mas vendidos y cancelaciones recientes.
+- La utilidad estimada se calcula con venta neta menos costo estimado por linea usando snapshot de movimiento cuando existe y fallback a costo del material.
+- La exportacion CSV simple ya permite descargar KPIs, ventas por dia y productos mas vendidos para analisis externo.
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados
@@ -1579,6 +1587,7 @@ Las órdenes de compra ya siguen el flujo base:
 - Descuentos promocionales/reglas avanzadas
 - Corte con auditoría avanzada
 - Export PDF/Excel de corte
+- Exportación avanzada PDF/Excel de reportes POS
 - Ticket por email
 - Ticket por SMS
 - Link publico de ticket

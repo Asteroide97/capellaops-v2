@@ -652,6 +652,19 @@ export function getPosCatalog({ token, empresaId, almacenId, filters = {} }) {
 }
 
 
+export function getPosReportSummary({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "almacen_id", filters.almacen_id);
+  appendQueryValue(query, "usuario_id", filters.usuario_id);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "agrupacion", filters.agrupacion);
+  const suffix = query.toString();
+  return apiRequest(`/pos/reports/summary${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
 export function getPosActiveShift({ token, empresaId, warehouseId }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "warehouse_id", warehouseId);

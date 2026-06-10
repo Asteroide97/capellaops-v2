@@ -275,3 +275,80 @@ class PosShiftListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class PosReportKpis(BaseModel):
+    ventas_count: int = 0
+    ventas_pagadas_count: int = 0
+    ventas_canceladas_count: int = 0
+    ventas_suspendidas_count: int = 0
+    total_bruto: Decimal = Decimal("0")
+    total_descuentos: Decimal = Decimal("0")
+    total_cancelado: Decimal = Decimal("0")
+    total_neto: Decimal = Decimal("0")
+    ticket_promedio: Decimal = Decimal("0")
+    utilidad_estimada: Decimal = Decimal("0")
+
+
+class PosReportPaymentMethodItem(BaseModel):
+    metodo: str
+    total: Decimal = Decimal("0")
+    ventas_count: int = 0
+
+
+class PosReportSalesTimelineItem(BaseModel):
+    fecha: str
+    ventas_count: int = 0
+    total_neto: Decimal = Decimal("0")
+    cancelado: Decimal = Decimal("0")
+
+
+class PosReportSalesByCashierItem(BaseModel):
+    usuario_id: str | None = None
+    nombre: str
+    ventas_count: int = 0
+    total_neto: Decimal = Decimal("0")
+
+
+class PosReportSalesByWarehouseItem(BaseModel):
+    almacen_id: str | None = None
+    nombre: str
+    ventas_count: int = 0
+    total_neto: Decimal = Decimal("0")
+
+
+class PosReportTopProductItem(BaseModel):
+    material_id: str
+    sku: str
+    nombre: str
+    cantidad: Decimal = Decimal("0")
+    total_venta: Decimal = Decimal("0")
+    costo_estimado: Decimal = Decimal("0")
+    utilidad_estimada: Decimal = Decimal("0")
+
+
+class PosReportDiscountSummary(BaseModel):
+    descuento_lineas_total: Decimal = Decimal("0")
+    descuento_global_total: Decimal = Decimal("0")
+    descuento_total: Decimal = Decimal("0")
+
+
+class PosReportCancellationItem(BaseModel):
+    venta_id: str
+    folio: str
+    fecha: datetime
+    total: Decimal = Decimal("0")
+    motivo: str | None = None
+    usuario: str | None = None
+
+
+class PosReportSummaryResponse(BaseModel):
+    agrupacion: str = "day"
+    kpis: PosReportKpis
+    metodos_pago: list[PosReportPaymentMethodItem] = Field(default_factory=list)
+    ventas_por_dia: list[PosReportSalesTimelineItem] = Field(default_factory=list)
+    ventas_por_cajero: list[PosReportSalesByCashierItem] = Field(default_factory=list)
+    ventas_por_almacen: list[PosReportSalesByWarehouseItem] = Field(default_factory=list)
+    productos_mas_vendidos: list[PosReportTopProductItem] = Field(default_factory=list)
+    descuentos: PosReportDiscountSummary
+    cancelaciones: list[PosReportCancellationItem] = Field(default_factory=list)

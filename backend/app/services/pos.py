@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import desc, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     AuditLog,
@@ -22,6 +23,15 @@ from app.models.inventory import Almacen, Existencia, Material
 from app.schemas.pos import (
     PosActiveShiftResponse,
     PosCatalogItem,
+    PosReportCancellationItem,
+    PosReportDiscountSummary,
+    PosReportKpis,
+    PosReportPaymentMethodItem,
+    PosReportSalesByCashierItem,
+    PosReportSalesByWarehouseItem,
+    PosReportSalesTimelineItem,
+    PosReportSummaryResponse,
+    PosReportTopProductItem,
     PosShiftCancellationReportItem,
     PosShiftMovementResponse,
     PosShiftReportResponse,
@@ -102,6 +112,36 @@ def normalize_utc_datetime(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def get_sale_report_timestamp(sale: Venta) -> datetime:
+    base_value = sale.cancelled_at or sale.paid_at or sale.created_at
+    return normalize_utc_datetime(base_value)
+
+
+def format_report_bucket(value: datetime, grouping: str) -> str:
+    normalized = normalize_utc_datetime(value)
+    if grouping == "month":
+        return f"{normalized.year:04d}-{normalized.month:02d}"
+    if grouping == "week":
+        week_start = (normalized - timedelta(days=normalized.weekday())).date()
+        return week_start.isoformat()
+    return normalized.date().isoformat()
+
+
+def resolve_sale_detail_estimated_cost(detail: VentaDetalle) -> Decimal:
+    movement = detail.movimiento_inventario
+    material = detail.material
+
+    if movement and movement.costo_unitario_snapshot is not None and Decimal(movement.costo_unitario_snapshot) > ZERO:
+        return Decimal(movement.costo_unitario_snapshot)
+    if movement and movement.costo_promedio_snapshot is not None and Decimal(movement.costo_promedio_snapshot) > ZERO:
+        return Decimal(movement.costo_promedio_snapshot)
+    if material and material.costo_promedio_actual is not None and Decimal(material.costo_promedio_actual) > ZERO:
+        return Decimal(material.costo_promedio_actual)
+    if material and material.costo_unitario is not None and Decimal(material.costo_unitario) > ZERO:
+        return Decimal(material.costo_unitario)
+    return ZERO
 
 
 def calculate_sale_paid_amount(sale: Venta) -> Decimal | None:
@@ -508,6 +548,268 @@ def list_sales(
         for sale, almacen_nombre, vendedor_nombre, turno_folio, detail_count in rows
     ]
     return total, items
+
+
+def get_pos_report_summary(
+    db: Session,
+    empresa_id: str,
+    *,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
+    almacen_id: str | None = None,
+    usuario_id: str | None = None,
+    estatus: str | None = None,
+    agrupacion: str = "day",
+) -> PosReportSummaryResponse:
+    report_timestamp = func.coalesce(Venta.cancelled_at, Venta.paid_at, Venta.created_at)
+    query = (
+        select(Venta)
+        .options(
+            selectinload(Venta.almacen),
+            selectinload(Venta.usuario),
+            selectinload(Venta.turno),
+            selectinload(Venta.cancelled_by_user),
+            selectinload(Venta.pagos),
+            selectinload(Venta.detalles).selectinload(VentaDetalle.material),
+            selectinload(Venta.detalles).selectinload(VentaDetalle.movimiento_inventario),
+        )
+        .where(Venta.empresa_id == empresa_id)
+    )
+
+    if fecha_desde:
+        query = query.where(report_timestamp >= fecha_desde)
+    if fecha_hasta:
+        query = query.where(report_timestamp <= fecha_hasta)
+    if almacen_id:
+        query = query.where(Venta.almacen_id == almacen_id)
+    if usuario_id:
+        query = query.where(Venta.usuario_id == usuario_id)
+    if estatus:
+        query = query.where(Venta.estatus == estatus)
+
+    sales = db.scalars(query.order_by(desc(report_timestamp), desc(Venta.id))).all()
+
+    method_totals: dict[str, dict[str, Decimal | int]] = {
+        "efectivo": {"total": ZERO, "ventas_count": 0},
+        "tarjeta": {"total": ZERO, "ventas_count": 0},
+        "transferencia": {"total": ZERO, "ventas_count": 0},
+        "otro": {"total": ZERO, "ventas_count": 0},
+    }
+    timeline: dict[str, dict[str, Decimal | int]] = defaultdict(
+        lambda: {"ventas_count": 0, "total_neto": ZERO, "cancelado": ZERO}
+    )
+    cashier_totals: dict[str, dict[str, str | int | Decimal | None]] = {}
+    warehouse_totals: dict[str, dict[str, str | int | Decimal | None]] = {}
+    product_totals: dict[str, dict[str, Decimal | str]] = {}
+
+    ventas_pagadas_count = 0
+    ventas_canceladas_count = 0
+    ventas_suspendidas_count = 0
+    total_bruto = ZERO
+    total_descuentos = ZERO
+    total_cancelado = ZERO
+    total_pagado = ZERO
+    utilidad_estimada = ZERO
+    descuento_lineas_total = ZERO
+    descuento_global_total = ZERO
+    cancelaciones: list[PosReportCancellationItem] = []
+
+    for sale in sales:
+        sale_timestamp = get_sale_report_timestamp(sale)
+        bucket_label = format_report_bucket(sale_timestamp, agrupacion)
+        sale_sign = ZERO
+
+        if sale.estatus == "pagada":
+            ventas_pagadas_count += 1
+            total_pagado += Decimal(sale.total or ZERO)
+            total_bruto += Decimal(sale.subtotal or ZERO)
+            total_descuentos += Decimal(sale.descuento_total or ZERO)
+            descuento_lineas_total += Decimal(sale.descuento_lineas_total or ZERO)
+            descuento_global_total += Decimal(sale.descuento_global or ZERO)
+            timeline[bucket_label]["ventas_count"] += 1
+            timeline[bucket_label]["total_neto"] += Decimal(sale.total or ZERO)
+            sale_sign = Decimal("1")
+        elif sale.estatus == "cancelada":
+            ventas_canceladas_count += 1
+            total_bruto += Decimal(sale.subtotal or ZERO)
+            total_descuentos += Decimal(sale.descuento_total or ZERO)
+            total_cancelado += Decimal(sale.total or ZERO)
+            descuento_lineas_total += Decimal(sale.descuento_lineas_total or ZERO)
+            descuento_global_total += Decimal(sale.descuento_global or ZERO)
+            timeline[bucket_label]["cancelado"] += Decimal(sale.total or ZERO)
+            sale_sign = Decimal("-1")
+            cancelaciones.append(
+                PosReportCancellationItem(
+                    venta_id=sale.id,
+                    folio=sale.folio,
+                    fecha=sale.cancelled_at or sale_timestamp,
+                    total=Decimal(sale.total or ZERO),
+                    motivo=sale.cancel_reason,
+                    usuario=sale.cancelled_by_user.full_name if sale.cancelled_by_user else None,
+                )
+            )
+        else:
+            ventas_suspendidas_count += 1
+
+        if sale.estatus in {"pagada", "cancelada"}:
+            payments = get_sale_payment_breakdown(db, sale=sale)
+            counted_methods: set[str] = set()
+            for payment in payments:
+                method = str(payment["metodo"] or "").strip().lower()
+                if method not in method_totals:
+                    method_totals[method] = {"total": ZERO, "ventas_count": 0}
+                method_totals[method]["total"] += Decimal(payment["monto"] or ZERO) * sale_sign
+                if sale.estatus == "pagada" and method not in counted_methods:
+                    method_totals[method]["ventas_count"] += 1
+                    counted_methods.add(method)
+
+        if sale.estatus in {"pagada", "cancelada"}:
+            cashier_key = sale.usuario_id
+            if cashier_key not in cashier_totals:
+                cashier_totals[cashier_key] = {
+                    "usuario_id": sale.usuario_id,
+                    "nombre": sale.usuario.full_name,
+                    "ventas_count": 0,
+                    "total_neto": ZERO,
+                }
+            warehouse_key = sale.almacen_id
+            if warehouse_key not in warehouse_totals:
+                warehouse_totals[warehouse_key] = {
+                    "almacen_id": sale.almacen_id,
+                    "nombre": sale.almacen.nombre,
+                    "ventas_count": 0,
+                    "total_neto": ZERO,
+                }
+
+            if sale.estatus == "pagada":
+                cashier_totals[cashier_key]["ventas_count"] += 1
+                warehouse_totals[warehouse_key]["ventas_count"] += 1
+
+            cashier_totals[cashier_key]["total_neto"] += Decimal(sale.total or ZERO) * sale_sign
+            warehouse_totals[warehouse_key]["total_neto"] += Decimal(sale.total or ZERO) * sale_sign
+
+        if sale.estatus in {"pagada", "cancelada"}:
+            for detail in sale.detalles:
+                unit_cost = resolve_sale_detail_estimated_cost(detail)
+                quantity = Decimal(detail.cantidad or ZERO)
+                signed_quantity = quantity * sale_sign
+                signed_total = Decimal(detail.total_linea or ZERO) * sale_sign
+                signed_cost = unit_cost * quantity * sale_sign
+                utilidad_estimada += signed_total - signed_cost
+
+                product_entry = product_totals.get(detail.material_id)
+                if not product_entry:
+                    product_entry = {
+                        "material_id": detail.material_id,
+                        "sku": detail.sku_snapshot,
+                        "nombre": detail.nombre_snapshot,
+                        "cantidad": ZERO,
+                        "total_venta": ZERO,
+                        "costo_estimado": ZERO,
+                        "utilidad_estimada": ZERO,
+                    }
+                    product_totals[detail.material_id] = product_entry
+
+                product_entry["cantidad"] += signed_quantity
+                product_entry["total_venta"] += signed_total
+                product_entry["costo_estimado"] += signed_cost
+                product_entry["utilidad_estimada"] += signed_total - signed_cost
+
+    total_neto = total_pagado - total_cancelado
+    ticket_promedio = total_neto / Decimal(ventas_pagadas_count) if ventas_pagadas_count else ZERO
+    descuentos = PosReportDiscountSummary(
+        descuento_lineas_total=descuento_lineas_total,
+        descuento_global_total=descuento_global_total,
+        descuento_total=descuento_lineas_total + descuento_global_total,
+    )
+
+    timeline_items = [
+        PosReportSalesTimelineItem(
+            fecha=fecha,
+            ventas_count=int(data["ventas_count"] or 0),
+            total_neto=Decimal(data["total_neto"] or ZERO),
+            cancelado=Decimal(data["cancelado"] or ZERO),
+        )
+        for fecha, data in sorted(timeline.items(), key=lambda item: item[0])
+    ]
+
+    payment_items = [
+        PosReportPaymentMethodItem(
+            metodo=method,
+            total=Decimal(data["total"] or ZERO),
+            ventas_count=int(data["ventas_count"] or 0),
+        )
+        for method, data in method_totals.items()
+        if Decimal(data["total"] or ZERO) != ZERO or int(data["ventas_count"] or 0) > 0 or method in PAYMENT_METHODS
+    ]
+
+    cashier_items = sorted(
+        [
+            PosReportSalesByCashierItem(
+                usuario_id=str(data["usuario_id"]) if data["usuario_id"] else None,
+                nombre=str(data["nombre"] or "No registrado"),
+                ventas_count=int(data["ventas_count"] or 0),
+                total_neto=Decimal(data["total_neto"] or ZERO),
+            )
+            for data in cashier_totals.values()
+        ],
+        key=lambda item: (-item.total_neto, item.nombre.lower()),
+    )
+
+    warehouse_items = sorted(
+        [
+            PosReportSalesByWarehouseItem(
+                almacen_id=str(data["almacen_id"]) if data["almacen_id"] else None,
+                nombre=str(data["nombre"] or "No registrado"),
+                ventas_count=int(data["ventas_count"] or 0),
+                total_neto=Decimal(data["total_neto"] or ZERO),
+            )
+            for data in warehouse_totals.values()
+        ],
+        key=lambda item: (-item.total_neto, item.nombre.lower()),
+    )
+
+    product_items = sorted(
+        [
+            PosReportTopProductItem(
+                material_id=str(data["material_id"]),
+                sku=str(data["sku"]),
+                nombre=str(data["nombre"]),
+                cantidad=Decimal(data["cantidad"] or ZERO),
+                total_venta=Decimal(data["total_venta"] or ZERO),
+                costo_estimado=Decimal(data["costo_estimado"] or ZERO),
+                utilidad_estimada=Decimal(data["utilidad_estimada"] or ZERO),
+            )
+            for data in product_totals.values()
+            if Decimal(data["cantidad"] or ZERO) > ZERO or Decimal(data["total_venta"] or ZERO) > ZERO
+        ],
+        key=lambda item: (-item.cantidad, -item.total_venta, item.nombre.lower()),
+    )
+
+    cancelaciones.sort(key=lambda item: item.fecha, reverse=True)
+
+    return PosReportSummaryResponse(
+        agrupacion=agrupacion,
+        kpis=PosReportKpis(
+            ventas_count=len(sales),
+            ventas_pagadas_count=ventas_pagadas_count,
+            ventas_canceladas_count=ventas_canceladas_count,
+            ventas_suspendidas_count=ventas_suspendidas_count,
+            total_bruto=total_bruto,
+            total_descuentos=total_descuentos,
+            total_cancelado=total_cancelado,
+            total_neto=total_neto,
+            ticket_promedio=ticket_promedio,
+            utilidad_estimada=utilidad_estimada,
+        ),
+        metodos_pago=payment_items,
+        ventas_por_dia=timeline_items,
+        ventas_por_cajero=cashier_items,
+        ventas_por_almacen=warehouse_items,
+        productos_mas_vendidos=product_items,
+        descuentos=descuentos,
+        cancelaciones=cancelaciones,
+    )
 
 
 def get_pos_catalog(
@@ -1207,7 +1509,7 @@ def get_sale_payment_breakdown(
     *,
     sale: Venta,
 ) -> list[dict]:
-    payments = load_sale_payments(db, sale.id)
+    payments = list(sale.pagos) if getattr(sale, "pagos", None) else load_sale_payments(db, sale.id)
     if payments:
         return [
             {

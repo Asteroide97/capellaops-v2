@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.schemas.pos import (
     PosActiveShiftResponse,
     PosCatalogResponse,
+    PosReportSummaryResponse,
     PosShiftCloseRequest,
     PosShiftListResponse,
     PosShiftManualMovementRequest,
@@ -32,6 +33,7 @@ from app.services.pos import (
     create_sale,
     get_active_shift_response,
     get_pos_catalog,
+    get_pos_report_summary,
     get_sale_for_company,
     get_sale_ticket,
     get_shift_detail_response,
@@ -253,6 +255,33 @@ def get_catalog(
         offset=offset,
     )
     return PosCatalogResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/reports/summary", response_model=PosReportSummaryResponse)
+def get_report_summary(
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
+    almacen_id: str | None = None,
+    usuario_id: str | None = None,
+    estatus: Literal["pagada", "cancelada", "suspendida"] | None = None,
+    agrupacion: Literal["day", "week", "month"] = "day",
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosReportSummaryResponse:
+    validate_date_range(fecha_desde, fecha_hasta)
+    if almacen_id:
+        get_warehouse_for_company(db, context.empresa.id, almacen_id)
+
+    return get_pos_report_summary(
+        db,
+        context.empresa.id,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        almacen_id=almacen_id,
+        usuario_id=usuario_id,
+        estatus=estatus,
+        agrupacion=agrupacion,
+    )
 
 
 @router.get("/sales", response_model=SaleListResponse)
