@@ -849,6 +849,65 @@ export function getPosInvoiceRequests({ token, empresaId, filters = {} }) {
 }
 
 
+export function getBillingPosInvoiceRequests({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "estado", filters.estado);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "rfc", filters.rfc);
+  appendQueryValue(query, "folio", filters.folio);
+  appendQueryValue(query, "cliente", filters.cliente);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/billing/pos/invoice-requests${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getBillingPosInvoiceRequestDetail({ saleId, token, empresaId }) {
+  return apiRequest(`/billing/pos/invoice-requests/${saleId}`, { token, empresaId });
+}
+
+
+export function reviewBillingPosInvoiceRequest({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/billing/pos/invoice-requests/${saleId}/review`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function observeBillingPosInvoiceRequest({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/billing/pos/invoice-requests/${saleId}/observe`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function prepareBillingPosInvoiceRequest({ saleId, token, empresaId }) {
+  return apiRequest(`/billing/pos/invoice-requests/${saleId}/prepare`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function discardBillingPosInvoiceRequest({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/billing/pos/invoice-requests/${saleId}/discard`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function getCompanyUsers({ token, empresaId }) {
   return apiRequest("/company/users", { token, empresaId });
 }

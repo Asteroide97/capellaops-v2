@@ -1871,6 +1871,35 @@ textarea {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.billing-queue-page {
+  display: grid;
+  gap: 1rem;
+}
+
+.billing-inline-filters {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.billing-validation-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: grid;
+  gap: 0.45rem;
+  color: #b42318;
+}
+
+.billing-validation-list li {
+  line-height: 1.4;
+}
+
+@media (max-width: 840px) {
+  .billing-inline-filters {
+    grid-template-columns: 1fr;
+  }
+}
+
 .pos-report-grid {
   display: grid;
   gap: 1rem;

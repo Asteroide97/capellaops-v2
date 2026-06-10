@@ -175,6 +175,10 @@ class Venta(UUIDPrimaryKeyMixin, Base):
             "factura_estado IN ('no_solicitada', 'solicitada', 'pendiente_datos', 'lista_para_facturar', 'facturada', 'cancelada')",
             name="ck_venta_factura_estado",
         ),
+        CheckConstraint(
+            "factura_revision_estado IS NULL OR factura_revision_estado IN ('pendiente_datos', 'lista_para_facturar', 'en_revision', 'observada', 'preparada', 'descartada')",
+            name="ck_venta_factura_revision_estado",
+        ),
     )
 
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
@@ -226,6 +230,17 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     factura_regimen_fiscal: Mapped[str | None] = mapped_column(String(10), nullable=True)
     factura_codigo_postal: Mapped[str | None] = mapped_column(String(12), nullable=True)
     factura_notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    factura_revision_estado: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    factura_revision_notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    factura_revisada_por_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("usuarios.id"),
+        nullable=True,
+        index=True,
+    )
+    factura_revisada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    factura_preparada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    factura_descartada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    factura_error_datos: Mapped[str | None] = mapped_column(Text, nullable=True)
     factura_requiere_factura_global: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
@@ -249,6 +264,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     turno = relationship("PosTurnoCaja", back_populates="ventas")
     usuario = relationship("Usuario", foreign_keys=[usuario_id])
     cancelled_by_user = relationship("Usuario", foreign_keys=[cancelled_by_user_id])
+    factura_revisada_por_user = relationship("Usuario", foreign_keys=[factura_revisada_por_user_id])
     detalles = relationship("VentaDetalle", back_populates="venta", cascade="all, delete-orphan")
     pagos = relationship("VentaPago", back_populates="venta", cascade="all, delete-orphan")
 

@@ -20,7 +20,7 @@ import {
   Ticket,
   Wallet,
 } from "lucide-react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../auth/AuthContext";
 import BarcodeScannerModal from "../components/BarcodeScannerModal";
@@ -376,6 +376,10 @@ function getInvoiceStatusLabel(status) {
     solicitada: "Solicitada",
     pendiente_datos: "Pendiente de datos",
     lista_para_facturar: "Lista para facturar",
+    en_revision: "En revision",
+    observada: "Observada",
+    preparada: "Preparada",
+    descartada: "Descartada",
     facturada: "Facturada",
     cancelada: "Cancelada",
   };
@@ -385,13 +389,13 @@ function getInvoiceStatusLabel(status) {
 
 function getInvoiceStatusTone(status) {
   const normalized = String(status ?? "").toLowerCase();
-  if (normalized === "lista_para_facturar") {
+  if (normalized === "lista_para_facturar" || normalized === "preparada") {
     return "success";
   }
-  if (normalized === "pendiente_datos" || normalized === "solicitada") {
+  if (normalized === "pendiente_datos" || normalized === "solicitada" || normalized === "en_revision") {
     return "warning";
   }
-  if (normalized === "cancelada") {
+  if (normalized === "cancelada" || normalized === "observada" || normalized === "descartada") {
     return "danger";
   }
   return "neutral";
@@ -636,9 +640,11 @@ function PaginationControls({ meta, onPrevious, onNext }) {
 
 
 export default function PosPage() {
-  const { token, empresaId, user } = useAuth();
+  const { token, empresaId, membership, user } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeView = POS_VIEWS.includes(searchParams.get("view")) ? searchParams.get("view") : "sell";
+  const canOpenBillingQueue = user?.is_superadmin || ["owner", "admin"].includes(String(membership?.role ?? "").toLowerCase());
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -3512,6 +3518,13 @@ export default function PosPage() {
               <strong>Preparación de CFDI pendiente</strong>
               <p>El timbrado CFDI aún está pendiente. Esta vista solo prepara las solicitudes.</p>
             </div>
+            {canOpenBillingQueue ? (
+              <div className="pos-action-row">
+                <button className="ghost-button" onClick={() => navigate("/facturacion-pendiente")} type="button">
+                  Ver en bandeja fiscal
+                </button>
+              </div>
+            ) : null}
           </section>
 
           <section className="feature-card pos-section-card">
@@ -3527,6 +3540,10 @@ export default function PosPage() {
                   <option value="pendiente_datos">Pendiente de datos</option>
                   <option value="lista_para_facturar">Lista para facturar</option>
                   <option value="solicitada">Solicitada</option>
+                  <option value="en_revision">En revision</option>
+                  <option value="observada">Observada</option>
+                  <option value="preparada">Preparada</option>
+                  <option value="descartada">Descartada</option>
                 </select>
               </label>
 
@@ -3622,6 +3639,15 @@ export default function PosPage() {
                           <button className="link-button" onClick={() => openInvoiceRequestModal(item.venta_id)} type="button">
                             Ver / Editar datos
                           </button>
+                          {canOpenBillingQueue ? (
+                            <button
+                              className="link-button"
+                              onClick={() => navigate(`/facturacion-pendiente?sale_id=${item.venta_id}`)}
+                              type="button"
+                            >
+                              Ver en bandeja fiscal
+                            </button>
+                          ) : null}
                         </td>
                       </tr>
                     ))}
@@ -3772,9 +3798,20 @@ export default function PosPage() {
                       {hasPreparedInvoiceRequest(selectedSale) ? "Editar datos fiscales" : "Solicitar factura"}
                     </button>
                     {hasPreparedInvoiceRequest(selectedSale) ? (
-                      <button className="ghost-button" onClick={() => openInvoiceRequestModal(selectedSale.id)} type="button">
-                        Ver solicitud
-                      </button>
+                      <>
+                        <button className="ghost-button" onClick={() => openInvoiceRequestModal(selectedSale.id)} type="button">
+                          Ver solicitud
+                        </button>
+                        {canOpenBillingQueue ? (
+                          <button
+                            className="ghost-button"
+                            onClick={() => navigate(`/facturacion-pendiente?sale_id=${selectedSale.id}`)}
+                            type="button"
+                          >
+                            Ver en bandeja fiscal
+                          </button>
+                        ) : null}
+                      </>
                     ) : null}
                   </>
                 ) : selectedSale.estatus === "cancelada" ? (

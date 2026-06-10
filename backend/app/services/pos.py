@@ -74,6 +74,7 @@ INVOICE_READY_REQUIRED_FIELDS = (
     "factura_codigo_postal",
 )
 INVOICE_ALLOWED_STATUSES = {"no_solicitada", "solicitada", "pendiente_datos", "lista_para_facturar", "facturada", "cancelada"}
+INVOICE_REVIEW_STATUSES = {"pendiente_datos", "lista_para_facturar", "en_revision", "observada", "preparada", "descartada"}
 RFC_PATTERN = re.compile(r"^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$")
 EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -161,6 +162,14 @@ def resolve_invoice_request_status(sale: Venta) -> str:
         return "no_solicitada"
     has_minimum_data = all(getattr(sale, field) for field in INVOICE_READY_REQUIRED_FIELDS)
     return "lista_para_facturar" if has_minimum_data else "pendiente_datos"
+
+
+def resolve_invoice_display_status(sale: Venta) -> str:
+    if sale.factura_revision_estado in INVOICE_REVIEW_STATUSES:
+        return str(sale.factura_revision_estado)
+    if sale.factura_estado in INVOICE_ALLOWED_STATUSES:
+        return str(sale.factura_estado)
+    return "no_solicitada"
 
 
 def validate_sale_invoice_request_allowed(sale: Venta) -> None:
@@ -461,7 +470,7 @@ def build_sale_item(
         monto_pagado=calculate_sale_paid_amount(sale),
         cambio=sale.cambio,
         estatus=sale.estatus,
-        factura_estado=sale.factura_estado or "no_solicitada",
+        factura_estado=resolve_invoice_display_status(sale),
         factura_solicitada_at=sale.factura_solicitada_at,
         factura_cliente_nombre=sale.factura_cliente_nombre,
         factura_rfc=sale.factura_rfc,
@@ -519,7 +528,7 @@ def serialize_invoice_request_item(sale: Venta) -> PosInvoiceRequestItem:
         fecha=sale.factura_solicitada_at or sale.paid_at or sale.created_at,
         total=sale.total,
         venta_estatus=sale.estatus,
-        factura_estado=sale.factura_estado or "no_solicitada",
+        factura_estado=resolve_invoice_display_status(sale),
         cliente_nombre=sale.factura_cliente_nombre or sale.cliente_nombre,
         rfc=sale.factura_rfc,
         email=sale.factura_email or sale.cliente_email,
@@ -718,6 +727,13 @@ def upsert_sale_invoice_request(
     if not sale.factura_solicitada_at:
         sale.factura_solicitada_at = datetime.now(timezone.utc)
     sale.factura_estado = resolve_invoice_request_status(sale)
+    sale.factura_revision_estado = sale.factura_estado
+    sale.factura_revision_notas = None
+    sale.factura_revisada_por_user_id = None
+    sale.factura_revisada_at = None
+    sale.factura_preparada_at = None
+    sale.factura_descartada_at = None
+    sale.factura_error_datos = None
 
     create_audit_log(
         db,
@@ -753,6 +769,7 @@ def list_invoice_requests(
     offset: int = 0,
 ) -> tuple[int, list[PosInvoiceRequestItem]]:
     request_timestamp = func.coalesce(Venta.factura_solicitada_at, Venta.paid_at, Venta.created_at)
+    display_status = func.coalesce(Venta.factura_revision_estado, Venta.factura_estado)
     id_query = select(Venta.id).where(
         Venta.empresa_id == empresa_id,
         Venta.estatus == "pagada",
@@ -760,7 +777,7 @@ def list_invoice_requests(
     )
 
     if estado:
-        id_query = id_query.where(Venta.factura_estado == estado)
+        id_query = id_query.where(display_status == estado)
     if fecha_desde:
         id_query = id_query.where(request_timestamp >= fecha_desde)
     if fecha_hasta:

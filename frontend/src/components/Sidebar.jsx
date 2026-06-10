@@ -49,7 +49,7 @@ function NavLabel({ icon, label, child = false }) {
 
 
 export default function Sidebar() {
-  const { empresa, modules } = useAuth();
+  const { empresa, membership, modules, user } = useAuth();
   const location = useLocation();
   const [inventoryExpanded, setInventoryExpanded] = useState(location.pathname.startsWith("/inventario"));
   const [posExpanded, setPosExpanded] = useState(location.pathname.startsWith("/pos"));
@@ -70,6 +70,8 @@ export default function Sidebar() {
       setPosExpanded(true);
     }
   }, [location.pathname]);
+
+  const canAccessBillingQueue = user?.is_superadmin || ["owner", "admin"].includes(String(membership?.role ?? "").toLowerCase());
 
   const visibleModules = useMemo(
     () => modules.filter((module) => module.visible_in_sidebar),
@@ -166,6 +168,14 @@ export default function Sidebar() {
                   </div>
                 ) : null}
               </div>
+            );
+          }
+
+          if (module.name === "billing_pending" && canAccessBillingQueue) {
+            return (
+              <NavLink className={getNavClass} key={module.name} to={module.route || "/facturacion-pendiente"}>
+                <NavLabel icon={moduleIcon} label={module.label} />
+              </NavLink>
             );
           }
 

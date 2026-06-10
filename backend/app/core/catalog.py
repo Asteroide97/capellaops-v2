@@ -17,17 +17,17 @@ MODULE_DEFINITIONS = {
     "pm": {
         "label": "Gestion de Proyectos",
         "route": "/pm",
-        "description": "Gestión de proyectos y tareas.",
+        "description": "Gestion de proyectos y tareas.",
     },
     "billing_pending": {
-        "label": "Facturación pendiente",
+        "label": "Facturacion",
         "route": "/facturacion-pendiente",
-        "description": "Módulo fiscal reservado para implementación futura.",
+        "description": "Bandeja fiscal para solicitudes POS en preparacion previa a CFDI.",
     },
     "superadmin": {
         "label": "Superadmin",
         "route": "/superadmin",
-        "description": "Herramientas internas de administración técnica.",
+        "description": "Herramientas internas de administracion tecnica.",
     },
 }
 

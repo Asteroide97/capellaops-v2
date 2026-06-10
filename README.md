@@ -1589,6 +1589,21 @@ Las órdenes de compra ya siguen el flujo base:
 - `POS > Facturación` ya concentra las solicitudes pendientes de timbrado con filtros por estado, fecha, RFC y folio.
 - Esta fase no conecta Factura.com, no genera CFDI 4.0 y no marca ventas como `facturada`.
 
+## Facturación Fase 1 - Bandeja fiscal para solicitudes POS
+
+- La revision fiscal ya vive en una bandeja central independiente del flujo operativo de POS.
+- `Facturacion > Solicitudes POS` ya lista solicitudes con estados de revision:
+  - `pendiente_datos`
+  - `lista_para_facturar`
+  - `en_revision`
+  - `observada`
+  - `preparada`
+  - `descartada`
+- La validacion fiscal basica revisa RFC, razon social, email, uso CFDI, regimen fiscal y codigo postal sin consultar SAT ni servicios externos.
+- La accion `Preparar para timbrado futuro` solo marca la solicitud como lista para una integracion fiscal futura.
+- `POS > Facturación` sigue siendo la bandeja operativa de mostrador y ahora enlaza a la bandeja fiscal central.
+- Esta fase no timbra CFDI, no genera XML fiscal y no integra Factura.com.
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados

@@ -403,7 +403,7 @@ def update_sale_invoice_request(
 
 @router.get("/invoice-requests", response_model=PosInvoiceRequestListResponse)
 def get_invoice_requests(
-    estado: Literal["solicitada", "pendiente_datos", "lista_para_facturar"] | None = None,
+    estado: str | None = None,
     fecha_desde: datetime | None = None,
     fecha_hasta: datetime | None = None,
     rfc: str | None = None,
