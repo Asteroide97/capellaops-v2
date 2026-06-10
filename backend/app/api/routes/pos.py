@@ -12,8 +12,10 @@ from app.schemas.pos import (
     PosActiveShiftResponse,
     PosCatalogResponse,
     PosShiftCloseRequest,
+    PosShiftListResponse,
     PosShiftManualMovementRequest,
     PosShiftOpenRequest,
+    PosShiftReportResponse,
     PosShiftResponse,
     PosTicketResponse,
     SaleCancelRequest,
@@ -32,7 +34,10 @@ from app.services.pos import (
     get_pos_catalog,
     get_sale_for_company,
     get_sale_ticket,
+    get_shift_detail_response,
+    get_shift_report,
     list_sales,
+    list_shifts,
     open_shift,
     pay_suspended_sale,
     resume_suspended_sale,
@@ -180,6 +185,54 @@ def manual_withdrawal_endpoint(
             ip_address=request.client.host if request.client else None,
         ),
     )
+
+
+@router.get("/shifts", response_model=PosShiftListResponse)
+def get_shifts(
+    almacen_id: str | None = None,
+    estatus: Literal["abierta", "cerrada", "cancelada"] | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
+    usuario_id: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosShiftListResponse:
+    validate_date_range(fecha_desde, fecha_hasta)
+    if almacen_id:
+        get_warehouse_for_company(db, context.empresa.id, almacen_id)
+
+    total, items = list_shifts(
+        db,
+        context.empresa.id,
+        almacen_id=almacen_id,
+        estatus=estatus,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        usuario_id=usuario_id,
+        limit=limit,
+        offset=offset,
+    )
+    return PosShiftListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/shifts/{shift_id}", response_model=PosShiftResponse)
+def get_shift_detail(
+    shift_id: str,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosShiftResponse:
+    return get_shift_detail_response(db, context.empresa.id, shift_id)
+
+
+@router.get("/shifts/{shift_id}/report", response_model=PosShiftReportResponse)
+def get_shift_report_endpoint(
+    shift_id: str,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosShiftReportResponse:
+    return get_shift_report(db, context.empresa.id, shift_id)
 
 
 @router.get("/catalog", response_model=PosCatalogResponse)

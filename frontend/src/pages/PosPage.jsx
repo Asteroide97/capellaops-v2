@@ -33,6 +33,8 @@ import {
   getPosCatalog,
   getPosSaleDetail,
   getPosSales,
+  getPosShiftReport,
+  getPosShifts,
   getPosTicket,
   getWarehouses,
   openPosShift,
@@ -68,6 +70,15 @@ const catalogFilterDefaults = {
 const saleFilterDefaults = {
   q: "",
   estatus: "",
+  limit: DEFAULT_PAGE_SIZE,
+  offset: 0,
+};
+
+const shiftHistoryFilterDefaults = {
+  almacen_id: "",
+  estatus: "",
+  fecha_desde: "",
+  fecha_hasta: "",
   limit: DEFAULT_PAGE_SIZE,
   offset: 0,
 };
@@ -108,6 +119,18 @@ function formatDateTime(value) {
     dateStyle: "short",
     timeStyle: "short",
   }).format(new Date(value));
+}
+
+
+function formatDurationLabel(totalSeconds) {
+  const safeSeconds = Math.max(0, Number(totalSeconds || 0));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+
+  if (hours <= 0) {
+    return `${minutes} min`;
+  }
+  return `${hours} h ${minutes} min`;
 }
 
 
@@ -239,6 +262,21 @@ function getSaleStatusTone(status) {
 
 function getSaleDisplayDate(sale) {
   return sale?.paid_at || sale?.created_at || null;
+}
+
+
+function getShiftDifferenceClass(value) {
+  const numericValue = Number(value || 0);
+  if (Number.isNaN(numericValue)) {
+    return "";
+  }
+  if (numericValue === 0) {
+    return "pos-difference-zero";
+  }
+  if (numericValue > 0) {
+    return "pos-difference-positive";
+  }
+  return "pos-difference-negative";
 }
 
 
@@ -471,6 +509,13 @@ export default function PosPage() {
     limit: DEFAULT_PAGE_SIZE,
     offset: 0,
   });
+  const [shiftHistoryFilters, setShiftHistoryFilters] = useState(shiftHistoryFilterDefaults);
+  const [shiftHistory, setShiftHistory] = useState([]);
+  const [shiftHistoryMeta, setShiftHistoryMeta] = useState({
+    total: 0,
+    limit: DEFAULT_PAGE_SIZE,
+    offset: 0,
+  });
 
   const [cart, setCart] = useState([]);
   const [saleForm, setSaleForm] = useState(defaultSaleForm);
@@ -483,6 +528,8 @@ export default function PosPage() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [ticketModalOpen, setTicketModalOpen] = useState(false);
+  const [shiftReportModalOpen, setShiftReportModalOpen] = useState(false);
+  const [selectedShiftReport, setSelectedShiftReport] = useState(null);
   const [resumedSaleId, setResumedSaleId] = useState("");
   const [shiftMovementModalType, setShiftMovementModalType] = useState("");
   const [closeShiftModalOpen, setCloseShiftModalOpen] = useState(false);
@@ -612,6 +659,10 @@ export default function PosPage() {
   }, [sales]);
 
   const ticketsList = useMemo(() => sales.filter((item) => ["pagada", "cancelada"].includes(item.estatus)), [sales]);
+  const activeShiftDurationLabel = useMemo(
+    () => (activeShift?.opened_at ? formatDurationLabel((Date.now() - new Date(activeShift.opened_at).getTime()) / 1000) : "-"),
+    [activeShift?.opened_at],
+  );
 
   function updateView(view) {
     const next = new URLSearchParams(searchParams);
@@ -719,6 +770,29 @@ export default function PosPage() {
     return response;
   }
 
+  async function loadShiftHistory(nextFilters = shiftHistoryFilters) {
+    const response = await getPosShifts({
+      token,
+      empresaId,
+      filters: {
+        almacen_id: nextFilters.almacen_id,
+        estatus: nextFilters.estatus,
+        fecha_desde: nextFilters.fecha_desde,
+        fecha_hasta: nextFilters.fecha_hasta,
+        limit: nextFilters.limit,
+        offset: nextFilters.offset,
+      },
+    });
+
+    setShiftHistory(response.items ?? []);
+    setShiftHistoryMeta({
+      total: response.total ?? 0,
+      limit: response.limit ?? DEFAULT_PAGE_SIZE,
+      offset: response.offset ?? 0,
+    });
+    return response;
+  }
+
   async function loadSaleArtifacts(saleId) {
     const saleDetail = await getPosSaleDetail({ saleId, token, empresaId });
     const ticket =
@@ -741,7 +815,12 @@ export default function PosPage() {
     try {
       const warehouseItems = await loadWarehousesOptions();
       const nextWarehouseId = selectedWarehouseId || warehouseItems[0]?.id || "";
-      await Promise.all([loadCatalog(nextWarehouseId, catalogFilters), loadSales(saleFilters), loadActiveShift(nextWarehouseId)]);
+      await Promise.all([
+        loadCatalog(nextWarehouseId, catalogFilters),
+        loadSales(saleFilters),
+        loadActiveShift(nextWarehouseId),
+        loadShiftHistory(shiftHistoryFilters),
+      ]);
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
@@ -759,7 +838,12 @@ export default function PosPage() {
       clearFeedback();
     }
     try {
-      await Promise.all([loadCatalog(selectedWarehouseId, catalogFilters), loadSales(saleFilters), loadActiveShift(selectedWarehouseId)]);
+      await Promise.all([
+        loadCatalog(selectedWarehouseId, catalogFilters),
+        loadSales(saleFilters),
+        loadActiveShift(selectedWarehouseId),
+        loadShiftHistory(shiftHistoryFilters),
+      ]);
       if (keepTicket && selectedSale?.id) {
         await loadSaleArtifacts(selectedSale.id);
       }
@@ -1203,6 +1287,7 @@ export default function PosPage() {
       setActiveShift(shift);
       setShiftMovementForm(defaultShiftMovementForm);
       setShiftMovementModalType("");
+      await loadShiftHistory(shiftHistoryFilters);
       setSuccess(
         shiftMovementModalType === "ingreso"
           ? "Ingreso manual registrado."
@@ -1239,6 +1324,7 @@ export default function PosPage() {
       setCloseShiftModalOpen(false);
       await refreshPosData({ keepTicket: false, preserveFeedback: true });
       setSuccess("Turno cerrado correctamente.");
+      setSuccessContext({ type: "shift-closed", shiftId: shift.id });
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
@@ -1326,6 +1412,18 @@ export default function PosPage() {
     }
   }
 
+  async function handleShiftHistorySearch(event) {
+    event.preventDefault();
+    clearFeedback();
+    try {
+      const nextFilters = { ...shiftHistoryFilters, offset: 0 };
+      setShiftHistoryFilters(nextFilters);
+      await loadShiftHistory(nextFilters);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    }
+  }
+
   async function handleCatalogPageChange(nextOffset) {
     const nextFilters = { ...catalogFilters, offset: nextOffset };
     setCatalogFilters(nextFilters);
@@ -1341,6 +1439,16 @@ export default function PosPage() {
     setSaleFilters(nextFilters);
     try {
       await loadSales(nextFilters);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    }
+  }
+
+  async function handleShiftHistoryPageChange(nextOffset) {
+    const nextFilters = { ...shiftHistoryFilters, offset: nextOffset };
+    setShiftHistoryFilters(nextFilters);
+    try {
+      await loadShiftHistory(nextFilters);
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     }
@@ -1364,6 +1472,7 @@ export default function PosPage() {
     clearFeedback();
     try {
       await loadSaleArtifacts(saleId);
+      setShiftReportModalOpen(false);
       setTicketModalOpen(true);
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
@@ -1372,7 +1481,32 @@ export default function PosPage() {
     }
   }
 
+  async function openShiftReport(shiftId, options = {}) {
+    setSubmitting(true);
+    clearFeedback();
+    try {
+      const report = await getPosShiftReport({ shiftId, token, empresaId });
+      setSelectedShiftReport(report);
+      setTicketModalOpen(false);
+      setDetailModalOpen(false);
+      setShiftReportModalOpen(true);
+      if (options.printAfterOpen) {
+        window.setTimeout(() => {
+          window.print();
+        }, 80);
+      }
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   function printTicket() {
+    window.print();
+  }
+
+  function printShiftReport() {
     window.print();
   }
 
@@ -1500,6 +1634,13 @@ export default function PosPage() {
               </button>
               <button className="primary-button" onClick={handleNewSale} type="button">
                 Nueva venta
+              </button>
+            </div>
+          ) : null}
+          {successContext?.type === "shift-closed" ? (
+            <div className="pos-action-row">
+              <button className="ghost-button" onClick={() => openShiftReport(successContext.shiftId)} type="button">
+                Ver corte
               </button>
             </div>
           ) : null}
@@ -2274,14 +2415,21 @@ export default function PosPage() {
             <section className="feature-card pos-section-card">
               <div className="feature-header">
                 <h2>Turno en curso</h2>
-                <p className="table-note">Resumen operativo de la caja actual.</p>
+                <p className="table-note">Resumen operativo del turno actual y acceso al corte preliminar.</p>
               </div>
 
               <div className="pos-kpi-grid pos-kpi-grid-compact">
-                <PosKpiCard icon={<Wallet size={18} />} label="Fondo inicial" meta={activeShift.folio} value={formatMoney(activeShift.fondo_inicial)} />
-                <PosKpiCard icon={<BadgeDollarSign size={18} />} label="Ventas cobradas" meta={`${activeShift.ventas_count} ventas`} value={formatMoney(activeShift.total_bruto)} />
-                <PosKpiCard icon={<ReceiptText size={18} />} label="Núm. ventas" meta="Operaciones cobradas" value={formatNumber(activeShift.ventas_count)} />
+                <PosKpiCard icon={<Wallet size={18} />} label="Turno" meta="Folio de caja" value={activeShift.folio} />
                 <PosKpiCard icon={<Clock3 size={18} />} label="Apertura" meta="Inicio del turno" value={formatDateTime(activeShift.opened_at)} />
+                <PosKpiCard icon={<History size={18} />} label="Duración" meta="Tiempo acumulado" value={activeShiftDurationLabel} />
+                <PosKpiCard icon={<CircleDollarSign size={18} />} label="Fondo inicial" meta="Base de caja" value={formatMoney(activeShift.fondo_inicial)} />
+                <PosKpiCard icon={<BadgeDollarSign size={18} />} label="Ventas cobradas" meta={`${activeShift.ventas_count} ventas`} value={formatMoney(activeShift.total_bruto)} />
+                <PosKpiCard
+                  icon={<ReceiptText size={18} />}
+                  label="Ventas netas"
+                  meta="Ventas cobradas menos cancelaciones"
+                  value={formatMoney(activeShift.total_neto)}
+                />
                 <PosKpiCard
                   icon={<History size={18} />}
                   label="Ventas canceladas"
@@ -2290,9 +2438,9 @@ export default function PosPage() {
                 />
                 <PosKpiCard
                   icon={<CircleDollarSign size={18} />}
-                  label="Total neto"
-                  meta="Ventas cobradas menos cancelaciones"
-                  value={formatMoney(activeShift.total_neto)}
+                  label="Efectivo esperado"
+                  meta="Fondo inicial + efectivo + ingresos - retiros"
+                  value={formatMoney(activeShift.efectivo_esperado)}
                 />
                 <PosKpiCard icon={<BanknoteArrowUp size={18} />} label="Ingresos manuales" meta="Ajustes de caja" value={formatMoney(activeShift.ingresos_manuales)} />
                 <PosKpiCard icon={<BanknoteArrowDown size={18} />} label="Retiros manuales" meta="Salidas manuales" value={formatMoney(activeShift.retiros_manuales)} />
@@ -2313,6 +2461,10 @@ export default function PosPage() {
                 <button className="ghost-button" onClick={() => setShiftMovementModalType("retiro")} type="button">
                   <BanknoteArrowDown size={16} />
                   <span>Retiro manual</span>
+                </button>
+                <button className="ghost-button" onClick={() => openShiftReport(activeShift.id)} type="button">
+                  <ReceiptText size={16} />
+                  <span>Ver corte preliminar</span>
                 </button>
                 <button
                   className="primary-button"
@@ -2363,6 +2515,154 @@ export default function PosPage() {
               </div>
             </section>
           ) : null}
+
+          <section className="feature-card pos-section-card">
+            <div className="feature-header">
+              <h2>Historial de turnos</h2>
+              <p className="table-note">Consulta turnos abiertos y cerrados, y revisa su corte de caja.</p>
+            </div>
+
+            <form className="pos-shift-history-filters" onSubmit={handleShiftHistorySearch}>
+              <label>
+                Almacén
+                <select
+                  className="pos-input"
+                  onChange={(event) =>
+                    setShiftHistoryFilters((current) => ({
+                      ...current,
+                      almacen_id: event.target.value,
+                    }))
+                  }
+                  value={shiftHistoryFilters.almacen_id}
+                >
+                  <option value="">Todos los almacenes</option>
+                  {warehouses.map((warehouse) => (
+                    <option key={warehouse.id} value={warehouse.id}>
+                      {warehouse.nombre}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Estatus
+                <select
+                  className="pos-input"
+                  onChange={(event) =>
+                    setShiftHistoryFilters((current) => ({
+                      ...current,
+                      estatus: event.target.value,
+                    }))
+                  }
+                  value={shiftHistoryFilters.estatus}
+                >
+                  <option value="">Todos</option>
+                  <option value="abierta">Abierta</option>
+                  <option value="cerrada">Cerrada</option>
+                  <option value="cancelada">Cancelada</option>
+                </select>
+              </label>
+
+              <label>
+                Fecha desde
+                <input
+                  className="pos-input"
+                  onChange={(event) =>
+                    setShiftHistoryFilters((current) => ({
+                      ...current,
+                      fecha_desde: event.target.value,
+                    }))
+                  }
+                  type="date"
+                  value={shiftHistoryFilters.fecha_desde}
+                />
+              </label>
+
+              <label>
+                Fecha hasta
+                <input
+                  className="pos-input"
+                  onChange={(event) =>
+                    setShiftHistoryFilters((current) => ({
+                      ...current,
+                      fecha_hasta: event.target.value,
+                    }))
+                  }
+                  type="date"
+                  value={shiftHistoryFilters.fecha_hasta}
+                />
+              </label>
+
+              <div className="pos-action-row">
+                <button className="ghost-button" type="submit">
+                  Filtrar
+                </button>
+              </div>
+            </form>
+
+            {shiftHistory.length === 0 ? (
+              <EmptyState note="Abre y cierra turnos para construir el historial operativo de caja." title="No hay turnos registrados." />
+            ) : (
+              <>
+                <div className="table-wrap">
+                  <table className="inventory-table">
+                    <thead>
+                      <tr>
+                        <th>Apertura</th>
+                        <th>Cierre</th>
+                        <th>Almacén</th>
+                        <th>Usuario</th>
+                        <th>Estatus</th>
+                        <th>Ventas netas</th>
+                        <th>Efectivo esperado</th>
+                        <th>Efectivo contado</th>
+                        <th>Diferencia</th>
+                        <th>Acciones</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shiftHistory.map((shift) => (
+                        <tr key={shift.id}>
+                          <td>{formatDateTime(shift.opened_at)}</td>
+                          <td>{shift.closed_at ? formatDateTime(shift.closed_at) : "Sin cierre contado"}</td>
+                          <td>{shift.almacen_nombre}</td>
+                          <td>{shift.usuario_apertura_nombre}</td>
+                          <td>
+                            <StatusBadge
+                              label={shift.estatus === "abierta" ? "Abierta" : shift.estatus === "cerrada" ? "Cerrada" : "Cancelada"}
+                              tone={shift.estatus === "abierta" ? "warning" : shift.estatus === "cerrada" ? "success" : "danger"}
+                            />
+                          </td>
+                          <td>{formatMoney(shift.total_neto)}</td>
+                          <td>{formatMoney(shift.efectivo_esperado)}</td>
+                          <td>{shift.efectivo_contado != null ? formatMoney(shift.efectivo_contado) : "Sin cierre contado"}</td>
+                          <td className={shift.diferencia == null ? "" : getShiftDifferenceClass(shift.diferencia)}>
+                            {shift.diferencia != null ? formatMoney(shift.diferencia) : "No registrado"}
+                          </td>
+                          <td>
+                            <div className="inventory-actions">
+                              <button className="link-button" onClick={() => openShiftReport(shift.id)} type="button">
+                                Ver corte
+                              </button>
+                              <button className="link-button" onClick={() => openShiftReport(shift.id, { printAfterOpen: true })} type="button">
+                                Imprimir corte
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <PaginationControls
+                  meta={shiftHistoryMeta}
+                  onNext={() => handleShiftHistoryPageChange(shiftHistoryMeta.offset + shiftHistoryMeta.limit)}
+                  onPrevious={() => handleShiftHistoryPageChange(Math.max(0, shiftHistoryMeta.offset - shiftHistoryMeta.limit))}
+                />
+              </>
+            )}
+          </section>
         </div>
       ) : null}
 
@@ -2652,6 +2952,236 @@ export default function PosPage() {
 
       <PosModal
         footer={
+          selectedShiftReport ? (
+            <div className="inventory-actions">
+              <button className="ghost-button" onClick={() => setShiftReportModalOpen(false)} type="button">
+                Cerrar
+              </button>
+              <button className="primary-button" onClick={printShiftReport} type="button">
+                <Printer size={16} />
+                <span>Imprimir corte</span>
+              </button>
+            </div>
+          ) : null
+        }
+        onClose={() => setShiftReportModalOpen(false)}
+        open={shiftReportModalOpen}
+        size="wide"
+        subtitle="Resumen operativo del turno, movimientos manuales, ventas y cancelaciones."
+        title="Corte de caja"
+      >
+        {!selectedShiftReport ? (
+          <EmptyState note="Selecciona un turno para consultar su corte de caja." title="Sin corte activo" />
+        ) : (
+          <div className="pos-modal-stack">
+            <article className="pos-shift-report-print">
+              <div className="pos-shift-report-sheet">
+                <header className="pos-shift-report-head">
+                  <div>
+                    <p className="eyebrow">Corte de caja</p>
+                    <h3>{selectedShiftReport.shift.almacen_nombre}</h3>
+                    <p>Turno {selectedShiftReport.shift.folio}</p>
+                  </div>
+                  <div className="pos-ticket-status-block">
+                    <StatusBadge
+                      label={selectedShiftReport.shift.estatus === "cerrada" ? "Cerrada" : "Abierta"}
+                      tone={selectedShiftReport.shift.estatus === "cerrada" ? "success" : "warning"}
+                    />
+                    <strong>{formatDateTime(selectedShiftReport.shift.opened_at)}</strong>
+                    <span>Impreso {formatDateTime(selectedShiftReport.generated_at)}</span>
+                  </div>
+                </header>
+
+                <div className="pos-shift-report-meta">
+                  <div>
+                    <span>Apertura</span>
+                    <strong>{formatDateTime(selectedShiftReport.shift.opened_at)}</strong>
+                  </div>
+                  <div>
+                    <span>Cierre</span>
+                    <strong>{selectedShiftReport.shift.closed_at ? formatDateTime(selectedShiftReport.shift.closed_at) : "Sin cierre contado"}</strong>
+                  </div>
+                  <div>
+                    <span>Usuario apertura</span>
+                    <strong>{selectedShiftReport.shift.usuario_apertura_nombre}</strong>
+                  </div>
+                  <div>
+                    <span>Usuario cierre</span>
+                    <strong>{selectedShiftReport.shift.usuario_cierre_nombre || "No registrado"}</strong>
+                  </div>
+                  <div>
+                    <span>Duración</span>
+                    <strong>{formatDurationLabel(selectedShiftReport.duracion_segundos)}</strong>
+                  </div>
+                  <div>
+                    <span>Estatus</span>
+                    <strong>{selectedShiftReport.shift.estatus === "cerrada" ? "Cerrada" : "Abierta"}</strong>
+                  </div>
+                </div>
+
+                <div className="pos-shift-report-grid">
+                  <section className="pos-ticket-totals">
+                    <div><span>Fondo inicial</span><strong>{formatMoney(selectedShiftReport.shift.fondo_inicial)}</strong></div>
+                    <div><span>Total bruto</span><strong>{formatMoney(selectedShiftReport.shift.total_bruto)}</strong></div>
+                    <div><span>Cancelaciones</span><strong>{formatMoney(selectedShiftReport.shift.ventas_canceladas_total)}</strong></div>
+                    <div><span>Total neto</span><strong>{formatMoney(selectedShiftReport.shift.total_neto)}</strong></div>
+                    <div><span>Descuentos de línea</span><strong>{formatMoney(selectedShiftReport.descuento_lineas_total)}</strong></div>
+                    <div><span>Descuento global</span><strong>{formatMoney(selectedShiftReport.descuento_global_total)}</strong></div>
+                    <div><span>Descuentos totales</span><strong>{formatMoney(selectedShiftReport.descuentos_totales)}</strong></div>
+                    <div><span>Ingresos manuales</span><strong>{formatMoney(selectedShiftReport.shift.ingresos_manuales)}</strong></div>
+                    <div><span>Retiros manuales</span><strong>{formatMoney(selectedShiftReport.shift.retiros_manuales)}</strong></div>
+                    <div><span>Efectivo esperado</span><strong>{formatMoney(selectedShiftReport.shift.efectivo_esperado)}</strong></div>
+                    <div><span>Efectivo contado</span><strong>{selectedShiftReport.shift.efectivo_contado != null ? formatMoney(selectedShiftReport.shift.efectivo_contado) : "Sin cierre contado"}</strong></div>
+                    <div>
+                      <span>Diferencia</span>
+                      <strong className={selectedShiftReport.shift.diferencia == null ? "" : getShiftDifferenceClass(selectedShiftReport.shift.diferencia)}>
+                        {selectedShiftReport.shift.diferencia != null ? formatMoney(selectedShiftReport.shift.diferencia) : "No registrada"}
+                      </strong>
+                    </div>
+                  </section>
+
+                  <section className="pos-ticket-section">
+                    <div className="feature-header">
+                      <p className="eyebrow">Métodos de pago</p>
+                      <h3>Desglose del turno</h3>
+                    </div>
+                    <div className="pos-shift-payment-grid">
+                      <article className="mini-card">
+                        <span className="eyebrow">Efectivo</span>
+                        <strong>{formatMoney(selectedShiftReport.shift.total_efectivo)}</strong>
+                      </article>
+                      <article className="mini-card">
+                        <span className="eyebrow">Tarjeta</span>
+                        <strong>{formatMoney(selectedShiftReport.shift.total_tarjeta)}</strong>
+                      </article>
+                      <article className="mini-card">
+                        <span className="eyebrow">Transferencia</span>
+                        <strong>{formatMoney(selectedShiftReport.shift.total_transferencia)}</strong>
+                      </article>
+                      <article className="mini-card">
+                        <span className="eyebrow">Otro</span>
+                        <strong>{formatMoney(selectedShiftReport.shift.total_otro)}</strong>
+                      </article>
+                    </div>
+                  </section>
+                </div>
+
+                <section className="pos-ticket-section">
+                  <div className="feature-header">
+                    <p className="eyebrow">Movimientos manuales</p>
+                    <h3>Ingresos y retiros</h3>
+                  </div>
+                  {selectedShiftReport.movimientos_manuales.length === 0 ? (
+                    <p className="table-note">No hay movimientos manuales registrados en este turno.</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="inventory-table pos-report-table">
+                        <thead>
+                          <tr>
+                            <th>Tipo</th>
+                            <th>Monto</th>
+                            <th>Motivo</th>
+                            <th>Usuario</th>
+                            <th>Fecha</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedShiftReport.movimientos_manuales.map((movement) => (
+                            <tr key={movement.id}>
+                              <td>{movement.tipo === "ingreso" ? "Ingreso manual" : "Retiro manual"}</td>
+                              <td>{formatMoney(movement.monto)}</td>
+                              <td>{movement.motivo}</td>
+                              <td>{movement.usuario_nombre}</td>
+                              <td>{formatDateTime(movement.created_at)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+
+                <section className="pos-ticket-section">
+                  <div className="feature-header">
+                    <p className="eyebrow">Ventas del turno</p>
+                    <h3>Listado de operaciones</h3>
+                  </div>
+                  {selectedShiftReport.ventas.length === 0 ? (
+                    <p className="table-note">No hay ventas registradas en este turno.</p>
+                  ) : (
+                    <div className="table-wrap">
+                      <table className="inventory-table pos-report-table">
+                        <thead>
+                          <tr>
+                            <th>Folio</th>
+                            <th>Fecha</th>
+                            <th>Estatus</th>
+                            <th>Método</th>
+                            <th>Cliente</th>
+                            <th>Cajero</th>
+                            <th>Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedShiftReport.ventas.map((sale) => (
+                            <tr key={sale.id}>
+                              <td>{sale.folio}</td>
+                              <td>{formatDateTime(sale.fecha)}</td>
+                              <td>{getSaleStatusLabel(sale.estatus)}</td>
+                              <td>{getPaymentMethodLabel(sale.metodo_pago)}</td>
+                              <td>{sale.cliente_nombre || "Mostrador"}</td>
+                              <td>{sale.vendedor_nombre}</td>
+                              <td>{formatMoney(sale.total)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </section>
+
+                {selectedShiftReport.cancelaciones.length > 0 ? (
+                  <section className="pos-ticket-section">
+                    <div className="feature-header">
+                      <p className="eyebrow">Cancelaciones</p>
+                      <h3>Ventas reversadas</h3>
+                    </div>
+                    <div className="table-wrap">
+                      <table className="inventory-table pos-report-table">
+                        <thead>
+                          <tr>
+                            <th>Folio</th>
+                            <th>Fecha</th>
+                            <th>Total</th>
+                            <th>Método</th>
+                            <th>Motivo</th>
+                            <th>Usuario</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {selectedShiftReport.cancelaciones.map((sale) => (
+                            <tr key={sale.id}>
+                              <td>{sale.folio}</td>
+                              <td>{formatDateTime(sale.fecha)}</td>
+                              <td>{formatMoney(sale.total)}</td>
+                              <td>{getPaymentMethodLabel(sale.metodo_pago)}</td>
+                              <td>{sale.motivo || "Sin motivo"}</td>
+                              <td>{sale.usuario_nombre || "No registrado"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </section>
+                ) : null}
+              </div>
+            </article>
+          </div>
+        )}
+      </PosModal>
+
+      <PosModal
+        footer={
           <div className="inventory-actions">
             <button className="ghost-button" onClick={() => setShiftMovementModalType("")} type="button">
               Cancelar
@@ -2726,6 +3256,22 @@ export default function PosPage() {
         <form className="pos-cash-form" id="pos-close-shift-form" onSubmit={handleCloseShiftSubmit}>
           <div className="pos-payment-summary pos-payment-secondary">
             <div>
+              <span>Fondo inicial</span>
+              <strong>{formatMoney(activeShift?.fondo_inicial)}</strong>
+            </div>
+            <div>
+              <span>Efectivo de ventas</span>
+              <strong>{formatMoney(activeShift?.total_efectivo)}</strong>
+            </div>
+            <div>
+              <span>Ingresos manuales</span>
+              <strong>{formatMoney(activeShift?.ingresos_manuales)}</strong>
+            </div>
+            <div>
+              <span>Retiros manuales</span>
+              <strong>{formatMoney(activeShift?.retiros_manuales)}</strong>
+            </div>
+            <div>
               <span>Efectivo esperado</span>
               <strong>{formatMoney(expectedCash)}</strong>
             </div>
@@ -2733,7 +3279,7 @@ export default function PosPage() {
               <span>Efectivo contado</span>
               <strong>{formatMoney(countedCash)}</strong>
             </div>
-            <div className={closeShiftDifference === 0 ? "" : closeShiftDifference > 0 ? "inventory-value-positive" : "inventory-value-negative"}>
+            <div className={getShiftDifferenceClass(closeShiftDifference)}>
               <span>Diferencia</span>
               <strong>{formatMoney(closeShiftDifference)}</strong>
             </div>

@@ -225,3 +225,53 @@ class PosShiftManualMovementRequest(BaseModel):
     warehouse_id: str = Field(min_length=1, max_length=64)
     monto: Decimal = Field(gt=0)
     motivo: str = Field(min_length=1, max_length=2000)
+
+
+class PosShiftSaleReportItem(BaseModel):
+    id: str
+    folio: str
+    fecha: datetime
+    estatus: str
+    total: Decimal
+    subtotal: Decimal
+    descuento_lineas_total: Decimal = Decimal("0")
+    descuento_global: Decimal = Decimal("0")
+    descuento_total: Decimal = Decimal("0")
+    metodo_pago: str
+    cliente_nombre: str | None = None
+    cliente_email: str | None = None
+    vendedor_nombre: str
+    turno_folio: str | None = None
+    monto_pagado: Decimal | None = None
+    cambio: Decimal | None = None
+
+
+class PosShiftCancellationReportItem(BaseModel):
+    id: str
+    folio: str
+    fecha: datetime
+    total: Decimal
+    metodo_pago: str
+    cliente_nombre: str | None = None
+    motivo: str | None = None
+    usuario_id: str | None = None
+    usuario_nombre: str | None = None
+
+
+class PosShiftReportResponse(BaseModel):
+    shift: PosShiftResponse
+    generated_at: datetime
+    duracion_segundos: int
+    descuento_lineas_total: Decimal = Decimal("0")
+    descuento_global_total: Decimal = Decimal("0")
+    descuentos_totales: Decimal = Decimal("0")
+    movimientos_manuales: list[PosShiftMovementResponse] = Field(default_factory=list)
+    ventas: list[PosShiftSaleReportItem] = Field(default_factory=list)
+    cancelaciones: list[PosShiftCancellationReportItem] = Field(default_factory=list)
+
+
+class PosShiftListResponse(BaseModel):
+    items: list[PosShiftResponse]
+    total: int
+    limit: int
+    offset: int

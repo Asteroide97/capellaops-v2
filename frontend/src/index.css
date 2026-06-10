@@ -1637,6 +1637,13 @@ textarea {
   align-items: end;
 }
 
+.pos-shift-history-filters {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  align-items: end;
+}
+
 .pos-history-search {
   min-width: 0;
 }
@@ -1688,6 +1695,11 @@ textarea {
 }
 
 .pos-ticket-print {
+  display: grid;
+  gap: 1rem;
+}
+
+.pos-shift-report-print {
   display: grid;
   gap: 1rem;
 }
@@ -1774,6 +1786,78 @@ textarea {
   font-size: 0.98rem;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.pos-shift-report-sheet {
+  display: grid;
+  gap: 1rem;
+  padding: 1.35rem 1.4rem;
+  border-radius: 1.35rem;
+  border: 1px solid rgba(16, 24, 40, 0.08);
+  background: linear-gradient(180deg, #ffffff 0%, #fcfcfd 100%);
+  box-shadow: 0 22px 60px rgba(16, 24, 40, 0.08);
+}
+
+.pos-shift-report-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px dashed rgba(16, 24, 40, 0.14);
+}
+
+.pos-shift-report-head h3 {
+  margin: 0.15rem 0 0;
+  font-size: 1.25rem;
+}
+
+.pos-shift-report-head p {
+  margin: 0.15rem 0 0;
+  color: var(--text-secondary);
+}
+
+.pos-shift-report-meta {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.pos-shift-report-meta > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.pos-shift-report-meta span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pos-shift-report-meta strong {
+  font-size: 0.98rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.pos-shift-report-grid {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.9fr);
+  align-items: start;
+}
+
+.pos-shift-payment-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.pos-report-table th,
+.pos-report-table td {
+  vertical-align: top;
 }
 
 .pos-ticket-table-wrap {
@@ -1878,9 +1962,21 @@ textarea {
   background: linear-gradient(180deg, rgba(20, 92, 67, 0.04), rgba(255, 255, 255, 0.75));
 }
 
+.pos-difference-zero {
+  color: #145c43;
+}
+
+.pos-difference-positive {
+  color: #b45309;
+}
+
+.pos-difference-negative {
+  color: #b42318;
+}
+
 @media print {
   @page {
-    size: 80mm auto;
+    size: auto;
     margin: 0;
   }
 
@@ -1889,7 +1985,9 @@ textarea {
   }
 
   .pos-ticket-print,
-  .pos-ticket-print * {
+  .pos-ticket-print *,
+  .pos-shift-report-print,
+  .pos-shift-report-print * {
     visibility: visible !important;
   }
 
@@ -1913,17 +2011,46 @@ textarea {
     gap: 4mm !important;
   }
 
+  .pos-shift-report-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    max-width: 210mm;
+    background: white;
+    color: black;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .pos-shift-report-print .pos-shift-report-sheet {
+    box-shadow: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    padding: 10mm 12mm !important;
+    gap: 4mm !important;
+  }
+
   .pos-ticket-print .inventory-table th,
   .pos-ticket-print .inventory-table td,
   .pos-ticket-print .table-note,
   .pos-ticket-print p,
   .pos-ticket-print strong,
   .pos-ticket-print span,
-  .pos-ticket-print h3 {
+  .pos-ticket-print h3,
+  .pos-shift-report-print .inventory-table th,
+  .pos-shift-report-print .inventory-table td,
+  .pos-shift-report-print .table-note,
+  .pos-shift-report-print p,
+  .pos-shift-report-print strong,
+  .pos-shift-report-print span,
+  .pos-shift-report-print h3 {
     color: black !important;
   }
 
-  .pos-ticket-print .status-badge {
+  .pos-ticket-print .status-badge,
+  .pos-shift-report-print .status-badge {
     border-color: #000 !important;
     color: #000 !important;
     background: transparent !important;
@@ -4740,6 +4867,10 @@ body.pm-is-dragging {
     grid-template-columns: 1fr;
   }
 
+  .pos-shift-report-grid {
+    grid-template-columns: 1fr;
+  }
+
   .pos-ticket-receipt-head {
     flex-direction: column;
     align-items: flex-start;
@@ -4779,9 +4910,11 @@ body.pm-is-dragging {
   .pos-payment-grid,
   .pos-payment-method-grid,
   .pos-history-filters,
+  .pos-shift-history-filters,
   .pos-form-grid,
   .pos-kpi-grid,
-  .pos-ticket-row {
+  .pos-ticket-row,
+  .pos-shift-payment-grid {
     grid-template-columns: 1fr;
   }
 

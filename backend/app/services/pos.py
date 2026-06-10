@@ -5,7 +5,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -22,8 +22,11 @@ from app.models.inventory import Almacen, Existencia, Material
 from app.schemas.pos import (
     PosActiveShiftResponse,
     PosCatalogItem,
+    PosShiftCancellationReportItem,
     PosShiftMovementResponse,
+    PosShiftReportResponse,
     PosShiftResponse,
+    PosShiftSaleReportItem,
     PosTicketResponse,
     SaleDetailItem,
     SaleItem,
@@ -93,6 +96,12 @@ def normalize_customer_email(value: str | None) -> str | None:
     if normalized is None:
         return None
     return normalized.lower()
+
+
+def normalize_utc_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def calculate_sale_paid_amount(sale: Venta) -> Decimal | None:
@@ -659,6 +668,120 @@ def get_active_shift_response(db: Session, empresa_id: str, warehouse_id: str) -
     get_warehouse_for_company(db, empresa_id, warehouse_id)
     shift = get_active_shift_for_company(db, empresa_id, warehouse_id)
     return PosActiveShiftResponse(active_shift=serialize_shift_response(db, shift) if shift else None)
+
+
+def serialize_shift_sale_report_item(sale: Venta) -> PosShiftSaleReportItem:
+    return PosShiftSaleReportItem(
+        id=sale.id,
+        folio=sale.folio,
+        fecha=sale.paid_at or sale.created_at,
+        estatus=sale.estatus,
+        total=sale.total,
+        subtotal=sale.subtotal,
+        descuento_lineas_total=sale.descuento_lineas_total,
+        descuento_global=sale.descuento_global,
+        descuento_total=sale.descuento_total,
+        metodo_pago=sale.metodo_pago,
+        cliente_nombre=sale.cliente_nombre,
+        cliente_email=sale.cliente_email,
+        vendedor_nombre=sale.usuario.full_name,
+        turno_folio=sale.turno.folio if sale.turno else None,
+        monto_pagado=calculate_sale_paid_amount(sale),
+        cambio=sale.cambio,
+    )
+
+
+def serialize_shift_cancellation_report_item(sale: Venta) -> PosShiftCancellationReportItem:
+    return PosShiftCancellationReportItem(
+        id=sale.id,
+        folio=sale.folio,
+        fecha=sale.cancelled_at or sale.paid_at or sale.created_at,
+        total=sale.total,
+        metodo_pago=sale.metodo_pago,
+        cliente_nombre=sale.cliente_nombre,
+        motivo=sale.cancel_reason,
+        usuario_id=sale.cancelled_by_user_id,
+        usuario_nombre=sale.cancelled_by_user.full_name if sale.cancelled_by_user else None,
+    )
+
+
+def list_shifts(
+    db: Session,
+    empresa_id: str,
+    *,
+    almacen_id: str | None = None,
+    estatus: str | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
+    usuario_id: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[int, list[PosShiftResponse]]:
+    id_query = select(PosTurnoCaja.id).where(PosTurnoCaja.empresa_id == empresa_id)
+
+    if almacen_id:
+        id_query = id_query.where(PosTurnoCaja.almacen_id == almacen_id)
+    if estatus:
+        id_query = id_query.where(PosTurnoCaja.estatus == estatus)
+    if fecha_desde:
+        id_query = id_query.where(PosTurnoCaja.opened_at >= fecha_desde)
+    if fecha_hasta:
+        id_query = id_query.where(PosTurnoCaja.opened_at <= fecha_hasta)
+    if usuario_id:
+        id_query = id_query.where(
+            or_(
+                PosTurnoCaja.usuario_apertura_id == usuario_id,
+                PosTurnoCaja.usuario_cierre_id == usuario_id,
+            )
+        )
+
+    total = count_rows(db, id_query)
+    page_ids = db.scalars(
+        id_query.order_by(desc(PosTurnoCaja.opened_at), desc(PosTurnoCaja.id)).offset(offset).limit(limit)
+    ).all()
+    if not page_ids:
+        return total, []
+
+    shifts = db.scalars(
+        select(PosTurnoCaja)
+        .where(PosTurnoCaja.id.in_(page_ids))
+        .order_by(desc(PosTurnoCaja.opened_at), desc(PosTurnoCaja.id))
+    ).all()
+    return total, [serialize_shift_response(db, shift) for shift in shifts]
+
+
+def get_shift_detail_response(db: Session, empresa_id: str, shift_id: str) -> PosShiftResponse:
+    shift = get_shift_for_company(db, empresa_id, shift_id)
+    return serialize_shift_response(db, shift)
+
+
+def get_shift_report(db: Session, empresa_id: str, shift_id: str) -> PosShiftReportResponse:
+    shift = get_shift_for_company(db, empresa_id, shift_id)
+    shift_response = serialize_shift_response(db, shift)
+    sales = db.scalars(
+        select(Venta)
+        .where(Venta.empresa_id == empresa_id, Venta.turno_id == shift.id)
+        .order_by(desc(func.coalesce(Venta.paid_at, Venta.created_at)), desc(Venta.id))
+    ).all()
+    cancelled_sales = [sale for sale in sales if sale.estatus == "cancelada"]
+    opened_at = normalize_utc_datetime(shift.opened_at)
+    duration_end = normalize_utc_datetime(shift.closed_at) if shift.closed_at else datetime.now(timezone.utc)
+    duration_seconds = max(0, int((duration_end - opened_at).total_seconds()))
+    descuento_lineas_total = sum((Decimal(sale.descuento_lineas_total or ZERO) for sale in sales), ZERO)
+    descuento_global_total = sum((Decimal(sale.descuento_global or ZERO) for sale in sales), ZERO)
+    descuentos_totales = sum((Decimal(sale.descuento_total or ZERO) for sale in sales), ZERO)
+
+    return PosShiftReportResponse(
+        shift=shift_response,
+        generated_at=datetime.now(timezone.utc),
+        duracion_segundos=duration_seconds,
+        descuento_lineas_total=descuento_lineas_total,
+        descuento_global_total=descuento_global_total,
+        descuentos_totales=descuentos_totales,
+        movimientos_manuales=shift_response.movimientos,
+        ventas=[serialize_shift_sale_report_item(sale) for sale in sales],
+        cancelaciones=[serialize_shift_cancellation_report_item(sale) for sale in cancelled_sales],
+    )
 
 
 def adjust_shift_totals_for_sale(

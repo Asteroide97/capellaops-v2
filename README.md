@@ -1564,11 +1564,21 @@ Las órdenes de compra ya siguen el flujo base:
 - Las ventas canceladas muestran sello visual `VENTA CANCELADA`.
 - La salida documental de esta fase sigue siendo impresion desde navegador con CSS dedicado.
 
+## POS Fase 5B - Corte de caja formal e historial de turnos
+
+- `Caja / Turnos` ya muestra turno actual, historial de turnos y acceso al corte de caja desde la misma vista.
+- El cierre guarda `efectivo_contado`, `diferencia`, `notas_cierre`, usuario de cierre y hora de cierre.
+- El reporte de turno consolida fondo inicial, ventas brutas, cancelaciones, ventas netas, descuentos, ingresos, retiros y efectivo esperado.
+- El corte incluye metodos de pago, movimientos manuales, ventas del turno y cancelaciones con trazabilidad basica.
+- La impresion del corte usa una superficie dedicada y no rompe la impresion del ticket.
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados
 - Pagos mixtos con notas avanzadas por pago
 - Descuentos promocionales/reglas avanzadas
+- Corte con auditoría avanzada
+- Export PDF/Excel de corte
 - Ticket por email
 - Ticket por SMS
 - Link publico de ticket

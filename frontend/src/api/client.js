@@ -699,6 +699,30 @@ export function createPosShiftManualWithdrawal({ token, empresaId, payload }) {
 }
 
 
+export function getPosShifts({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "almacen_id", filters.almacen_id);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "usuario_id", filters.usuario_id);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pos/shifts${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function getPosShiftDetail({ shiftId, token, empresaId }) {
+  return apiRequest(`/pos/shifts/${shiftId}`, { token, empresaId });
+}
+
+
+export function getPosShiftReport({ shiftId, token, empresaId }) {
+  return apiRequest(`/pos/shifts/${shiftId}/report`, { token, empresaId });
+}
+
+
 export function getPosSales({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);
