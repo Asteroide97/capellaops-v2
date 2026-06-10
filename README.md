@@ -1630,6 +1630,19 @@ Las órdenes de compra ya siguen el flujo base:
 - La orden de compra PDF incluye proveedor, almacen destino, renglones, subtotal, impuestos, total y notas.
 - Ambos PDFs incluyen la leyenda `Documento operativo. No es comprobante fiscal.`.
 
+## Empresa Branding Fase 1 - Logo y datos para documentos
+
+- La empresa ya cuenta con un perfil editable para branding operativo en `Empresa > Perfil`.
+- El perfil permite guardar nombre comercial, razon social, RFC, email, telefono, sitio web y direccion comercial.
+- El logo empresarial ya puede subirse a Azure Blob y queda persistido en `logo_url` y `logo_blob_path`.
+- `GET /me` ya devuelve `logo_url`, `nombre_comercial` y los datos de contacto para consumo inmediato en frontend.
+- Los PDFs de estimaciones y ordenes de compra ya toman automaticamente `logo_url`, `nombre_comercial`, razon social, RFC, direccion, email y telefono si estan disponibles.
+- Si el almacenamiento no esta configurado, la API responde con un error claro y la app mantiene fallback textual en documentos.
+- Variables requeridas para logo e imagenes:
+  - `AZURE_STORAGE_CONNECTION_STRING`
+  - `AZURE_STORAGE_CONTAINER`
+  - `AZURE_STORAGE_PUBLIC_BASE_URL`
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados

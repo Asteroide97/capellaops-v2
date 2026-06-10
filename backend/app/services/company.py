@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -13,6 +14,9 @@ from app.models.user import EmpresaUsuarioInvitacion
 
 ALLOWED_COMPANY_ROLES = {"owner", "admin", "user", "almacenista"}
 MANAGE_COMPANY_USER_ROLES = {"owner", "admin"}
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+RFC_PATTERN = re.compile(r"^[A-Z&\u00d1]{3,4}\d{6}[A-Z0-9]{3}$")
+POSTAL_CODE_PATTERN = re.compile(r"^\d{5}$")
 
 
 @dataclass
@@ -42,6 +46,14 @@ def ensure_membership_can_manage_users(membership: EmpresaUsuario) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="No tienes permiso para administrar usuarios de la empresa.",
+        )
+
+
+def ensure_membership_can_edit_company_profile(membership: EmpresaUsuario) -> None:
+    if not membership.is_active or membership.role not in MANAGE_COMPANY_USER_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para editar los datos de la empresa.",
         )
 
 
@@ -114,3 +126,49 @@ def get_pending_invitation_for_company_email(db: Session, empresa_id: str, email
             EmpresaUsuarioInvitacion.status == "pending",
         )
     )
+
+
+def normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def normalize_company_email(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if not EMAIL_PATTERN.fullmatch(lowered):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ingresa un email valido.",
+        )
+    return lowered
+
+
+def normalize_company_rfc(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if not normalized:
+        return None
+    compact = normalized.upper().replace(" ", "")
+    if not RFC_PATTERN.fullmatch(compact):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ingresa un RFC valido.",
+        )
+    return compact
+
+
+def normalize_company_postal_code(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if not normalized:
+        return None
+    compact = normalized.replace(" ", "")
+    if not POSTAL_CODE_PATTERN.fullmatch(compact):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ingresa un codigo postal valido.",
+        )
+    return compact

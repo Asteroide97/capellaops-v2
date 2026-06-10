@@ -843,12 +843,13 @@ def get_project_estimation_endpoint(
 @router.get("/estimations/{estimation_id}/pdf")
 def export_project_estimation_pdf_endpoint(
     estimation_id: str,
+    context: TenantContext = Depends(get_tenant_context),
     pm_context: PMContext = Depends(get_pm_route_context),
     db: Session = Depends(get_db),
 ) -> Response:
     estimation = get_project_estimation(db, pm_context, estimation_id=estimation_id)
     project = get_project_for_company(db, pm_context.empresa_id, estimation.proyecto_id)
-    pdf_bytes, filename = build_pm_estimation_pdf(pm_context.empresa, project, estimation)
+    pdf_bytes, filename = build_pm_estimation_pdf(context.empresa, project, estimation)
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

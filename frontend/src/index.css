@@ -3046,6 +3046,61 @@ textarea {
   margin-top: 0;
 }
 
+.company-profile-screen {
+  gap: 1.25rem;
+}
+
+.company-profile-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.company-profile-logo-card,
+.company-profile-data-card {
+  min-height: 100%;
+}
+
+.company-profile-onboarding p {
+  margin-bottom: 0.75rem;
+}
+
+.company-logo-preview-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 240px;
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 1rem;
+  background: rgba(248, 250, 252, 0.9);
+}
+
+.company-logo-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 180px;
+  object-fit: contain;
+}
+
+.company-logo-placeholder {
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.company-logo-placeholder span {
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.company-logo-input {
+  display: none;
+}
+
 .inventory-balance-cell {
   font-weight: 700;
 }
@@ -5113,6 +5168,10 @@ body.pm-is-dragging {
   }
 
   .company-users-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .company-profile-grid {
     grid-template-columns: 1fr;
   }
 

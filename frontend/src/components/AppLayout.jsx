@@ -60,7 +60,7 @@ export default function AppLayout() {
           <header className="topbar">
             <div className="topbar-main">
               <p className="eyebrow">Capella Ops V2</p>
-              <h1>{empresa?.name ?? "Panel principal"}</h1>
+              <h1>{empresa?.nombre_comercial || empresa?.name || "Panel principal"}</h1>
             </div>
 
             <div className="topbar-actions">

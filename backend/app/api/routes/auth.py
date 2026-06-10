@@ -133,6 +133,7 @@ def build_token_response(user: Usuario, empresa: Empresa, membership: EmpresaUsu
             id=empresa.id,
             name=empresa.name,
             slug=empresa.slug,
+            nombre_comercial=empresa.nombre_comercial,
             razon_social=empresa.razon_social,
             rfc=empresa.rfc,
             giro=empresa.giro,
@@ -144,6 +145,7 @@ def build_token_response(user: Usuario, empresa: Empresa, membership: EmpresaUsu
             ciudad=empresa.ciudad,
             codigo_postal=empresa.codigo_postal,
             direccion=empresa.direccion,
+            logo_url=empresa.logo_url,
             plan_code=empresa.plan_code,
             access_status=empresa.access_status,
             trial_ends_at=empresa.trial_ends_at,
@@ -388,6 +390,7 @@ def register_verify(
     empresa = Empresa(
         name=pending.empresa_nombre,
         slug=build_unique_slug(db, pending.empresa_nombre),
+        nombre_comercial=pending.empresa_nombre,
         razon_social=normalize_optional_text(pending.empresa_razon_social),
         rfc=normalize_optional_text(pending.empresa_rfc),
         giro=normalize_optional_text(pending.empresa_giro),

@@ -36,6 +36,7 @@ class Empresa(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     slug: Mapped[str] = mapped_column(String(180), nullable=False, unique=True, index=True)
+    nombre_comercial: Mapped[str | None] = mapped_column(String(180), nullable=True)
     razon_social: Mapped[str | None] = mapped_column(String(180), nullable=True)
     rfc: Mapped[str | None] = mapped_column(String(32), nullable=True)
     giro: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -47,6 +48,8 @@ class Empresa(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     ciudad: Mapped[str | None] = mapped_column(String(80), nullable=True)
     codigo_postal: Mapped[str | None] = mapped_column(String(20), nullable=True)
     direccion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    logo_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    logo_blob_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     plan_code: Mapped[str] = mapped_column(ForeignKey("planes.code"), nullable=False, index=True)
     access_status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
     trial_ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

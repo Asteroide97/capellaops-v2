@@ -36,7 +36,7 @@ export default function FirstWarehouseSetupPage() {
         },
       });
       await refreshSession();
-      navigate("/", { replace: true });
+      navigate("/empresa/perfil?onboarding=1", { replace: true });
     } catch (requestError) {
       setError(requestError.message || "No se pudo crear el almacen inicial.");
     } finally {
@@ -59,6 +59,11 @@ export default function FirstWarehouseSetupPage() {
         <div className="security-note">
           <strong>Inventario</strong>
           <span>{onboardingMessage || "Crea tu primer almacen para comenzar."}</span>
+        </div>
+
+        <div className="security-note">
+          <strong>Branding opcional</strong>
+          <span>Al continuar podrás agregar logo y datos de empresa sin bloquear el uso de la app.</span>
         </div>
 
         <div className="security-note">

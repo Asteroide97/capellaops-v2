@@ -17,17 +17,19 @@ class EmpresaSummary(BaseModel):
     id: str
     name: str
     slug: str
+    nombre_comercial: str | None = None
     razon_social: str | None = None
     rfc: str | None = None
     giro: str | None = None
     telefono: str | None = None
-    email_contacto: EmailStr | None = None
+    email_contacto: str | None = None
     sitio_web: str | None = None
     pais: str | None = None
     estado: str | None = None
     ciudad: str | None = None
     codigo_postal: str | None = None
     direccion: str | None = None
+    logo_url: str | None = None
     plan_code: str
     access_status: str
     trial_ends_at: datetime

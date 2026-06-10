@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -8,6 +8,10 @@ from app.models import AuditLog, EmpresaUsuario, Usuario
 from app.models.user import EmpresaUsuarioInvitacion
 from app.schemas.common import CompanyLimitsSummary
 from app.schemas.company import (
+    CompanyLogoDeleteResponse,
+    CompanyLogoUploadResponse,
+    CompanyProfileResponse,
+    CompanyProfileUpdateRequest,
     CompanyUserDeactivateResponse,
     CompanyUserInviteRequest,
     CompanyUserInviteResponse,
@@ -17,11 +21,17 @@ from app.schemas.company import (
 )
 from app.services.company import (
     ensure_membership_can_manage_users,
+    ensure_membership_can_edit_company_profile,
     ensure_within_company_user_limit,
     get_company_plan_limits,
     get_pending_invitation_for_company_email,
+    normalize_company_email,
+    normalize_company_postal_code,
+    normalize_company_rfc,
+    normalize_optional_text,
     normalize_company_role,
 )
+from app.services.storage import StorageConfigurationError, upload_company_logo
 
 
 router = APIRouter(prefix="/company", tags=["company"])
@@ -76,6 +86,26 @@ def build_invitation_item(invitation: EmpresaUsuarioInvitacion) -> CompanyUserIt
     )
 
 
+def build_company_profile(empresa) -> CompanyProfileResponse:
+    return CompanyProfileResponse(
+        id=empresa.id,
+        name=empresa.name,
+        slug=empresa.slug,
+        nombre_comercial=empresa.nombre_comercial,
+        razon_social=empresa.razon_social,
+        rfc=empresa.rfc,
+        email_contacto=empresa.email_contacto,
+        telefono=empresa.telefono,
+        sitio_web=empresa.sitio_web,
+        direccion=empresa.direccion,
+        ciudad=empresa.ciudad,
+        estado=empresa.estado,
+        pais=empresa.pais,
+        codigo_postal=empresa.codigo_postal,
+        logo_url=empresa.logo_url,
+    )
+
+
 def get_company_user_membership(
     db: Session,
     *,
@@ -93,6 +123,127 @@ def get_company_user_membership(
     if not membership or membership.usuario is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario de empresa no encontrado.")
     return membership
+
+
+@router.get("/profile", response_model=CompanyProfileResponse)
+def get_company_profile(
+    context: TenantContext = Depends(get_tenant_context),
+) -> CompanyProfileResponse:
+    return build_company_profile(context.empresa)
+
+
+@router.put("/profile", response_model=CompanyProfileResponse)
+def update_company_profile(
+    payload: CompanyProfileUpdateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CompanyProfileResponse:
+    ensure_membership_can_edit_company_profile(context.membership)
+    empresa = context.empresa
+
+    empresa.nombre_comercial = normalize_optional_text(payload.nombre_comercial)
+    empresa.razon_social = normalize_optional_text(payload.razon_social)
+    empresa.rfc = normalize_company_rfc(payload.rfc)
+    empresa.email_contacto = normalize_company_email(payload.email_contacto)
+    empresa.telefono = normalize_optional_text(payload.telefono)
+    empresa.sitio_web = normalize_optional_text(payload.sitio_web)
+    empresa.direccion = normalize_optional_text(payload.direccion)
+    empresa.ciudad = normalize_optional_text(payload.ciudad)
+    empresa.estado = normalize_optional_text(payload.estado)
+    empresa.pais = normalize_optional_text(payload.pais)
+    empresa.codigo_postal = normalize_company_postal_code(payload.codigo_postal)
+
+    db.add(
+        AuditLog(
+            empresa_id=empresa.id,
+            usuario_id=context.user.id,
+            action="company.profile.update",
+            entity_name="empresa",
+            entity_id=empresa.id,
+            ip_address=request.client.host if request.client else None,
+            metadata_json={
+                "nombre_comercial": empresa.nombre_comercial,
+                "rfc": empresa.rfc,
+                "logo_configurado": bool(empresa.logo_url),
+            },
+        )
+    )
+    db.commit()
+    db.refresh(empresa)
+    return build_company_profile(empresa)
+
+
+@router.post("/logo-upload", response_model=CompanyLogoUploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_company_logo_endpoint(
+    request: Request,
+    file: UploadFile = File(...),
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CompanyLogoUploadResponse:
+    ensure_membership_can_edit_company_profile(context.membership)
+    try:
+        upload = await upload_company_logo(file, context.empresa.id)
+    except StorageConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(exc),
+        ) from exc
+    finally:
+        await file.close()
+
+    context.empresa.logo_url = upload.logo_url
+    context.empresa.logo_blob_path = upload.blob_path
+    db.add(
+        AuditLog(
+            empresa_id=context.empresa.id,
+            usuario_id=context.user.id,
+            action="company.logo.upload",
+            entity_name="empresa",
+            entity_id=context.empresa.id,
+            ip_address=request.client.host if request.client else None,
+            metadata_json={"logo_url": upload.logo_url, "blob_path": upload.blob_path},
+        )
+    )
+    db.add(context.empresa)
+    db.commit()
+    db.refresh(context.empresa)
+
+    return CompanyLogoUploadResponse(
+        logo_url=upload.logo_url,
+        filename=upload.filename,
+        content_type=upload.content_type,
+        size_bytes=upload.size_bytes,
+    )
+
+
+@router.delete("/logo", response_model=CompanyLogoDeleteResponse)
+def delete_company_logo(
+    request: Request,
+    context: TenantContext = Depends(get_tenant_context),
+    db: Session = Depends(get_db),
+) -> CompanyLogoDeleteResponse:
+    ensure_membership_can_edit_company_profile(context.membership)
+    context.empresa.logo_url = None
+    context.empresa.logo_blob_path = None
+    db.add(
+        AuditLog(
+            empresa_id=context.empresa.id,
+            usuario_id=context.user.id,
+            action="company.logo.delete",
+            entity_name="empresa",
+            entity_id=context.empresa.id,
+            ip_address=request.client.host if request.client else None,
+            metadata_json={"logo_configurado": False},
+        )
+    )
+    db.commit()
+    db.refresh(context.empresa)
+    return CompanyLogoDeleteResponse(
+        ok=True,
+        message="Logo eliminado correctamente.",
+        logo_url=context.empresa.logo_url,
+    )
 
 
 @router.get("/users", response_model=CompanyUsersListResponse)

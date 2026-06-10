@@ -1028,6 +1028,41 @@ export function deactivateCompanyUser({ membershipId, token, empresaId }) {
 }
 
 
+export function getCompanyProfile({ token, empresaId }) {
+  return apiRequest("/company/profile", { token, empresaId });
+}
+
+
+export function updateCompanyProfile({ token, empresaId, payload }) {
+  return apiRequest("/company/profile", {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function uploadCompanyLogo({ token, empresaId, file }) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return uploadFormDataRequest("/company/logo-upload", {
+    formData,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deleteCompanyLogo({ token, empresaId }) {
+  return apiRequest("/company/logo", {
+    method: "DELETE",
+    token,
+    empresaId,
+  });
+}
+
+
 export function getPmConfig({ token, empresaId }) {
   return apiRequest("/pm/config", { token, empresaId });
 }

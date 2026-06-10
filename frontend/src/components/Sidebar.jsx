@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import {
   BarChart3,
+  Building2,
   ChevronDown,
   FolderKanban,
   LayoutDashboard,
@@ -52,9 +53,11 @@ function NavLabel({ icon, label, child = false }) {
 export default function Sidebar() {
   const { empresa, membership, modules, user } = useAuth();
   const location = useLocation();
+  const canManageCompanyUsers = user?.is_superadmin || ["owner", "admin"].includes(String(membership?.role ?? "").toLowerCase());
   const [inventoryExpanded, setInventoryExpanded] = useState(location.pathname.startsWith("/inventario"));
   const [pmExpanded, setPmExpanded] = useState(isPmPath(location.pathname));
   const [posExpanded, setPosExpanded] = useState(location.pathname.startsWith("/pos"));
+  const [companyExpanded, setCompanyExpanded] = useState(location.pathname.startsWith("/empresa"));
   const getNavClass = ({ isActive }) => (isActive ? "nav-item active" : "nav-item");
   const currentPmView = resolvePmNavKey(location.pathname, location.search);
   const currentPosView = (() => {
@@ -74,6 +77,9 @@ export default function Sidebar() {
     }
     if (location.pathname.startsWith("/pos")) {
       setPosExpanded(true);
+    }
+    if (location.pathname.startsWith("/empresa")) {
+      setCompanyExpanded(true);
     }
   }, [location.pathname]);
 
@@ -239,6 +245,41 @@ export default function Sidebar() {
             </div>
           );
         })}
+
+        <div className="nav-group">
+          <button
+            className={`nav-item nav-toggle ${location.pathname.startsWith("/empresa") ? "active" : ""}`}
+            onClick={() => setCompanyExpanded((current) => !current)}
+            type="button"
+          >
+            <NavLabel icon={Building2} label="Empresa" />
+            <ChevronDown
+              aria-hidden="true"
+              className={`nav-toggle-icon ${companyExpanded ? "expanded" : ""}`}
+              size={16}
+              strokeWidth={ICON_STROKE}
+            />
+          </button>
+
+          {companyExpanded ? (
+            <div className="nav-children">
+              <Link
+                className={location.pathname === "/empresa/perfil" ? "nav-child nav-child-active" : "nav-child"}
+                to="/empresa/perfil"
+              >
+                <NavLabel child icon={Building2} label="Perfil" />
+              </Link>
+              {canManageCompanyUsers ? (
+                <Link
+                  className={location.pathname === "/empresa/usuarios" ? "nav-child nav-child-active" : "nav-child"}
+                  to="/empresa/usuarios"
+                >
+                  <NavLabel child icon={Users} label="Usuarios" />
+                </Link>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </nav>
     </aside>
   );

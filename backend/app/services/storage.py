@@ -49,6 +49,15 @@ class UploadedMaterialImage:
 
 
 @dataclass
+class UploadedCompanyLogo:
+    logo_url: str
+    blob_path: str
+    filename: str
+    content_type: str
+    size_bytes: int
+
+
+@dataclass
 class UploadedProjectDocument:
     archivo_url: str
     filename: str
@@ -79,6 +88,11 @@ def validate_pm_document_content_type(content_type: str | None) -> str:
 def build_material_blob_path(*, empresa_id: str, extension: str) -> str:
     current = datetime.now(timezone.utc)
     return f"{empresa_id}/materials/{current:%Y/%m}/{uuid4().hex}{extension}"
+
+
+def build_company_logo_blob_path(*, empresa_id: str, extension: str) -> str:
+    current = datetime.now(timezone.utc)
+    return f"{empresa_id}/company/logo/{current:%Y/%m}/{uuid4().hex}{extension}"
 
 
 def build_pm_document_blob_path(*, empresa_id: str, project_id: str, extension: str) -> str:
@@ -169,6 +183,42 @@ async def upload_material_image(file: UploadFile, empresa_id: str) -> UploadedMa
 
     return UploadedMaterialImage(
         imagen_url=build_public_url(blob_path=blob_path, default_url=blob_client.url),
+        filename=filename,
+        content_type=content_type,
+        size_bytes=len(data),
+    )
+
+
+async def upload_company_logo(file: UploadFile, empresa_id: str) -> UploadedCompanyLogo:
+    settings = get_settings()
+    container = (settings.azure_storage_container or "").strip()
+    if not container:
+        raise StorageConfigurationError("El almacenamiento de imagenes no esta configurado.")
+
+    data, content_type = await validate_image_file(file)
+    extension = ALLOWED_IMAGE_CONTENT_TYPES[content_type]
+    blob_path = build_company_logo_blob_path(empresa_id=empresa_id, extension=extension)
+    filename = Path(blob_path).name
+
+    try:
+        blob_service = get_blob_service_client()
+        blob_client = blob_service.get_blob_client(container=container, blob=blob_path)
+        blob_client.upload_blob(
+            data,
+            overwrite=False,
+            content_settings=ContentSettings(content_type=content_type),
+        )
+    except StorageConfigurationError:
+        raise
+    except AzureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo almacenar el logo de la empresa.",
+        ) from exc
+
+    return UploadedCompanyLogo(
+        logo_url=build_public_url(blob_path=blob_path, default_url=blob_client.url),
+        blob_path=blob_path,
         filename=filename,
         content_type=content_type,
         size_bytes=len(data),
