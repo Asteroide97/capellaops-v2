@@ -47,6 +47,9 @@ const baseFilters = {
   proveedor_principal_id: "",
   activo: "",
   stock_bajo: "",
+  sin_stock: "",
+  sin_precio_venta: "",
+  sin_costo: "",
   limit: DEFAULT_PAGE_SIZE,
   offset: 0,
 };
@@ -78,6 +81,18 @@ const MATERIAL_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 const MATERIAL_IMAGE_ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 
+function buildFiltersFromSearchParams(searchParams) {
+  return {
+    ...baseFilters,
+    q: searchParams.get("q") ?? "",
+    stock_bajo: searchParams.get("stock_bajo") ?? "",
+    sin_stock: searchParams.get("sin_stock") ?? "",
+    sin_precio_venta: searchParams.get("sin_precio_venta") ?? "",
+    sin_costo: searchParams.get("sin_costo") ?? "",
+  };
+}
+
+
 function downloadCsv(filename, rows) {
   const content = rows
     .map((row) =>
@@ -100,7 +115,7 @@ function downloadCsv(filename, rows) {
 export default function MaterialsPage() {
   const { token, empresaId, empresa } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
-  const urlQuery = searchParams.get("q") ?? "";
+  const urlFilters = useMemo(() => buildFiltersFromSearchParams(searchParams), [searchParams]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -110,7 +125,7 @@ export default function MaterialsPage() {
   const [suppliers, setSuppliers] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
-  const [filters, setFilters] = useState(() => ({ ...baseFilters, q: urlQuery }));
+  const [filters, setFilters] = useState(() => urlFilters);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(defaultForm);
@@ -146,6 +161,9 @@ export default function MaterialsPage() {
         ...nextFilters,
         activo: parseBooleanFilter(nextFilters.activo),
         stock_bajo: parseBooleanFilter(nextFilters.stock_bajo),
+        sin_stock: parseBooleanFilter(nextFilters.sin_stock),
+        sin_precio_venta: parseBooleanFilter(nextFilters.sin_precio_venta),
+        sin_costo: parseBooleanFilter(nextFilters.sin_costo),
       },
     });
 
@@ -226,18 +244,30 @@ export default function MaterialsPage() {
     setNotice("La imagen se quitará cuando guardes el material.");
   }
 
-  function syncQuery(nextQuery) {
-    if (nextQuery) {
-      setSearchParams({ q: nextQuery });
-      return;
+  function syncQuery(nextFilters) {
+    const nextParams = new URLSearchParams();
+    if (nextFilters.q) {
+      nextParams.set("q", nextFilters.q);
     }
-    setSearchParams({});
+    if (nextFilters.stock_bajo) {
+      nextParams.set("stock_bajo", nextFilters.stock_bajo);
+    }
+    if (nextFilters.sin_stock) {
+      nextParams.set("sin_stock", nextFilters.sin_stock);
+    }
+    if (nextFilters.sin_precio_venta) {
+      nextParams.set("sin_precio_venta", nextFilters.sin_precio_venta);
+    }
+    if (nextFilters.sin_costo) {
+      nextParams.set("sin_costo", nextFilters.sin_costo);
+    }
+    setSearchParams(nextParams);
   }
 
   function applyLookupResult(material, code) {
     const nextFilters = { ...filters, q: code, offset: 0 };
     setFilters(nextFilters);
-    syncQuery(code);
+    syncQuery(nextFilters);
     setMaterials([material]);
     setMeta({
       total: 1,
@@ -306,7 +336,7 @@ export default function MaterialsPage() {
 
   async function applyFilters(nextFilters) {
     setFilters(nextFilters);
-    syncQuery(nextFilters.q);
+    syncQuery(nextFilters);
     await loadMaterialsPage(nextFilters);
   }
 
@@ -319,7 +349,7 @@ export default function MaterialsPage() {
       setLoading(true);
       setError("");
       try {
-        await Promise.all([loadSuppliersOptions(), loadMaterialsPage({ ...baseFilters, q: urlQuery })]);
+        await Promise.all([loadSuppliersOptions(), loadMaterialsPage(urlFilters)]);
       } catch {
         setError(MATERIALS_LOAD_ERROR);
       } finally {
@@ -333,16 +363,29 @@ export default function MaterialsPage() {
   useEffect(() => () => revokePreviewUrl(selectedImagePreviewUrl), [selectedImagePreviewUrl]);
 
   useEffect(() => {
-    if (!urlQuery || urlQuery === filters.q) {
+    const nextFilters = { ...filters, ...urlFilters, offset: 0 };
+    const currentComparable = JSON.stringify({
+      q: filters.q,
+      stock_bajo: filters.stock_bajo,
+      sin_stock: filters.sin_stock,
+      sin_precio_venta: filters.sin_precio_venta,
+      sin_costo: filters.sin_costo,
+    });
+    const nextComparable = JSON.stringify({
+      q: nextFilters.q,
+      stock_bajo: nextFilters.stock_bajo,
+      sin_stock: nextFilters.sin_stock,
+      sin_precio_venta: nextFilters.sin_precio_venta,
+      sin_costo: nextFilters.sin_costo,
+    });
+    if (currentComparable === nextComparable) {
       return;
     }
-
-    const nextFilters = { ...filters, q: urlQuery, offset: 0 };
     setFilters(nextFilters);
     loadMaterialsPage(nextFilters).catch(() => {
       setError(MATERIALS_LOAD_ERROR);
     });
-  }, [urlQuery]);
+  }, [urlFilters]);
 
   function resetForm() {
     resetImageState();
@@ -622,12 +665,55 @@ export default function MaterialsPage() {
                 setFilters((current) => ({
                   ...current,
                   stock_bajo: current.stock_bajo === "true" ? "" : "true",
+                  offset: 0,
                 }))
               }
               size="sm"
               type="button"
             >
               Mostrar Bajo Stock
+            </ActionButton>
+            <ActionButton
+              active={filters.sin_stock === "true"}
+              onClick={() =>
+                setFilters((current) => ({
+                  ...current,
+                  sin_stock: current.sin_stock === "true" ? "" : "true",
+                  offset: 0,
+                }))
+              }
+              size="sm"
+              type="button"
+            >
+              Sin stock
+            </ActionButton>
+            <ActionButton
+              active={filters.sin_precio_venta === "true"}
+              onClick={() =>
+                setFilters((current) => ({
+                  ...current,
+                  sin_precio_venta: current.sin_precio_venta === "true" ? "" : "true",
+                  offset: 0,
+                }))
+              }
+              size="sm"
+              type="button"
+            >
+              Sin precio de venta
+            </ActionButton>
+            <ActionButton
+              active={filters.sin_costo === "true"}
+              onClick={() =>
+                setFilters((current) => ({
+                  ...current,
+                  sin_costo: current.sin_costo === "true" ? "" : "true",
+                  offset: 0,
+                }))
+              }
+              size="sm"
+              type="button"
+            >
+              Sin costo
             </ActionButton>
             <ActionButton onClick={() => setShowAdvancedFilters((current) => !current)} size="sm" type="button">
               {showAdvancedFilters ? "Ocultar filtros" : "Filtros avanzados"}
@@ -697,6 +783,39 @@ export default function MaterialsPage() {
                 <option value="">Todos</option>
                 <option value="true">Solo bajo stock</option>
                 <option value="false">Excluir bajo stock</option>
+              </select>
+            </Field>
+
+            <Field label="Sin stock">
+              <select
+                onChange={(event) => setFilters((current) => ({ ...current, sin_stock: event.target.value }))}
+                value={filters.sin_stock}
+              >
+                <option value="">Todos</option>
+                <option value="true">Solo sin stock</option>
+                <option value="false">Excluir sin stock</option>
+              </select>
+            </Field>
+
+            <Field label="Sin precio de venta">
+              <select
+                onChange={(event) => setFilters((current) => ({ ...current, sin_precio_venta: event.target.value }))}
+                value={filters.sin_precio_venta}
+              >
+                <option value="">Todos</option>
+                <option value="true">Solo sin precio</option>
+                <option value="false">Excluir sin precio</option>
+              </select>
+            </Field>
+
+            <Field label="Sin costo">
+              <select
+                onChange={(event) => setFilters((current) => ({ ...current, sin_costo: event.target.value }))}
+                value={filters.sin_costo}
+              >
+                <option value="">Todos</option>
+                <option value="true">Solo sin costo</option>
+                <option value="false">Excluir sin costo</option>
               </select>
             </Field>
           </FormGrid>

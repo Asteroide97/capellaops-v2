@@ -10,6 +10,7 @@ Monorepo para un SaaS multiempresa con Azure SQL, FastAPI y React + Vite.
 - Portal Superadmin operativo
 - Inventario Shell operativo con navegación lateral desplegable
 - Inventario Fase 1.2 operativo
+- Inventario Fase 2 - Alertas, reportes y bajo stock operativo
 - Compras Fase 1 operativa dentro del dominio de Inventario
 - POS Fase 1 operativo
 - PM Core Fase 1 operativo
@@ -381,14 +382,21 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 
 ## Dashboard de Resumen
 
+Inventario Fase 2 - Alertas, reportes y bajo stock operativo.
+
 `GET /inventory/summary` construye un dashboard operativo calculado desde `existencias` y `movimientos_inventario`, sin duplicar la verdad del stock en `Material`.
 
 ### Métricas incluidas
 
 - KPIs:
+  - `valor_total_inventario`
   - `materiales_bajo_stock`
+  - `materiales_sin_stock`
+  - `materiales_sin_precio_venta`
+  - `materiales_sin_costo`
   - `ordenes_compra_pendientes`
   - `requisiciones_pendientes`
+  - `movimientos_mes`
   - `total_materiales`
 - Indicadores:
   - `valor_inventario`
@@ -396,9 +404,12 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
   - `ajustes_mes`
   - `merma_mes`
 - Listas:
-  - `productos_core`
+  - `bajo_stock`
+  - `sin_precio_venta`
+  - `sin_costo`
+  - `productos_mas_movidos`
   - `baja_rotacion`
-  - `materiales_bajo_stock`
+  - `ultimos_movimientos`
   - `alertas`
 
 ### Reglas del resumen
@@ -406,7 +417,12 @@ Las primeras nueve secciones ya están conectadas a datos reales o flujos operat
 - El stock global se calcula como la suma de `existencias` por material.
 - `Material.stock_actual` no existe como fuente de verdad.
 - `valor_inventario` usa `stock_total * costo_promedio_actual`, con fallback a `costo_unitario`.
-- `costo_reposicion` estima el faltante contra `stock_minimo`.
+- `costo_reposicion` estima la reposicion usando `stock_maximo` o, en su defecto, `stock_minimo * 2`.
+- `bajo_stock` detecta materiales con `stock_total <= stock_minimo`.
+- `sin_precio_venta` detecta materiales activos con `precio_venta` nulo o igual a `0`.
+- `sin_costo` detecta materiales activos con `costo_unitario` y `costo_promedio_actual` nulos o iguales a `0`.
+- `productos_mas_movidos` agrega entradas, salidas y conteo de movimientos en el periodo.
+- `baja_rotacion` detecta materiales con stock positivo sin salidas recientes en la ventana seleccionada.
 - `merma_mes` queda en `0` hasta implementar clasificación formal de merma.
 
 ### Pendientes del dashboard

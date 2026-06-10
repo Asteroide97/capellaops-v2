@@ -663,7 +663,7 @@ def calculate_suggested_requisition_quantity(material, stock_total: Decimal) -> 
     if stock_maximo > ZERO:
         return max(stock_maximo - stock_total, stock_minimo - stock_total, Decimal("1"))
     if stock_minimo > ZERO:
-        return max(stock_minimo - stock_total, Decimal("1"))
+        return max((stock_minimo * Decimal("2")) - stock_total, stock_minimo - stock_total, Decimal("1"))
     if stock_total <= ZERO:
         return Decimal("1")
     return Decimal("1")

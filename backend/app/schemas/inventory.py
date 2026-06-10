@@ -44,9 +44,14 @@ class InventoryOnboardingStatusResponse(BaseModel):
 
 
 class InventorySummaryKpis(BaseModel):
+    valor_total_inventario: Decimal = Decimal("0")
     materiales_bajo_stock: int
+    materiales_sin_stock: int = 0
+    materiales_sin_precio_venta: int = 0
+    materiales_sin_costo: int = 0
     ordenes_compra_pendientes: int
     requisiciones_pendientes: int
+    movimientos_mes: int = 0
     total_materiales: int
 
 
@@ -84,17 +89,65 @@ class InventorySummaryLowStockItem(BaseModel):
     categoria: str | None = None
     stock_total: Decimal
     stock_minimo: Decimal
+    stock_maximo: Decimal = Decimal("0")
     faltante: Decimal
+    cantidad_sugerida: Decimal = Decimal("0")
     estado: str
+    requisicion_pendiente: bool = False
+    requisicion_id: str | None = None
+    requisicion_folio: str | None = None
+
+
+class InventorySummaryMaterialIssueItem(BaseModel):
+    material_id: str
+    sku: str
+    nombre: str
+    categoria: str | None = None
+    stock_total: Decimal = Decimal("0")
+    precio_venta: Decimal | None = None
+    costo_unitario: Decimal | None = None
+    costo_promedio_actual: Decimal | None = None
+    valor_inventario: Decimal = Decimal("0")
+
+
+class InventorySummaryTopMovementItem(BaseModel):
+    material_id: str
+    sku: str
+    nombre: str
+    categoria: str | None = None
+    cantidad_entrada: Decimal = Decimal("0")
+    cantidad_salida: Decimal = Decimal("0")
+    movimientos_count: int = 0
+
+
+class InventorySummaryRecentMovementItem(BaseModel):
+    id: str
+    fecha: datetime
+    tipo: str
+    material_id: str
+    material_sku: str
+    material_nombre: str
+    almacen_id: str
+    almacen_nombre: str
+    cantidad: Decimal
+    referencia: str | None = None
+    usuario: str | None = None
 
 
 class InventorySummaryAlertItem(BaseModel):
-    nivel: str
     tipo: str
+    severidad: str
     titulo: str
-    mensaje: str
-    route: str | None = None
+    descripcion: str
+    accion_label: str | None = None
+    accion_url: str | None = None
+    action: str | None = None
     material_id: str | None = None
+    almacen_id: str | None = None
+    requisicion_id: str | None = None
+    nivel: str | None = None
+    mensaje: str | None = None
+    route: str | None = None
 
 
 class InventorySummaryResponse(BaseModel):
@@ -103,6 +156,11 @@ class InventorySummaryResponse(BaseModel):
     productos_core: list[InventorySummaryCoreProductItem]
     baja_rotacion: list[InventorySummaryLowRotationItem]
     materiales_bajo_stock: list[InventorySummaryLowStockItem]
+    bajo_stock: list[InventorySummaryLowStockItem] = Field(default_factory=list)
+    sin_precio_venta: list[InventorySummaryMaterialIssueItem] = Field(default_factory=list)
+    sin_costo: list[InventorySummaryMaterialIssueItem] = Field(default_factory=list)
+    productos_mas_movidos: list[InventorySummaryTopMovementItem] = Field(default_factory=list)
+    ultimos_movimientos: list[InventorySummaryRecentMovementItem] = Field(default_factory=list)
     alertas: list[InventorySummaryAlertItem]
 
 

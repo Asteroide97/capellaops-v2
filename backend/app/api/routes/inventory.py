@@ -224,11 +224,22 @@ def onboarding_status(
 
 @router.get("/summary", response_model=InventorySummaryResponse)
 def inventory_summary(
+    almacen_id: str | None = None,
+    periodo_dias: int = Query(default=60, ge=1, le=365),
+    categoria: str | None = None,
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
 ) -> InventorySummaryResponse:
     try:
-        return build_inventory_summary(db, context.empresa.id)
+        if almacen_id:
+            get_warehouse_for_company(db, context.empresa.id, almacen_id)
+        return build_inventory_summary(
+            db,
+            context.empresa.id,
+            almacen_id=almacen_id,
+            periodo_dias=periodo_dias,
+            categoria=categoria,
+        )
     except SQLAlchemyError as exc:
         logger.exception(
             "No se pudo construir el resumen de inventario para empresa_id=%s.",
@@ -382,6 +393,9 @@ def get_materials(
     proveedor_principal_id: str | None = None,
     activo: bool | None = None,
     stock_bajo: bool | None = None,
+    sin_stock: bool | None = None,
+    sin_precio_venta: bool | None = None,
+    sin_costo: bool | None = None,
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantContext = Depends(get_inventory_context),
@@ -395,6 +409,9 @@ def get_materials(
         proveedor_principal_id=proveedor_principal_id,
         activo=activo,
         stock_bajo=stock_bajo,
+        sin_stock=sin_stock,
+        sin_precio_venta=sin_precio_venta,
+        sin_costo=sin_costo,
         limit=limit,
         offset=offset,
     )

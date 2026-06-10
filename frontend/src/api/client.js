@@ -354,8 +354,13 @@ export function getInventoryOnboardingStatus({ token, empresaId }) {
 }
 
 
-export function getInventorySummary({ token, empresaId }) {
-  return apiRequest("/inventory/summary", { token, empresaId });
+export function getInventorySummary({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "almacen_id", filters.almacen_id);
+  appendQueryValue(query, "periodo_dias", filters.periodo_dias);
+  appendQueryValue(query, "categoria", filters.categoria);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/summary${suffix ? `?${suffix}` : ""}`, { token, empresaId });
 }
 
 
@@ -396,6 +401,9 @@ export function getMaterials({ token, empresaId, filters = {} }) {
   appendQueryValue(query, "proveedor_principal_id", filters.proveedor_principal_id);
   appendQueryValue(query, "activo", filters.activo);
   appendQueryValue(query, "stock_bajo", filters.stock_bajo);
+  appendQueryValue(query, "sin_stock", filters.sin_stock);
+  appendQueryValue(query, "sin_precio_venta", filters.sin_precio_venta);
+  appendQueryValue(query, "sin_costo", filters.sin_costo);
   appendQueryValue(query, "limit", filters.limit);
   appendQueryValue(query, "offset", filters.offset);
   return apiRequest(`/inventory/materials?${query.toString()}`, { token, empresaId });

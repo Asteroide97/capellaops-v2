@@ -2562,6 +2562,10 @@ textarea {
   gap: 1rem;
 }
 
+.inventory-summary-filter-grid {
+  align-items: end;
+}
+
 .inventory-lookup-result {
   display: grid;
   gap: 1rem;
