@@ -2,6 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -170,6 +171,10 @@ class Venta(UUIDPrimaryKeyMixin, Base):
             name="ck_venta_monto_recibido_nonnegative",
         ),
         CheckConstraint("cambio IS NULL OR cambio >= 0", name="ck_venta_cambio_nonnegative"),
+        CheckConstraint(
+            "factura_estado IN ('no_solicitada', 'solicitada', 'pendiente_datos', 'lista_para_facturar', 'facturada', 'cancelada')",
+            name="ck_venta_factura_estado",
+        ),
     )
 
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
@@ -204,6 +209,28 @@ class Venta(UUIDPrimaryKeyMixin, Base):
         default="pagada",
         server_default=text("'pagada'"),
         index=True,
+    )
+    factura_estado: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="no_solicitada",
+        server_default=text("'no_solicitada'"),
+        index=True,
+    )
+    factura_solicitada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    factura_cliente_nombre: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    factura_rfc: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    factura_razon_social: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    factura_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    factura_uso_cfdi: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    factura_regimen_fiscal: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    factura_codigo_postal: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    factura_notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    factura_requiere_factura_global: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="0",
     )
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
     paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

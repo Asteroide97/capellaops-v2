@@ -32,8 +32,10 @@ import {
   createPosShiftManualWithdrawal,
   getPosActiveShift,
   getPosCatalog,
+  getPosInvoiceRequests,
   getPosReportSummary,
   getPosSaleDetail,
+  getPosSaleInvoiceRequest,
   getPosSales,
   getPosShiftReport,
   getPosShifts,
@@ -41,13 +43,15 @@ import {
   getWarehouses,
   openPosShift,
   paySuspendedPosSale,
+  requestPosSaleInvoice,
   resumePosSale,
   suspendPosSale,
+  updatePosSaleInvoiceRequest,
 } from "../api/client";
 
 
 const DEFAULT_PAGE_SIZE = 25;
-const POS_VIEWS = ["sell", "history", "tickets", "cash", "reports"];
+const POS_VIEWS = ["sell", "history", "tickets", "cash", "reports", "invoicing"];
 
 const paymentMethodOptions = [
   { value: "efectivo", label: "Efectivo" },
@@ -62,6 +66,7 @@ const viewTabs = [
   { value: "tickets", label: "Tickets", icon: <Ticket size={16} /> },
   { value: "cash", label: "Caja / Turnos", icon: <Wallet size={16} /> },
   { value: "reports", label: "Reportes", icon: <BarChart3 size={16} /> },
+  { value: "invoicing", label: "Facturación", icon: <ReceiptText size={16} /> },
 ];
 
 const catalogFilterDefaults = {
@@ -95,6 +100,16 @@ const reportFilterDefaults = {
   agrupacion: "day",
 };
 
+const invoiceRequestFilterDefaults = {
+  estado: "",
+  fecha_desde: "",
+  fecha_hasta: "",
+  rfc: "",
+  folio: "",
+  limit: DEFAULT_PAGE_SIZE,
+  offset: 0,
+};
+
 const defaultSaleForm = {
   cliente_nombre: "",
   cliente_email: "",
@@ -120,6 +135,29 @@ const defaultCloseShiftForm = {
   efectivo_contado: "",
   notas: "",
 };
+
+const defaultInvoiceRequestForm = {
+  cliente_nombre: "",
+  rfc: "",
+  razon_social: "",
+  email: "",
+  uso_cfdi: "G03",
+  regimen_fiscal: "616",
+  codigo_postal: "",
+  notas: "",
+};
+
+const invoiceUsageOptions = [
+  { value: "G03", label: "G03 - Gastos en general" },
+  { value: "G01", label: "G01 - Adquisición de mercancías" },
+  { value: "S01", label: "S01 - Sin efectos fiscales" },
+];
+
+const invoiceFiscalRegimeOptions = [
+  { value: "601", label: "601 - General de Ley Personas Morales" },
+  { value: "612", label: "612 - Personas Físicas con Actividades Empresariales" },
+  { value: "616", label: "616 - Sin obligaciones fiscales" },
+];
 
 
 function formatDateTime(value) {
@@ -239,6 +277,7 @@ function getViewTitle(view) {
     tickets: "Tickets",
     cash: "Caja / Turnos",
     reports: "Reportes POS",
+    invoicing: "Facturación POS",
   };
   return titles[view] ?? "Punto de Venta";
 }
@@ -251,6 +290,7 @@ function getViewSubtitle(view) {
     tickets: "Consulta e imprime comprobantes de venta.",
     cash: "Consulta el estado del turno y prepara el flujo de caja.",
     reports: "Analiza ventas, pagos, descuentos, cancelaciones y utilidad estimada.",
+    invoicing: "Revisa ventas con solicitud de factura pendientes de timbrado.",
   };
   return subtitles[view] ?? "Cobra desde el almacén activo y descuenta inventario automáticamente.";
 }
@@ -289,6 +329,18 @@ function getPosUiError(requestError, fallback) {
   if (normalized.includes("total pagado") || normalized.includes("no cubre")) {
     return "El total pagado no cubre el total de la venta.";
   }
+  if (normalized.includes("rfc")) {
+    return "Ingresa un RFC válido.";
+  }
+  if (normalized.includes("email")) {
+    return "Ingresa un email válido.";
+  }
+  if (normalized.includes("solo puedes solicitar factura")) {
+    return "Solo puedes solicitar factura de una venta pagada.";
+  }
+  if (normalized.includes("no puedes solicitar factura de una venta cancelada")) {
+    return "No puedes solicitar factura de una venta cancelada.";
+  }
   return rawMessage || fallback;
 }
 
@@ -315,6 +367,54 @@ function getSaleStatusTone(status) {
     return "warning";
   }
   return "neutral";
+}
+
+
+function getInvoiceStatusLabel(status) {
+  const labels = {
+    no_solicitada: "No solicitada",
+    solicitada: "Solicitada",
+    pendiente_datos: "Pendiente de datos",
+    lista_para_facturar: "Lista para facturar",
+    facturada: "Facturada",
+    cancelada: "Cancelada",
+  };
+  return labels[String(status ?? "").toLowerCase()] ?? safeText(status, "Sin estado");
+}
+
+
+function getInvoiceStatusTone(status) {
+  const normalized = String(status ?? "").toLowerCase();
+  if (normalized === "lista_para_facturar") {
+    return "success";
+  }
+  if (normalized === "pendiente_datos" || normalized === "solicitada") {
+    return "warning";
+  }
+  if (normalized === "cancelada") {
+    return "danger";
+  }
+  return "neutral";
+}
+
+
+function buildInvoiceRequestForm(requestData) {
+  return {
+    cliente_nombre: requestData?.cliente_nombre ?? "",
+    rfc: requestData?.rfc ?? "",
+    razon_social: requestData?.razon_social ?? "",
+    email: requestData?.email ?? "",
+    uso_cfdi: requestData?.uso_cfdi ?? "G03",
+    regimen_fiscal: requestData?.regimen_fiscal ?? "616",
+    codigo_postal: requestData?.codigo_postal ?? "",
+    notas: requestData?.notas ?? "",
+  };
+}
+
+
+function hasPreparedInvoiceRequest(sale) {
+  const status = String(sale?.factura_estado ?? "").toLowerCase();
+  return status && status !== "no_solicitada";
 }
 
 
@@ -577,6 +677,14 @@ export default function PosPage() {
   const [reportFilters, setReportFilters] = useState(reportFilterDefaults);
   const [reportData, setReportData] = useState(null);
   const [reportLoading, setReportLoading] = useState(false);
+  const [invoiceRequestFilters, setInvoiceRequestFilters] = useState(invoiceRequestFilterDefaults);
+  const [invoiceRequests, setInvoiceRequests] = useState([]);
+  const [invoiceRequestMeta, setInvoiceRequestMeta] = useState({
+    total: 0,
+    limit: DEFAULT_PAGE_SIZE,
+    offset: 0,
+  });
+  const [invoiceSubmitting, setInvoiceSubmitting] = useState(false);
 
   const [cart, setCart] = useState([]);
   const [saleForm, setSaleForm] = useState(defaultSaleForm);
@@ -591,6 +699,9 @@ export default function PosPage() {
   const [ticketModalOpen, setTicketModalOpen] = useState(false);
   const [shiftReportModalOpen, setShiftReportModalOpen] = useState(false);
   const [selectedShiftReport, setSelectedShiftReport] = useState(null);
+  const [invoiceRequestModalOpen, setInvoiceRequestModalOpen] = useState(false);
+  const [selectedInvoiceRequest, setSelectedInvoiceRequest] = useState(null);
+  const [invoiceRequestForm, setInvoiceRequestForm] = useState(defaultInvoiceRequestForm);
   const [resumedSaleId, setResumedSaleId] = useState("");
   const [shiftMovementModalType, setShiftMovementModalType] = useState("");
   const [closeShiftModalOpen, setCloseShiftModalOpen] = useState(false);
@@ -895,6 +1006,30 @@ export default function PosPage() {
     }
   }
 
+  async function loadInvoiceRequests(nextFilters = invoiceRequestFilters) {
+    const response = await getPosInvoiceRequests({
+      token,
+      empresaId,
+      filters: {
+        estado: nextFilters.estado,
+        fecha_desde: toReportDateStart(nextFilters.fecha_desde),
+        fecha_hasta: toReportDateEnd(nextFilters.fecha_hasta),
+        rfc: nextFilters.rfc,
+        folio: nextFilters.folio,
+        limit: nextFilters.limit,
+        offset: nextFilters.offset,
+      },
+    });
+
+    setInvoiceRequests(response.items ?? []);
+    setInvoiceRequestMeta({
+      total: response.total ?? 0,
+      limit: response.limit ?? DEFAULT_PAGE_SIZE,
+      offset: response.offset ?? 0,
+    });
+    return response;
+  }
+
   async function loadSaleArtifacts(saleId) {
     const saleDetail = await getPosSaleDetail({ saleId, token, empresaId });
     const ticket =
@@ -926,6 +1061,9 @@ export default function PosPage() {
       if (activeView === "reports") {
         requests.push(loadPosReport(reportFilters));
       }
+      if (activeView === "invoicing") {
+        requests.push(loadInvoiceRequests(invoiceRequestFilters));
+      }
       await Promise.all(requests);
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
@@ -952,6 +1090,9 @@ export default function PosPage() {
       ];
       if (activeView === "reports") {
         requests.push(loadPosReport(reportFilters));
+      }
+      if (activeView === "invoicing") {
+        requests.push(loadInvoiceRequests(invoiceRequestFilters));
       }
       await Promise.all(requests);
       if (keepTicket && selectedSale?.id) {
@@ -987,6 +1128,16 @@ export default function PosPage() {
 
     loadPosReport(reportFilters).catch((requestError) => {
       setError(getPosUiError(requestError, "No se pudo cargar el reporte. Intenta actualizar."));
+    });
+  }, [activeView, token, empresaId]);
+
+  useEffect(() => {
+    if (activeView !== "invoicing" || !token || !empresaId) {
+      return;
+    }
+
+    loadInvoiceRequests(invoiceRequestFilters).catch((requestError) => {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     });
   }, [activeView, token, empresaId]);
 
@@ -1632,6 +1783,38 @@ export default function PosPage() {
     }
   }
 
+  async function handleInvoiceRequestSearch(event) {
+    event.preventDefault();
+    clearFeedback();
+    try {
+      const nextFilters = { ...invoiceRequestFilters, offset: 0 };
+      setInvoiceRequestFilters(nextFilters);
+      await loadInvoiceRequests(nextFilters);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    }
+  }
+
+  async function handleInvoiceRequestReset() {
+    clearFeedback();
+    setInvoiceRequestFilters(invoiceRequestFilterDefaults);
+    try {
+      await loadInvoiceRequests(invoiceRequestFilterDefaults);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    }
+  }
+
+  async function handleInvoiceRequestPageChange(nextOffset) {
+    const nextFilters = { ...invoiceRequestFilters, offset: nextOffset };
+    setInvoiceRequestFilters(nextFilters);
+    try {
+      await loadInvoiceRequests(nextFilters);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    }
+  }
+
   async function openSaleDetail(record) {
     setSubmitting(true);
     clearFeedback();
@@ -1656,6 +1839,81 @@ export default function PosPage() {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function openInvoiceRequestModal(saleId) {
+    setInvoiceSubmitting(true);
+    clearFeedback();
+    try {
+      const requestData = await getPosSaleInvoiceRequest({ saleId, token, empresaId });
+      setSelectedInvoiceRequest(requestData);
+      setInvoiceRequestForm(buildInvoiceRequestForm(requestData));
+      setInvoiceRequestModalOpen(true);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    } finally {
+      setInvoiceSubmitting(false);
+    }
+  }
+
+  async function handleSaveInvoiceRequest(event) {
+    event.preventDefault();
+    if (!selectedInvoiceRequest?.venta_id) {
+      setError("Selecciona una venta para solicitar factura.");
+      return;
+    }
+
+    setInvoiceSubmitting(true);
+    clearFeedback();
+    const payload = {
+      cliente_nombre: invoiceRequestForm.cliente_nombre || null,
+      rfc: invoiceRequestForm.rfc || null,
+      razon_social: invoiceRequestForm.razon_social || null,
+      email: invoiceRequestForm.email || null,
+      uso_cfdi: invoiceRequestForm.uso_cfdi || null,
+      regimen_fiscal: invoiceRequestForm.regimen_fiscal || null,
+      codigo_postal: invoiceRequestForm.codigo_postal || null,
+      notas: invoiceRequestForm.notas || null,
+    };
+
+    try {
+      const alreadyRequested =
+        selectedInvoiceRequest.factura_estado &&
+        selectedInvoiceRequest.factura_estado !== "no_solicitada";
+      const response = alreadyRequested
+        ? await updatePosSaleInvoiceRequest({
+            saleId: selectedInvoiceRequest.venta_id,
+            token,
+            empresaId,
+            payload,
+          })
+        : await requestPosSaleInvoice({
+            saleId: selectedInvoiceRequest.venta_id,
+            token,
+            empresaId,
+            payload,
+          });
+
+      setSelectedInvoiceRequest(response);
+      setInvoiceRequestForm(buildInvoiceRequestForm(response));
+      if (selectedSale?.id === response.venta_id) {
+        await loadSaleArtifacts(response.venta_id);
+      }
+      await loadSales(saleFilters);
+      if (activeView === "invoicing") {
+        await loadInvoiceRequests(invoiceRequestFilters);
+      }
+      setInvoiceRequestModalOpen(false);
+      setSuccess(
+        response.factura_estado === "lista_para_facturar"
+          ? "Solicitud lista para facturar."
+          : "Solicitud guardada con datos pendientes.",
+      );
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo guardar la solicitud de factura."));
+    } finally {
+      setInvoiceSubmitting(false);
     }
   }
 
@@ -2417,6 +2675,11 @@ export default function PosPage() {
                           {record.estatus !== "suspendida" ? (
                             <button className="link-button" onClick={() => openTicket(record.id)} type="button">
                               Ver ticket
+                            </button>
+                          ) : null}
+                          {record.estatus === "pagada" ? (
+                            <button className="link-button" onClick={() => openInvoiceRequestModal(record.id)} type="button">
+                              {hasPreparedInvoiceRequest(record) ? "Editar factura" : "Solicitar factura"}
                             </button>
                           ) : null}
                           {record.estatus === "pagada" ? (
@@ -3242,6 +3505,140 @@ export default function PosPage() {
         </div>
       ) : null}
 
+      {activeView === "invoicing" ? (
+        <div className="pos-view-stack pos-report-page">
+          <section className="feature-card pos-section-card">
+            <div className="pos-warning-box is-warning">
+              <strong>Preparación de CFDI pendiente</strong>
+              <p>El timbrado CFDI aún está pendiente. Esta vista solo prepara las solicitudes.</p>
+            </div>
+          </section>
+
+          <section className="feature-card pos-section-card">
+            <form className="pos-report-filters pos-invoice-filters" onSubmit={handleInvoiceRequestSearch}>
+              <label>
+                <span>Estado</span>
+                <select
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestFilters((current) => ({ ...current, estado: event.target.value }))}
+                  value={invoiceRequestFilters.estado}
+                >
+                  <option value="">Todos los estados</option>
+                  <option value="pendiente_datos">Pendiente de datos</option>
+                  <option value="lista_para_facturar">Lista para facturar</option>
+                  <option value="solicitada">Solicitada</option>
+                </select>
+              </label>
+
+              <label>
+                <span>Fecha desde</span>
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestFilters((current) => ({ ...current, fecha_desde: event.target.value }))}
+                  type="date"
+                  value={invoiceRequestFilters.fecha_desde}
+                />
+              </label>
+
+              <label>
+                <span>Fecha hasta</span>
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestFilters((current) => ({ ...current, fecha_hasta: event.target.value }))}
+                  type="date"
+                  value={invoiceRequestFilters.fecha_hasta}
+                />
+              </label>
+
+              <label>
+                <span>RFC</span>
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestFilters((current) => ({ ...current, rfc: event.target.value }))}
+                  placeholder="RFC"
+                  type="text"
+                  value={invoiceRequestFilters.rfc}
+                />
+              </label>
+
+              <label>
+                <span>Folio</span>
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestFilters((current) => ({ ...current, folio: event.target.value }))}
+                  placeholder="Folio"
+                  type="text"
+                  value={invoiceRequestFilters.folio}
+                />
+              </label>
+
+              <div className="pos-action-row">
+                <button className="ghost-button" type="submit">
+                  Aplicar
+                </button>
+                <button className="ghost-button" onClick={handleInvoiceRequestReset} type="button">
+                  Limpiar
+                </button>
+              </div>
+            </form>
+          </section>
+
+          <section className="feature-card pos-section-card">
+            {invoiceRequests.length === 0 ? (
+              <EmptyState
+                icon={<ReceiptText size={18} />}
+                note="Las ventas con datos fiscales preparados aparecerán aquí."
+                title="No hay solicitudes de factura."
+              />
+            ) : (
+              <div className="table-wrap">
+                <table className="inventory-table pos-report-table">
+                  <thead>
+                    <tr>
+                      <th>Folio</th>
+                      <th>Fecha</th>
+                      <th>Cliente</th>
+                      <th>RFC</th>
+                      <th>Total</th>
+                      <th>Estado</th>
+                      <th>Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {invoiceRequests.map((item) => (
+                      <tr key={item.venta_id}>
+                        <td>{item.folio}</td>
+                        <td>{formatDateTime(item.fecha_solicitud || item.fecha)}</td>
+                        <td>{item.cliente_nombre || "Mostrador"}</td>
+                        <td>{item.rfc || "Sin RFC"}</td>
+                        <td>{formatMoney(item.total)}</td>
+                        <td>
+                          <StatusBadge
+                            label={getInvoiceStatusLabel(item.factura_estado)}
+                            tone={getInvoiceStatusTone(item.factura_estado)}
+                          />
+                        </td>
+                        <td className="inventory-row-actions">
+                          <button className="link-button" onClick={() => openInvoiceRequestModal(item.venta_id)} type="button">
+                            Ver / Editar datos
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <PaginationControls
+              meta={invoiceRequestMeta}
+              onNext={() => handleInvoiceRequestPageChange(invoiceRequestMeta.offset + invoiceRequestMeta.limit)}
+              onPrevious={() => handleInvoiceRequestPageChange(Math.max(0, invoiceRequestMeta.offset - invoiceRequestMeta.limit))}
+            />
+          </section>
+        </div>
+      ) : null}
+
       <PosModal
         footer={historyDetailFooter}
         onClose={() => setDetailModalOpen(false)}
@@ -3346,6 +3743,48 @@ export default function PosPage() {
               )}
             </section>
 
+            <section className="feature-card pos-note-card">
+              <div className="feature-header">
+                <p className="eyebrow">Facturación</p>
+                <h3>Solicitud de factura</h3>
+              </div>
+              <div className="pos-ticket-meta-grid">
+                <article className="mini-card">
+                  <span className="eyebrow">Estado fiscal</span>
+                  <strong>{getInvoiceStatusLabel(selectedSale.factura_estado)}</strong>
+                  <p>{selectedSale.factura_solicitada_at ? formatDateTime(selectedSale.factura_solicitada_at) : "Sin solicitud registrada"}</p>
+                </article>
+                <article className="mini-card">
+                  <span className="eyebrow">RFC</span>
+                  <strong>{selectedSale.factura_rfc || "Sin RFC"}</strong>
+                  <p>{selectedSale.factura_razon_social || "Sin razón social"}</p>
+                </article>
+                <article className="mini-card">
+                  <span className="eyebrow">Email fiscal</span>
+                  <strong>{selectedSale.factura_email || "Sin email"}</strong>
+                  <p>{selectedSale.factura_uso_cfdi || "Sin uso CFDI"}</p>
+                </article>
+              </div>
+              <div className="pos-action-row">
+                {selectedSale.estatus === "pagada" ? (
+                  <>
+                    <button className="ghost-button" onClick={() => openInvoiceRequestModal(selectedSale.id)} type="button">
+                      {hasPreparedInvoiceRequest(selectedSale) ? "Editar datos fiscales" : "Solicitar factura"}
+                    </button>
+                    {hasPreparedInvoiceRequest(selectedSale) ? (
+                      <button className="ghost-button" onClick={() => openInvoiceRequestModal(selectedSale.id)} type="button">
+                        Ver solicitud
+                      </button>
+                    ) : null}
+                  </>
+                ) : selectedSale.estatus === "cancelada" ? (
+                  <p className="table-note">Venta cancelada. La solicitud de factura no está disponible.</p>
+                ) : (
+                  <p className="table-note">Solo las ventas pagadas pueden preparar solicitud de factura.</p>
+                )}
+              </div>
+            </section>
+
             {selectedSale.notas ? (
               <div className="feature-card pos-note-card">
                 <div className="feature-header">
@@ -3370,6 +3809,137 @@ export default function PosPage() {
               </label>
             ) : null}
           </div>
+        ) : null}
+      </PosModal>
+
+      <PosModal
+        onClose={() => setInvoiceRequestModalOpen(false)}
+        open={invoiceRequestModalOpen}
+        subtitle="Captura los datos fiscales del cliente. Esta solicitud quedará pendiente; aún no se timbra CFDI."
+        title="Solicitar factura"
+      >
+        {selectedInvoiceRequest ? (
+          <form className="pos-modal-stack" onSubmit={handleSaveInvoiceRequest}>
+            <div className="pos-warning-box is-warning">
+              <strong>Solicitud de factura</strong>
+              <p>El timbrado CFDI aún está pendiente. Esta vista solo prepara la solicitud.</p>
+            </div>
+
+            <div className="pos-ticket-meta-grid">
+              <article className="mini-card">
+                <span className="eyebrow">Venta</span>
+                <strong>{selectedInvoiceRequest.folio}</strong>
+                <p>{formatMoney(selectedInvoiceRequest.total)}</p>
+              </article>
+              <article className="mini-card">
+                <span className="eyebrow">Estado fiscal</span>
+                <strong>{getInvoiceStatusLabel(selectedInvoiceRequest.factura_estado)}</strong>
+                <p>{selectedInvoiceRequest.fecha_solicitud ? formatDateTime(selectedInvoiceRequest.fecha_solicitud) : "Sin solicitud registrada"}</p>
+              </article>
+            </div>
+
+            <div className="pos-form-grid">
+              <label>
+                Nombre del cliente
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestForm((current) => ({ ...current, cliente_nombre: event.target.value }))}
+                  type="text"
+                  value={invoiceRequestForm.cliente_nombre}
+                />
+              </label>
+
+              <label>
+                RFC
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestForm((current) => ({ ...current, rfc: event.target.value.toUpperCase() }))}
+                  placeholder="XAXX010101000"
+                  type="text"
+                  value={invoiceRequestForm.rfc}
+                />
+              </label>
+
+              <label className="inventory-form-span-2">
+                Razón social
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestForm((current) => ({ ...current, razon_social: event.target.value }))}
+                  type="text"
+                  value={invoiceRequestForm.razon_social}
+                />
+              </label>
+
+              <label>
+                Email
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestForm((current) => ({ ...current, email: event.target.value }))}
+                  type="email"
+                  value={invoiceRequestForm.email}
+                />
+              </label>
+
+              <label>
+                Uso CFDI
+                <select
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestForm((current) => ({ ...current, uso_cfdi: event.target.value }))}
+                  value={invoiceRequestForm.uso_cfdi}
+                >
+                  {invoiceUsageOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Régimen fiscal
+                <select
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestForm((current) => ({ ...current, regimen_fiscal: event.target.value }))}
+                  value={invoiceRequestForm.regimen_fiscal}
+                >
+                  {invoiceFiscalRegimeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
+                Código postal
+                <input
+                  className="pos-input"
+                  onChange={(event) => setInvoiceRequestForm((current) => ({ ...current, codigo_postal: event.target.value }))}
+                  type="text"
+                  value={invoiceRequestForm.codigo_postal}
+                />
+              </label>
+
+              <label className="inventory-form-span-2">
+                Notas
+                <textarea
+                  className="pos-textarea"
+                  onChange={(event) => setInvoiceRequestForm((current) => ({ ...current, notas: event.target.value }))}
+                  rows={4}
+                  value={invoiceRequestForm.notas}
+                />
+              </label>
+            </div>
+
+            <div className="pos-action-row">
+              <button className="ghost-button" onClick={() => setInvoiceRequestModalOpen(false)} type="button">
+                Cerrar
+              </button>
+              <button className="primary-button" disabled={invoiceSubmitting} type="submit">
+                {invoiceSubmitting ? "Guardando..." : "Guardar solicitud"}
+              </button>
+            </div>
+          </form>
         ) : null}
       </PosModal>
 

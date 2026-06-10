@@ -2,6 +2,7 @@ import {
   BarChart3,
   Clock3,
   History,
+  ReceiptText,
   ShoppingCart,
   Ticket,
 } from "lucide-react";
@@ -45,5 +46,12 @@ export const posNavItems = [
     path: "/pos?view=reports",
     view: "reports",
     icon: BarChart3,
+  },
+  {
+    key: "invoicing",
+    label: "Facturación",
+    path: "/pos?view=invoicing",
+    view: "invoicing",
+    icon: ReceiptText,
   },
 ];

@@ -11,6 +11,9 @@ from app.db.session import get_db
 from app.schemas.pos import (
     PosActiveShiftResponse,
     PosCatalogResponse,
+    PosInvoiceRequestListResponse,
+    PosInvoiceRequestResponse,
+    PosInvoiceRequestUpsertRequest,
     PosReportSummaryResponse,
     PosShiftCloseRequest,
     PosShiftListResponse,
@@ -35,15 +38,18 @@ from app.services.pos import (
     get_pos_catalog,
     get_pos_report_summary,
     get_sale_for_company,
+    get_sale_invoice_request,
     get_sale_ticket,
     get_shift_detail_response,
     get_shift_report,
+    list_invoice_requests,
     list_sales,
     list_shifts,
     open_shift,
     pay_suspended_sale,
     resume_suspended_sale,
     serialize_sale_response,
+    upsert_sale_invoice_request,
     validate_pos_access,
 )
 
@@ -324,6 +330,102 @@ def sale_detail(
 ) -> SaleResponse:
     sale = get_sale_for_company(db, context.empresa.id, sale_id)
     return serialize_sale_response(db, sale)
+
+
+@router.post("/sales/{sale_id}/request-invoice", response_model=PosInvoiceRequestResponse)
+def request_sale_invoice(
+    sale_id: str,
+    payload: PosInvoiceRequestUpsertRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosInvoiceRequestResponse:
+    return run_pos_write(
+        db,
+        "request_sale_invoice",
+        lambda: upsert_sale_invoice_request(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
+            cliente_nombre=payload.cliente_nombre,
+            rfc=payload.rfc,
+            razon_social=payload.razon_social,
+            email=payload.email,
+            uso_cfdi=payload.uso_cfdi,
+            regimen_fiscal=payload.regimen_fiscal,
+            codigo_postal=payload.codigo_postal,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+            audit_action="pos.sale.invoice_request.create",
+        ),
+    )
+
+
+@router.get("/sales/{sale_id}/invoice-request", response_model=PosInvoiceRequestResponse)
+def get_sale_invoice_request_endpoint(
+    sale_id: str,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosInvoiceRequestResponse:
+    return get_sale_invoice_request(db, context.empresa.id, sale_id)
+
+
+@router.put("/sales/{sale_id}/invoice-request", response_model=PosInvoiceRequestResponse)
+def update_sale_invoice_request(
+    sale_id: str,
+    payload: PosInvoiceRequestUpsertRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosInvoiceRequestResponse:
+    return run_pos_write(
+        db,
+        "update_sale_invoice_request",
+        lambda: upsert_sale_invoice_request(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
+            cliente_nombre=payload.cliente_nombre,
+            rfc=payload.rfc,
+            razon_social=payload.razon_social,
+            email=payload.email,
+            uso_cfdi=payload.uso_cfdi,
+            regimen_fiscal=payload.regimen_fiscal,
+            codigo_postal=payload.codigo_postal,
+            notas=payload.notas,
+            ip_address=request.client.host if request.client else None,
+            audit_action="pos.sale.invoice_request.update",
+        ),
+    )
+
+
+@router.get("/invoice-requests", response_model=PosInvoiceRequestListResponse)
+def get_invoice_requests(
+    estado: Literal["solicitada", "pendiente_datos", "lista_para_facturar"] | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
+    rfc: str | None = None,
+    folio: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> PosInvoiceRequestListResponse:
+    validate_date_range(fecha_desde, fecha_hasta)
+    total, items = list_invoice_requests(
+        db,
+        context.empresa.id,
+        estado=estado,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        rfc=rfc,
+        folio=folio,
+        limit=limit,
+        offset=offset,
+    )
+    return PosInvoiceRequestListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.post("/sales", response_model=SaleResponse, status_code=status.HTTP_201_CREATED)

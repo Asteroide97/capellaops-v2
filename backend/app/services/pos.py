@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import re
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -23,6 +24,9 @@ from app.models.inventory import Almacen, Existencia, Material
 from app.schemas.pos import (
     PosActiveShiftResponse,
     PosCatalogItem,
+    PosInvoiceRequestItem,
+    PosInvoiceRequestListResponse,
+    PosInvoiceRequestResponse,
     PosReportCancellationItem,
     PosReportDiscountSummary,
     PosReportKpis,
@@ -61,6 +65,17 @@ from app.services.inventory import (
 
 PAYMENT_METHODS = {"efectivo", "tarjeta", "transferencia", "otro"}
 LEGACY_MIXED_PAYMENT_METHODS = {"mixto"}
+INVOICE_READY_REQUIRED_FIELDS = (
+    "factura_rfc",
+    "factura_razon_social",
+    "factura_email",
+    "factura_uso_cfdi",
+    "factura_regimen_fiscal",
+    "factura_codigo_postal",
+)
+INVOICE_ALLOWED_STATUSES = {"no_solicitada", "solicitada", "pendiente_datos", "lista_para_facturar", "facturada", "cancelada"}
+RFC_PATTERN = re.compile(r"^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$")
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def validate_pos_access(user: Usuario, empresa: Empresa) -> None:
@@ -106,6 +121,59 @@ def normalize_customer_email(value: str | None) -> str | None:
     if normalized is None:
         return None
     return normalized.lower()
+
+
+def normalize_invoice_email(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if normalized is None:
+        return None
+    normalized = normalized.lower()
+    if not EMAIL_PATTERN.fullmatch(normalized):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ingresa un email válido.",
+        )
+    return normalized
+
+
+def normalize_invoice_rfc(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if normalized is None:
+        return None
+    normalized = normalized.upper().replace(" ", "")
+    if not RFC_PATTERN.fullmatch(normalized):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ingresa un RFC válido.",
+        )
+    return normalized
+
+
+def normalize_invoice_catalog_value(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if normalized is None:
+        return None
+    return normalized.upper()
+
+
+def resolve_invoice_request_status(sale: Venta) -> str:
+    if sale.factura_estado not in INVOICE_ALLOWED_STATUSES:
+        return "no_solicitada"
+    has_minimum_data = all(getattr(sale, field) for field in INVOICE_READY_REQUIRED_FIELDS)
+    return "lista_para_facturar" if has_minimum_data else "pendiente_datos"
+
+
+def validate_sale_invoice_request_allowed(sale: Venta) -> None:
+    if sale.estatus == "cancelada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No puedes solicitar factura de una venta cancelada.",
+        )
+    if sale.estatus != "pagada":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Solo puedes solicitar factura de una venta pagada.",
+        )
 
 
 def normalize_utc_datetime(value: datetime) -> datetime:
@@ -393,6 +461,17 @@ def build_sale_item(
         monto_pagado=calculate_sale_paid_amount(sale),
         cambio=sale.cambio,
         estatus=sale.estatus,
+        factura_estado=sale.factura_estado or "no_solicitada",
+        factura_solicitada_at=sale.factura_solicitada_at,
+        factura_cliente_nombre=sale.factura_cliente_nombre,
+        factura_rfc=sale.factura_rfc,
+        factura_razon_social=sale.factura_razon_social,
+        factura_email=sale.factura_email,
+        factura_uso_cfdi=sale.factura_uso_cfdi,
+        factura_regimen_fiscal=sale.factura_regimen_fiscal,
+        factura_codigo_postal=sale.factura_codigo_postal,
+        factura_notas=sale.factura_notas,
+        factura_requiere_factura_global=bool(sale.factura_requiere_factura_global),
         notas=sale.notas,
         created_at=sale.created_at,
         paid_at=sale.paid_at,
@@ -430,6 +509,38 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
             serialize_sale_detail(detail, stock_actual=stock_map.get(detail.material_id, ZERO))
             for detail in details
         ],
+    )
+
+
+def serialize_invoice_request_item(sale: Venta) -> PosInvoiceRequestItem:
+    return PosInvoiceRequestItem(
+        venta_id=sale.id,
+        folio=sale.folio,
+        fecha=sale.factura_solicitada_at or sale.paid_at or sale.created_at,
+        total=sale.total,
+        venta_estatus=sale.estatus,
+        factura_estado=sale.factura_estado or "no_solicitada",
+        cliente_nombre=sale.factura_cliente_nombre or sale.cliente_nombre,
+        rfc=sale.factura_rfc,
+        email=sale.factura_email or sale.cliente_email,
+        uso_cfdi=sale.factura_uso_cfdi,
+        fecha_solicitud=sale.factura_solicitada_at,
+    )
+
+
+def serialize_invoice_request_response(sale: Venta) -> PosInvoiceRequestResponse:
+    return PosInvoiceRequestResponse(
+        **serialize_invoice_request_item(sale).model_dump(),
+        almacen_id=sale.almacen_id,
+        almacen_nombre=sale.almacen.nombre,
+        usuario_id=sale.usuario_id,
+        vendedor_nombre=sale.usuario.full_name,
+        cliente_email=sale.cliente_email,
+        razon_social=sale.factura_razon_social,
+        regimen_fiscal=sale.factura_regimen_fiscal,
+        codigo_postal=sale.factura_codigo_postal,
+        notas=sale.factura_notas,
+        factura_requiere_factura_global=bool(sale.factura_requiere_factura_global),
     )
 
 
@@ -548,6 +659,131 @@ def list_sales(
         for sale, almacen_nombre, vendedor_nombre, turno_folio, detail_count in rows
     ]
     return total, items
+
+
+def get_sale_invoice_request(
+    db: Session,
+    empresa_id: str,
+    sale_id: str,
+) -> PosInvoiceRequestResponse:
+    sale = db.scalar(
+        select(Venta)
+        .options(selectinload(Venta.almacen), selectinload(Venta.usuario))
+        .where(Venta.id == sale_id, Venta.empresa_id == empresa_id)
+    )
+    if not sale:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venta no encontrada.")
+    return serialize_invoice_request_response(sale)
+
+
+def upsert_sale_invoice_request(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    cliente_nombre: str | None,
+    rfc: str | None,
+    razon_social: str | None,
+    email: str | None,
+    uso_cfdi: str | None,
+    regimen_fiscal: str | None,
+    codigo_postal: str | None,
+    notas: str | None,
+    ip_address: str | None,
+    audit_action: str,
+) -> PosInvoiceRequestResponse:
+    validate_pos_access(user, empresa)
+    sale = db.scalar(
+        select(Venta)
+        .options(selectinload(Venta.almacen), selectinload(Venta.usuario))
+        .where(Venta.id == sale_id, Venta.empresa_id == empresa.id)
+        .with_for_update()
+    )
+    if not sale:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venta no encontrada.")
+
+    validate_sale_invoice_request_allowed(sale)
+
+    sale.factura_cliente_nombre = normalize_optional_text(cliente_nombre) or normalize_optional_text(sale.cliente_nombre)
+    sale.factura_rfc = normalize_invoice_rfc(rfc)
+    sale.factura_razon_social = normalize_optional_text(razon_social)
+    sale.factura_email = normalize_invoice_email(email)
+    sale.factura_uso_cfdi = normalize_invoice_catalog_value(uso_cfdi)
+    sale.factura_regimen_fiscal = normalize_invoice_catalog_value(regimen_fiscal)
+    sale.factura_codigo_postal = normalize_optional_text(codigo_postal)
+    sale.factura_notas = normalize_optional_text(notas)
+    sale.factura_requiere_factura_global = False
+
+    if not sale.factura_solicitada_at:
+        sale.factura_solicitada_at = datetime.now(timezone.utc)
+    sale.factura_estado = resolve_invoice_request_status(sale)
+
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action=audit_action,
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={
+            "folio": sale.folio,
+            "factura_estado": sale.factura_estado,
+            "factura_rfc": sale.factura_rfc,
+            "factura_email": sale.factura_email,
+            "factura_uso_cfdi": sale.factura_uso_cfdi,
+        },
+    )
+    db.flush()
+    db.refresh(sale)
+    return serialize_invoice_request_response(sale)
+
+
+def list_invoice_requests(
+    db: Session,
+    empresa_id: str,
+    *,
+    estado: str | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
+    rfc: str | None = None,
+    folio: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[int, list[PosInvoiceRequestItem]]:
+    request_timestamp = func.coalesce(Venta.factura_solicitada_at, Venta.paid_at, Venta.created_at)
+    id_query = select(Venta.id).where(
+        Venta.empresa_id == empresa_id,
+        Venta.estatus == "pagada",
+        Venta.factura_estado != "no_solicitada",
+    )
+
+    if estado:
+        id_query = id_query.where(Venta.factura_estado == estado)
+    if fecha_desde:
+        id_query = id_query.where(request_timestamp >= fecha_desde)
+    if fecha_hasta:
+        id_query = id_query.where(request_timestamp <= fecha_hasta)
+    if rfc:
+        id_query = apply_text_search(id_query, rfc, Venta.factura_rfc)
+    if folio:
+        id_query = apply_text_search(id_query, folio, Venta.folio)
+
+    total = count_rows(db, id_query)
+    page_ids = db.scalars(
+        id_query.order_by(desc(request_timestamp), desc(Venta.id)).offset(offset).limit(limit)
+    ).all()
+    if not page_ids:
+        return total, []
+
+    sales = db.scalars(
+        select(Venta)
+        .options(selectinload(Venta.almacen), selectinload(Venta.usuario))
+        .where(Venta.id.in_(page_ids))
+        .order_by(desc(func.coalesce(Venta.factura_solicitada_at, Venta.paid_at, Venta.created_at)), desc(Venta.id))
+    ).all()
+    return total, [serialize_invoice_request_item(sale) for sale in sales]
 
 
 def get_pos_report_summary(

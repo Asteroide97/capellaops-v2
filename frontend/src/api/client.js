@@ -810,6 +810,45 @@ export function getPosTicket({ saleId, token, empresaId }) {
 }
 
 
+export function requestPosSaleInvoice({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/request-invoice`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPosSaleInvoiceRequest({ saleId, token, empresaId }) {
+  return apiRequest(`/pos/sales/${saleId}/invoice-request`, { token, empresaId });
+}
+
+
+export function updatePosSaleInvoiceRequest({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/invoice-request`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getPosInvoiceRequests({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "estado", filters.estado);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "rfc", filters.rfc);
+  appendQueryValue(query, "folio", filters.folio);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pos/invoice-requests${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
 export function getCompanyUsers({ token, empresaId }) {
   return apiRequest("/company/users", { token, empresaId });
 }

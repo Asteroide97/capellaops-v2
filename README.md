@@ -1580,6 +1580,15 @@ Las órdenes de compra ya siguen el flujo base:
 - La utilidad estimada se calcula con venta neta menos costo estimado por linea usando snapshot de movimiento cuando existe y fallback a costo del material.
 - La exportacion CSV simple ya permite descargar KPIs, ventas por dia y productos mas vendidos para analisis externo.
 
+## POS Fase 7 - Preparación para facturación desde POS
+
+- Una venta POS pagada ya puede capturar una `Solicitud de factura` sin timbrar CFDI.
+- `Historial de Ventas` ya permite solicitar o editar datos fiscales solo para ventas pagadas.
+- La solicitud guarda datos fiscales basicos en la venta: RFC, razon social, email, uso CFDI, regimen fiscal, codigo postal y notas.
+- El estado fiscal interno ahora distingue `no_solicitada`, `pendiente_datos` y `lista_para_facturar`.
+- `POS > Facturación` ya concentra las solicitudes pendientes de timbrado con filtros por estado, fecha, RFC y folio.
+- Esta fase no conecta Factura.com, no genera CFDI 4.0 y no marca ventas como `facturada`.
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados
@@ -1593,6 +1602,10 @@ Las órdenes de compra ya siguen el flujo base:
 - Link publico de ticket
 - PDF de ticket
 - Conexión con facturación fiscal
+- Solicitud de factura desde venta cancelada con tratamiento fiscal posterior
+- Factura global POS
+- Timbrado CFDI desde POS
+- Integración Factura.com
 
 ## Placeholders actuales
 

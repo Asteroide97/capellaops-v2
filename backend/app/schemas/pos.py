@@ -83,6 +83,17 @@ class SaleItem(BaseModel):
     monto_pagado: Decimal | None = None
     cambio: Decimal | None = None
     estatus: str
+    factura_estado: str = "no_solicitada"
+    factura_solicitada_at: datetime | None = None
+    factura_cliente_nombre: str | None = None
+    factura_rfc: str | None = None
+    factura_razon_social: str | None = None
+    factura_email: str | None = None
+    factura_uso_cfdi: str | None = None
+    factura_regimen_fiscal: str | None = None
+    factura_codigo_postal: str | None = None
+    factura_notas: str | None = None
+    factura_requiere_factura_global: bool = False
     notas: str | None = None
     created_at: datetime
     paid_at: datetime | None = None
@@ -99,6 +110,51 @@ class SaleResponse(SaleItem):
 
 class SaleListResponse(BaseModel):
     items: list[SaleItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class PosInvoiceRequestUpsertRequest(BaseModel):
+    cliente_nombre: str | None = Field(default=None, max_length=160)
+    rfc: str | None = Field(default=None, max_length=20)
+    razon_social: str | None = Field(default=None, max_length=200)
+    email: str | None = Field(default=None, max_length=255)
+    uso_cfdi: str | None = Field(default=None, max_length=10)
+    regimen_fiscal: str | None = Field(default=None, max_length=10)
+    codigo_postal: str | None = Field(default=None, max_length=12)
+    notas: str | None = Field(default=None, max_length=2000)
+
+
+class PosInvoiceRequestItem(BaseModel):
+    venta_id: str
+    folio: str
+    fecha: datetime
+    total: Decimal
+    venta_estatus: str
+    factura_estado: str
+    cliente_nombre: str | None = None
+    rfc: str | None = None
+    email: str | None = None
+    uso_cfdi: str | None = None
+    fecha_solicitud: datetime | None = None
+
+
+class PosInvoiceRequestResponse(PosInvoiceRequestItem):
+    almacen_id: str
+    almacen_nombre: str
+    usuario_id: str
+    vendedor_nombre: str
+    cliente_email: str | None = None
+    razon_social: str | None = None
+    regimen_fiscal: str | None = None
+    codigo_postal: str | None = None
+    notas: str | None = None
+    factura_requiere_factura_global: bool = False
+
+
+class PosInvoiceRequestListResponse(BaseModel):
+    items: list[PosInvoiceRequestItem]
     total: int
     limit: int
     offset: int

@@ -1867,6 +1867,10 @@ textarea {
   align-items: end;
 }
 
+.pos-invoice-filters {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
 .pos-report-grid {
   display: grid;
   gap: 1rem;
