@@ -13,6 +13,7 @@ import {
 
 import { useAuth } from "../auth/AuthContext";
 import { inventoryModuleIcon, inventoryNavItems } from "../pages/inventory/navigation";
+import { isPmPath, pmModuleIcon, pmNavItems, resolvePmNavKey } from "../pages/pm/navigation";
 import { posModuleIcon, posNavItems } from "../pages/pos/navigation";
 
 
@@ -23,7 +24,7 @@ const moduleIconMap = {
   billing_pending: ReceiptText,
   crm: Users,
   inventory: inventoryModuleIcon,
-  pm: FolderKanban,
+  pm: pmModuleIcon,
   pos: posModuleIcon,
   superadmin: ShieldCheck,
 };
@@ -52,8 +53,10 @@ export default function Sidebar() {
   const { empresa, membership, modules, user } = useAuth();
   const location = useLocation();
   const [inventoryExpanded, setInventoryExpanded] = useState(location.pathname.startsWith("/inventario"));
+  const [pmExpanded, setPmExpanded] = useState(isPmPath(location.pathname));
   const [posExpanded, setPosExpanded] = useState(location.pathname.startsWith("/pos"));
   const getNavClass = ({ isActive }) => (isActive ? "nav-item active" : "nav-item");
+  const currentPmView = resolvePmNavKey(location.pathname, location.search);
   const currentPosView = (() => {
     if (!location.pathname.startsWith("/pos")) {
       return "";
@@ -65,6 +68,9 @@ export default function Sidebar() {
   useEffect(() => {
     if (location.pathname.startsWith("/inventario")) {
       setInventoryExpanded(true);
+    }
+    if (isPmPath(location.pathname)) {
+      setPmExpanded(true);
     }
     if (location.pathname.startsWith("/pos")) {
       setPosExpanded(true);
@@ -155,6 +161,45 @@ export default function Sidebar() {
                   <div className="nav-children">
                     {posNavItems.map((item) => {
                       const isActive = isPosActive && currentPosView === item.view;
+                      return (
+                        <Link
+                          className={isActive ? "nav-child nav-child-active" : "nav-child"}
+                          key={item.key}
+                          to={item.path}
+                        >
+                          <NavLabel child icon={item.icon} label={item.label} />
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            );
+          }
+
+          if (module.name === "pm" && module.enabled && module.route) {
+            const isPmActive = isPmPath(location.pathname);
+
+            return (
+              <div className="nav-group" key={module.name}>
+                <button
+                  className={`nav-item nav-toggle ${isPmActive ? "active" : ""}`}
+                  onClick={() => setPmExpanded((current) => !current)}
+                  type="button"
+                >
+                  <NavLabel icon={moduleIcon} label={module.label} />
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`nav-toggle-icon ${pmExpanded ? "expanded" : ""}`}
+                    size={16}
+                    strokeWidth={ICON_STROKE}
+                  />
+                </button>
+
+                {pmExpanded ? (
+                  <div className="nav-children">
+                    {pmNavItems.map((item) => {
+                      const isActive = isPmActive && currentPmView === item.key;
                       return (
                         <Link
                           className={isActive ? "nav-child nav-child-active" : "nav-child"}
