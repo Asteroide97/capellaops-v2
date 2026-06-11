@@ -567,7 +567,7 @@ def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
         turno_folio=sale.turno.folio if sale.turno else None,
         fecha=sale.paid_at or sale.created_at,
         paid_at=sale.paid_at,
-        empresa=sale.empresa.name,
+        empresa=sale.empresa.nombre_comercial or sale.empresa.razon_social or sale.empresa.name,
         almacen=sale.almacen.nombre,
         vendedor=sale.usuario.full_name,
         cliente_nombre=sale.cliente_nombre,

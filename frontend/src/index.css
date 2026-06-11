@@ -1704,6 +1704,67 @@ textarea {
   gap: 1rem;
 }
 
+.pos-document-brand {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.9rem;
+}
+
+.pos-document-brand-logo {
+  width: 4.5rem;
+  min-width: 4.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pos-document-brand-logo img {
+  max-width: 100%;
+  max-height: 4.5rem;
+  object-fit: contain;
+}
+
+.pos-document-brand-body {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.pos-document-brand-name {
+  font-size: 1.05rem;
+  line-height: 1.25;
+  color: var(--text-primary);
+}
+
+.pos-document-brand-line {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.pos-document-brand-compact {
+  gap: 0.75rem;
+}
+
+.pos-document-brand-compact .pos-document-brand-logo {
+  width: 3.6rem;
+  min-width: 3.6rem;
+}
+
+.pos-document-brand-compact .pos-document-brand-logo img {
+  max-height: 3.6rem;
+}
+
+.pos-document-brand-compact .pos-document-brand-name {
+  font-size: 0.98rem;
+}
+
+.pos-document-brand-compact .pos-document-brand-line {
+  font-size: 0.82rem;
+}
+
 .pos-ticket-receipt {
   display: grid;
   gap: 1rem;
@@ -2105,6 +2166,7 @@ textarea {
   .pos-ticket-print p,
   .pos-ticket-print strong,
   .pos-ticket-print span,
+  .pos-ticket-print img,
   .pos-ticket-print h3,
   .pos-shift-report-print .inventory-table th,
   .pos-shift-report-print .inventory-table td,
@@ -2112,6 +2174,7 @@ textarea {
   .pos-shift-report-print p,
   .pos-shift-report-print strong,
   .pos-shift-report-print span,
+  .pos-shift-report-print img,
   .pos-shift-report-print h3 {
     color: black !important;
   }
@@ -5005,6 +5068,10 @@ body.pm-is-dragging {
   .pos-ticket-status-block {
     justify-items: flex-start;
     text-align: left;
+  }
+
+  .pos-document-brand {
+    flex-direction: column;
   }
 }
 

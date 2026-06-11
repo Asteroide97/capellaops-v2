@@ -31,7 +31,7 @@ class SuperadminContext:
 def get_token_payload(token: str = Depends(oauth2_scheme)) -> dict:
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Credenciales invÃ¡lidas.",
+        detail="Credenciales invalidas.",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -47,7 +47,7 @@ def get_current_user(
 ) -> Usuario:
     credentials_error = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Credenciales invÃ¡lidas.",
+        detail="Credenciales invalidas.",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -110,7 +110,7 @@ def get_superadmin_context(
     if token_payload.get("impersonation"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="No puedes acceder a Superadmin mientras estÃ¡s impersonando.",
+            detail="No puedes acceder a Superadmin mientras estas impersonando.",
         )
 
     if not current_user.is_superadmin:

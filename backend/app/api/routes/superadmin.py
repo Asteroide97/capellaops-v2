@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+﻿from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import desc, func, or_, select
@@ -43,7 +43,7 @@ def normalize_reason(reason: str) -> str:
     if not normalized:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Debes indicar una razÃ³n para este cambio.",
+            detail="Debes indicar una razon para este cambio.",
         )
     return normalized
 
@@ -454,9 +454,9 @@ def update_company_access(
     normalized_access_status = payload.access_status.strip().lower()
 
     if normalized_plan_code not in ALLOWED_PLAN_CODES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="plan_code invÃ¡lido.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="plan_code invalido.")
     if normalized_access_status not in ALLOWED_ACCESS_STATUSES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="access_status invÃ¡lido.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="access_status invalido.")
 
     company = db.scalar(
         select(Empresa).options(selectinload(Empresa.modules)).where(Empresa.id == empresa_id)
@@ -591,3 +591,4 @@ def audit_logs(
         q=q,
     )
     return SuperadminAuditLogListResponse(total=total, items=items)
+

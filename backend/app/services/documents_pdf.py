@@ -103,7 +103,12 @@ def _sanitize_filename(value: str, fallback: str) -> str:
 
 
 def _company_title(company: Empresa) -> str:
-    return _text(getattr(company, "nombre_comercial", None) or company.name, "Empresa")
+    return _text(
+        getattr(company, "nombre_comercial", None)
+        or getattr(company, "razon_social", None)
+        or company.name,
+        "Empresa",
+    )
 
 
 def _company_location(company: Empresa) -> str | None:

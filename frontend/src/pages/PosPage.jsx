@@ -214,6 +214,97 @@ function formatNumber(value) {
 }
 
 
+function normalizeCompanyText(value) {
+  return String(value ?? "").trim();
+}
+
+
+function getCompanyDisplayName(company, fallback = "Empresa") {
+  return (
+    normalizeCompanyText(company?.nombre_comercial) ||
+    normalizeCompanyText(company?.razon_social) ||
+    normalizeCompanyText(company?.name) ||
+    fallback
+  );
+}
+
+
+function getCompanyLocationLine(company) {
+  const parts = [company?.ciudad, company?.estado, company?.codigo_postal, company?.pais]
+    .map((value) => normalizeCompanyText(value))
+    .filter(Boolean);
+  return parts.join(", ");
+}
+
+
+function getCompanyContactLine(company) {
+  const parts = [company?.email_contacto, company?.telefono]
+    .map((value) => normalizeCompanyText(value))
+    .filter(Boolean);
+  return parts.join(" | ");
+}
+
+
+function getCompanyDocumentLines(company) {
+  const name = getCompanyDisplayName(company, "");
+  const lines = [];
+  const razonSocial = normalizeCompanyText(company?.razon_social);
+  const rfc = normalizeCompanyText(company?.rfc);
+  const direccion = normalizeCompanyText(company?.direccion);
+  const location = getCompanyLocationLine(company);
+  const contact = getCompanyContactLine(company);
+
+  if (razonSocial && razonSocial !== name) {
+    lines.push(razonSocial);
+  }
+  if (rfc) {
+    lines.push(`RFC: ${rfc}`);
+  }
+  if (direccion) {
+    lines.push(direccion);
+  }
+  if (location) {
+    lines.push(location);
+  }
+  if (contact) {
+    lines.push(contact);
+  }
+  return lines;
+}
+
+
+function DocumentCompanyHeader({ company, compact = false, fallbackName = "Empresa" }) {
+  const [logoFailed, setLogoFailed] = useState(false);
+  const displayName = getCompanyDisplayName(company, fallbackName);
+  const detailLines = getCompanyDocumentLines(company);
+  const logoUrl = normalizeCompanyText(company?.logo_url);
+  const showLogo = Boolean(logoUrl) && !logoFailed;
+
+  return (
+    <div className={`pos-document-brand ${compact ? "pos-document-brand-compact" : ""}`}>
+      {showLogo ? (
+        <div className="pos-document-brand-logo">
+          <img
+            alt={`Logo de ${displayName}`}
+            loading="lazy"
+            onError={() => setLogoFailed(true)}
+            src={logoUrl}
+          />
+        </div>
+      ) : null}
+      <div className="pos-document-brand-body">
+        <strong className="pos-document-brand-name">{displayName}</strong>
+        {detailLines.map((line, index) => (
+          <p className="pos-document-brand-line" key={`${line}-${index}`}>
+            {line}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
 function normalizeDecimalInput(value) {
   return String(value ?? "").replace(",", ".").replace(/[^\d.]/g, "");
 }
@@ -640,7 +731,7 @@ function PaginationControls({ meta, onPrevious, onNext }) {
 
 
 export default function PosPage() {
-  const { token, empresaId, membership, user } = useAuth();
+  const { token, empresa, empresaId, membership, user } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeView = POS_VIEWS.includes(searchParams.get("view")) ? searchParams.get("view") : "sell";
@@ -4006,11 +4097,13 @@ export default function PosPage() {
           <div className="pos-modal-stack">
             <article className="pos-ticket-print pos-ticket-printable">
               <div className="pos-ticket-receipt">
+                <DocumentCompanyHeader company={empresa} compact fallbackName={selectedTicket.empresa} />
+
                 <header className="pos-ticket-receipt-head">
                   <div>
                     <p className="eyebrow">Comprobante de venta</p>
-                    <h3>{selectedTicket.empresa}</h3>
-                    <p>{selectedTicket.almacen}</p>
+                    <h3>{selectedTicket.almacen}</h3>
+                    <p>Venta mostrador</p>
                   </div>
                   <div className="pos-ticket-status-block">
                     <StatusBadge
@@ -4159,6 +4252,8 @@ export default function PosPage() {
           <div className="pos-modal-stack">
             <article className="pos-shift-report-print">
               <div className="pos-shift-report-sheet">
+                <DocumentCompanyHeader company={empresa} fallbackName="Empresa" />
+
                 <header className="pos-shift-report-head">
                   <div>
                     <p className="eyebrow">Corte de caja</p>

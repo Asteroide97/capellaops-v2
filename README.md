@@ -1643,6 +1643,14 @@ Las órdenes de compra ya siguen el flujo base:
   - `AZURE_STORAGE_CONTAINER`
   - `AZURE_STORAGE_PUBLIC_BASE_URL`
 
+## Documentos Branding QA - Logo y datos empresariales en documentos
+
+- Los PDFs operativos ya comparten la misma prioridad de nombre de empresa: `nombre_comercial`, luego `razon_social`, y al final `name`.
+- Las estimaciones PM y las ordenes de compra ya intentan cargar `logo_url`; si el logo falla, mantienen encabezado textual sin romper el PDF.
+- El ticket POS imprimible ya usa el branding de la empresa cargado en sesion para mostrar logo, razon social, RFC, direccion y contacto cuando existen.
+- El corte de caja imprimible ya muestra el mismo encabezado empresarial y conserva su superficie de impresion aislada.
+- Los documentos operativos siguen marcando que no son comprobantes fiscales.
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados
