@@ -47,6 +47,8 @@ from app.models.pm import (
 from app.models.procurement import (
     OrdenCompra,
     OrdenCompraDetalle,
+    OrdenCompraRecepcion,
+    OrdenCompraRecepcionDetalle,
     Proveedor,
     Requisicion,
     RequisicionDetalle,
@@ -105,6 +107,8 @@ __all__ = [
     "RequisicionDetalle",
     "OrdenCompra",
     "OrdenCompraDetalle",
+    "OrdenCompraRecepcion",
+    "OrdenCompraRecepcionDetalle",
     "TransferenciaInventario",
     "TransferenciaInventarioDetalle",
     "Usuario",

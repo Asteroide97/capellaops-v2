@@ -1651,6 +1651,15 @@ Las órdenes de compra ya siguen el flujo base:
 - El corte de caja imprimible ya muestra el mismo encabezado empresarial y conserva su superficie de impresion aislada.
 - Los documentos operativos siguen marcando que no son comprobantes fiscales.
 
+## Compras Fase 2 - Recepción avanzada e historial de órdenes de compra
+
+- Las órdenes de compra ya distinguen mejor el flujo operativo: `borrador`, `emitida`, `recibida_parcial`, `recibida` y `cancelada`.
+- Cada recepción ahora queda registrada como evento formal con almacén, documento o remisión, notas, usuario y renglones recibidos.
+- La recepción sigue creando entrada a inventario y Kardex, pero ahora además conserva historial independiente por orden.
+- `Inventario > Órdenes de compra` ya muestra KPIs, pendientes por recibir, materiales pendientes y proveedores con órdenes abiertas.
+- El detalle de la OC ya incluye historial de recepciones, movimientos relacionados y valor pendiente por recibir.
+- La orden de compra PDF mantiene branding empresarial y la leyenda `Documento operativo. No es comprobante fiscal.`.
+
 ### Pendientes POS
 
 - Cancelación segura de ventas cobradas en turnos ya cerrados

@@ -2406,6 +2406,11 @@ export function getPurchaseOrderDetail({ orderId, token, empresaId }) {
 }
 
 
+export function getPurchaseOrderReceipts({ orderId, token, empresaId }) {
+  return apiRequest(`/inventory/purchase-orders/${orderId}/receipts`, { token, empresaId });
+}
+
+
 export function downloadPurchaseOrderPdf({ orderId, token, empresaId }) {
   return downloadFileRequest(`/inventory/purchase-orders/${orderId}/pdf`, {
     token,
@@ -2489,6 +2494,11 @@ export function receivePurchaseOrder({ orderId, token, empresaId, payload }) {
     token,
     empresaId,
   });
+}
+
+
+export function getPendingPurchaseOrderReport({ token, empresaId }) {
+  return apiRequest("/inventory/purchase-reports/pending", { token, empresaId });
 }
 
 

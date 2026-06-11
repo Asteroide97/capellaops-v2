@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
+  AlertTriangle,
   BadgeCheck,
   ClipboardList,
   DollarSign,
@@ -23,6 +24,7 @@ import {
   deletePurchaseOrderDetail,
   downloadPurchaseOrderPdf,
   getMaterials,
+  getPendingPurchaseOrderReport,
   getPurchaseOrderDetail,
   getSuppliers,
   getWarehouses,
@@ -80,6 +82,7 @@ const defaultEditorForm = {
 };
 
 const defaultReceiveForm = {
+  almacen_id: "",
   documento_referencia: "",
   notas: "",
   cantidades: {},
@@ -199,6 +202,17 @@ export default function PurchaseOrdersPage() {
   const [warehouses, setWarehouses] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [pendingReport, setPendingReport] = useState({
+    kpis: {
+      ordenes_pendientes: 0,
+      ordenes_parciales: 0,
+      materiales_pendientes: 0,
+      monto_pendiente: 0,
+    },
+    ordenes: [],
+    materiales: [],
+    proveedores: [],
+  });
   const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
   const [filters, setFilters] = useState(defaultFilters);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -236,6 +250,12 @@ export default function PurchaseOrdersPage() {
       limit: response.limit,
       offset: response.offset,
     });
+    return response;
+  }
+
+  async function loadPendingReport() {
+    const response = await getPendingPurchaseOrderReport({ token, empresaId });
+    setPendingReport(response);
     return response;
   }
 
@@ -334,6 +354,7 @@ export default function PurchaseOrdersPage() {
     }
     setReceiveForm({
       ...defaultReceiveForm,
+      almacen_id: order.almacen_destino_id,
       cantidades,
     });
     setDetailOpen(false);
@@ -351,7 +372,7 @@ export default function PurchaseOrdersPage() {
       try {
         const options = await loadOptions();
         resetEditorForm(options.supplierItems[0]?.id || "", options.warehouseItems[0]?.id || "");
-        await loadOrderList(defaultFilters);
+        await Promise.all([loadOrderList(defaultFilters), loadPendingReport()]);
       } catch (requestError) {
         setError(requestError.message || "No se pudieron cargar las órdenes de compra.");
       } finally {
@@ -472,7 +493,7 @@ export default function PurchaseOrdersPage() {
   async function refreshList() {
     setError("");
     try {
-      await loadOrderList(filters);
+      await Promise.all([loadOrderList(filters), loadPendingReport()]);
       if (selectedOrder?.id) {
         await loadOrderDocument(selectedOrder.id);
       }
@@ -658,11 +679,25 @@ export default function PurchaseOrdersPage() {
     }
 
     const items = Object.entries(receiveForm.cantidades)
-      .map(([detail_id, cantidad]) => ({ detail_id, cantidad: Number(cantidad || 0) }))
-      .filter((item) => item.cantidad > 0);
+      .map(([detail_id, cantidad]) => ({ detail_id, cantidad_recibida: Number(cantidad || 0) }))
+      .filter((item) => item.cantidad_recibida > 0);
 
     if (items.length === 0) {
-      setError("Captura al menos una cantidad válida por recibir.");
+      setError("La cantidad recibida debe ser mayor a cero.");
+      return;
+    }
+
+    if (!receiveForm.almacen_id) {
+      setError("Selecciona un almacén destino.");
+      return;
+    }
+
+    const exceededItem = items.find((item) => {
+      const detail = selectedOrder.details.find((candidate) => candidate.id === item.detail_id);
+      return detail ? Number(item.cantidad_recibida || 0) > Number(detail.cantidad_pendiente || 0) : false;
+    });
+    if (exceededItem) {
+      setError("La cantidad recibida supera la cantidad pendiente.");
       return;
     }
 
@@ -675,16 +710,18 @@ export default function PurchaseOrdersPage() {
         token,
         empresaId,
         payload: {
+          almacen_id: receiveForm.almacen_id,
           documento_referencia: receiveForm.documento_referencia || null,
           notas: receiveForm.notas || null,
           items,
         },
       });
-      setSelectedOrder(response);
+      setSelectedOrder(response.order);
       setReceiveOpen(false);
       setDetailOpen(true);
-      await loadOrderList(filters);
-      setSuccess("Recepción registrada e inventario actualizado.");
+      setReceiveForm(defaultReceiveForm);
+      await Promise.all([loadOrderList(filters), loadPendingReport()]);
+      setSuccess("Recepción registrada y entrada a inventario creada.");
     } catch (requestError) {
       setError(requestError.message || "No se pudo registrar la recepción.");
     } finally {
@@ -727,7 +764,13 @@ export default function PurchaseOrdersPage() {
         <MetricCard icon={<Send size={16} />} label="Emitidas" meta="Pendientes de recibir" tone="info" value={kpis.emitidas} />
         <MetricCard icon={<PackageCheck size={16} />} label="Parciales" meta="Recepciones incompletas" tone="warning" value={kpis.parciales} />
         <MetricCard icon={<BadgeCheck size={16} />} label="Recibidas" meta="Cerradas por recepción" tone="success" value={kpis.recibidas} />
-        <MetricCard icon={<DollarSign size={16} />} label="Total comprado" meta={`${formatNumber(kpis.pendiente)} unidades pendientes`} tone="success" value={formatMoney(kpis.total)} />
+        <MetricCard
+          icon={<DollarSign size={16} />}
+          label="Pendiente por recibir"
+          meta={`${formatNumber(pendingReport.kpis.ordenes_pendientes + pendingReport.kpis.ordenes_parciales)} órdenes abiertas`}
+          tone="warning"
+          value={formatMoney(pendingReport.kpis.monto_pendiente)}
+        />
       </section>
 
       <FilterCard title="Filtros de órdenes" subtitle="Consulta por proveedor, almacén, estatus o rango de fechas.">
@@ -735,7 +778,7 @@ export default function PurchaseOrdersPage() {
           <SearchInput
             label="Buscar orden"
             onChange={(event) => setFilters((current) => ({ ...current, q: event.target.value }))}
-            placeholder="Folio o notas"
+            placeholder="Folio, proveedor o notas"
             value={filters.q}
           />
 
@@ -810,6 +853,104 @@ export default function PurchaseOrdersPage() {
           </div>
         </form>
       </FilterCard>
+
+      <DataCard
+        actions={<StatusBadge tone={pendingReport.kpis.monto_pendiente > 0 ? "warning" : "success"}>{pendingReport.kpis.monto_pendiente > 0 ? "Abierto" : "Sin pendientes"}</StatusBadge>}
+        subtitle="Órdenes emitidas, recepciones parciales y materiales pendientes por proveedor."
+        title="Pendientes por recibir"
+      >
+        <section className="inventory-metric-grid inventory-metric-grid-4">
+          <MetricCard icon={<Send size={16} />} label="Órdenes emitidas" tone="info" value={pendingReport.kpis.ordenes_pendientes} />
+          <MetricCard icon={<PackageCheck size={16} />} label="Recepción parcial" tone="warning" value={pendingReport.kpis.ordenes_parciales} />
+          <MetricCard icon={<AlertTriangle size={16} />} label="Materiales pendientes" tone="warning" value={pendingReport.kpis.materiales_pendientes} />
+          <MetricCard icon={<DollarSign size={16} />} label="Monto pendiente" tone="warning" value={formatMoney(pendingReport.kpis.monto_pendiente)} />
+        </section>
+
+        {pendingReport.ordenes.length === 0 ? (
+          <EmptyState compact note="No hay órdenes emitidas o parciales pendientes de recepción." title="Sin pendientes por recibir" />
+        ) : (
+          <div className="dashboard-stack">
+            <section className="inventory-form-section">
+              <SectionTitle subtitle="Monitorea órdenes abiertas y cuánto falta por recibir." title="Órdenes abiertas" />
+              <DataTable
+                columns={[
+                  { key: "folio", label: "Folio" },
+                  { key: "proveedor", label: "Proveedor" },
+                  { key: "estatus", label: "Estatus" },
+                  { key: "emitida", label: "Fecha emitida" },
+                  { key: "total", label: "Total" },
+                  { key: "pendiente", label: "Pendiente por recibir" },
+                ]}
+              >
+                <tbody>
+                  {pendingReport.ordenes.map((order) => (
+                    <tr key={order.id}>
+                      <td>{order.folio}</td>
+                      <td>{order.proveedor}</td>
+                      <td>
+                        <StatusBadge tone={statusTone(order.estatus)}>{statusLabel(order.estatus)}</StatusBadge>
+                      </td>
+                      <td>{formatDateTime(order.fecha_emitida)}</td>
+                      <td>{formatMoney(order.total)}</td>
+                      <td>
+                        <div className="inventory-cell-main">{formatMoney(order.pendiente)}</div>
+                        <div className="inventory-cell-sub">{formatNumber(order.cantidad_pendiente)} unidades</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </DataTable>
+            </section>
+
+            <section className="inventory-form-section">
+              <SectionTitle subtitle="Prioriza materiales y proveedores con recepciones abiertas." title="Materiales pendientes" />
+              <DataTable
+                columns={[
+                  { key: "material", label: "Material" },
+                  { key: "proveedor", label: "Proveedor" },
+                  { key: "cantidad", label: "Cantidad pendiente" },
+                  { key: "ordenes", label: "Órdenes abiertas" },
+                ]}
+              >
+                <tbody>
+                  {pendingReport.materiales.map((item) => (
+                    <tr key={`${item.material_id}-${item.proveedor}`}>
+                      <td>
+                        <div className="inventory-cell-main">{item.material}</div>
+                        <div className="inventory-cell-sub">{item.sku}</div>
+                      </td>
+                      <td>{item.proveedor}</td>
+                      <td>{formatNumber(item.cantidad_pendiente)}</td>
+                      <td>{formatNumber(item.ordenes_abiertas)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </DataTable>
+            </section>
+
+            <section className="inventory-form-section">
+              <SectionTitle subtitle="Trazabilidad comercial de proveedores con compras abiertas." title="Proveedores con pendientes" />
+              <DataTable
+                columns={[
+                  { key: "proveedor", label: "Proveedor" },
+                  { key: "ordenes", label: "Órdenes abiertas" },
+                  { key: "monto", label: "Monto pendiente" },
+                ]}
+              >
+                <tbody>
+                  {pendingReport.proveedores.map((supplier) => (
+                    <tr key={supplier.proveedor_id}>
+                      <td>{supplier.proveedor}</td>
+                      <td>{formatNumber(supplier.ordenes_abiertas)}</td>
+                      <td>{formatMoney(supplier.monto_pendiente)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </DataTable>
+            </section>
+          </div>
+        )}
+      </DataCard>
 
       <DataCard
         actions={<ResultMeta label="órdenes" loaded={orders.length} total={meta.total} />}
@@ -1172,7 +1313,7 @@ export default function PurchaseOrdersPage() {
             <section className="inventory-form-section">
               <SectionTitle
                 actions={<StatusBadge tone={statusTone(selectedOrder.estatus)}>{statusLabel(selectedOrder.estatus)}</StatusBadge>}
-                subtitle="Datos principales del documento"
+                subtitle="Estado visual completo de la orden de compra."
                 title="Cabecera"
               />
               <div className="inventory-detail-grid purchase-order-detail-grid">
@@ -1181,12 +1322,24 @@ export default function PurchaseOrdersPage() {
                   <p>{selectedOrder.proveedor_nombre}</p>
                 </div>
                 <div>
+                  <strong>Contacto proveedor</strong>
+                  <p>{safeDisplayText(selectedOrder.proveedor_contacto_snapshot, "No registrado")}</p>
+                </div>
+                <div>
                   <strong>Almacén destino</strong>
                   <p>{selectedOrder.almacen_destino_nombre}</p>
                 </div>
                 <div>
                   <strong>Fecha de creación</strong>
                   <p>{formatDateTime(selectedOrder.created_at)}</p>
+                </div>
+                <div>
+                  <strong>Fecha emitida</strong>
+                  <p>{formatDateTime(selectedOrder.fecha_emitida)}</p>
+                </div>
+                <div>
+                  <strong>Última recepción</strong>
+                  <p>{formatDateTime(selectedOrder.fecha_ultima_recepcion)}</p>
                 </div>
                 <div>
                   <strong>Última actualización</strong>
@@ -1200,18 +1353,46 @@ export default function PurchaseOrdersPage() {
                   <strong>Total</strong>
                   <p>{formatMoney(selectedOrder.total)}</p>
                 </div>
+                <div>
+                  <strong>Documento / remisión</strong>
+                  <p>{safeDisplayText(selectedOrder.documento_referencia, "Sin documento")}</p>
+                </div>
+                <div>
+                  <strong>Recibido por</strong>
+                  <p>{safeDisplayText(selectedOrder.recibido_por_nombre, "No registrado")}</p>
+                </div>
+                <div>
+                  <strong>Email proveedor</strong>
+                  <p>{safeDisplayText(selectedOrder.proveedor_email_snapshot, "No registrado")}</p>
+                </div>
+                <div>
+                  <strong>Teléfono proveedor</strong>
+                  <p>{safeDisplayText(selectedOrder.proveedor_telefono_snapshot, "No registrado")}</p>
+                </div>
                 <div className="inventory-form-span-2">
                   <strong>Notas</strong>
                   <p>{selectedOrder.notas || "Sin notas"}</p>
                 </div>
+                <div className="inventory-form-span-2">
+                  <strong>Notas de recepción</strong>
+                  <p>{safeDisplayText(selectedOrder.notas_recepcion, "Sin notas de recepción")}</p>
+                </div>
               </div>
             </section>
 
-            <section className="inventory-metric-grid inventory-metric-grid-4">
+            <section className="inventory-metric-grid inventory-metric-grid-5">
               <MetricCard label="Renglones" value={selectedOrder.cantidad_renglones} />
               <MetricCard label="Ordenado" value={formatNumber(selectedOrder.cantidad_total_ordenada)} />
               <MetricCard label="Recibido" tone="success" value={formatNumber(selectedOrder.cantidad_total_recibida)} />
               <MetricCard label="Pendiente" tone={Number(selectedOrder.cantidad_total_pendiente) > 0 ? "warning" : "neutral"} value={formatNumber(selectedOrder.cantidad_total_pendiente)} />
+              <MetricCard label="Recepciones" tone={selectedOrder.recepciones_count > 0 ? "info" : "neutral"} value={formatNumber(selectedOrder.recepciones_count)} />
+            </section>
+
+            <section className="inventory-metric-grid inventory-metric-grid-4">
+              <MetricCard label="Valor total" tone="success" value={formatMoney(selectedOrder.total)} />
+              <MetricCard label="Valor recibido" tone="success" value={formatMoney(selectedOrder.valor_total_recibido)} />
+              <MetricCard label="Valor pendiente" tone={Number(selectedOrder.valor_total_pendiente) > 0 ? "warning" : "neutral"} value={formatMoney(selectedOrder.valor_total_pendiente)} />
+              <MetricCard label="Estatus" value={statusLabel(selectedOrder.estatus)} />
             </section>
 
             <section className="inventory-form-section">
@@ -1251,16 +1432,79 @@ export default function PurchaseOrdersPage() {
             </section>
 
             <section className="inventory-form-section">
-              <SectionTitle subtitle="Las recepciones generan entradas de inventario trazables por referencia de OC." title="Recepciones y trazabilidad" />
+              <SectionTitle subtitle="Cada recepción conserva documento, usuario, almacén y materiales recibidos." title="Historial de recepciones" />
+              {selectedOrder.receipts?.length ? (
+                <div className="dashboard-stack">
+                  {selectedOrder.receipts.map((receipt) => (
+                    <DataCard
+                      key={receipt.id}
+                      subtitle={`${formatDateTime(receipt.created_at)} · ${safeDisplayText(receipt.recibido_por_nombre, "Sistema")}`}
+                      title={`${receipt.almacen_nombre} · ${safeDisplayText(receipt.documento_referencia, "Sin documento")}`}
+                    >
+                      <div className="inventory-detail-grid purchase-order-detail-grid">
+                        <div>
+                          <strong>Documento / remisión</strong>
+                          <p>{safeDisplayText(receipt.documento_referencia, "Sin documento")}</p>
+                        </div>
+                        <div>
+                          <strong>Registró</strong>
+                          <p>{safeDisplayText(receipt.recibido_por_nombre, "Sistema")}</p>
+                        </div>
+                        <div>
+                          <strong>Almacén</strong>
+                          <p>{receipt.almacen_nombre}</p>
+                        </div>
+                        <div className="inventory-form-span-2">
+                          <strong>Notas</strong>
+                          <p>{safeDisplayText(receipt.notas, "Sin notas")}</p>
+                        </div>
+                      </div>
+
+                      <DataTable
+                        columns={[
+                          { key: "material", label: "Material" },
+                          { key: "cantidad", label: "Cantidad recibida" },
+                          { key: "costo", label: "Costo unitario" },
+                          { key: "movimiento", label: "Movimiento" },
+                        ]}
+                      >
+                        <tbody>
+                          {receipt.items.map((item) => (
+                            <tr key={item.id}>
+                              <td>
+                                <div className="inventory-cell-main">{item.material_nombre}</div>
+                                <div className="inventory-cell-sub">{item.material_sku}</div>
+                              </td>
+                              <td>{formatNumber(item.cantidad_recibida)}</td>
+                              <td>{formatMoney(item.costo_unitario_snapshot)}</td>
+                              <td>{safeDisplayText(item.movimiento_inventario_id, "Sin movimiento")}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </DataTable>
+                    </DataCard>
+                  ))}
+                </div>
+              ) : (
+                <div className="inventory-form-note">
+                  <strong>Historial pendiente</strong>
+                  <p>No hay recepciones registradas.</p>
+                </div>
+              )}
+            </section>
+
+            <section className="inventory-form-section">
+              <SectionTitle subtitle="Las recepciones generan entradas de inventario trazables por referencia de OC." title="Movimientos de inventario relacionados" />
               {selectedOrder.movements.length === 0 ? (
                 <div className="inventory-form-note">
-                  <strong>Trazabilidad disponible en movimientos de inventario</strong>
-                  <p>Aún no existen recepciones aplicadas para esta orden de compra.</p>
+                  <strong>Trazabilidad disponible en inventario</strong>
+                  <p>Aún no existen movimientos relacionados con esta orden de compra.</p>
                 </div>
               ) : (
                 <DataTable
                   columns={[
                     { key: "fecha", label: "Fecha" },
+                    { key: "almacen", label: "Almacén" },
                     { key: "material", label: "Material" },
                     { key: "cantidad", label: "Cantidad" },
                     { key: "documento", label: "Documento" },
@@ -1271,6 +1515,7 @@ export default function PurchaseOrdersPage() {
                     {selectedOrder.movements.map((movement) => (
                       <tr key={movement.id}>
                         <td>{formatDateTime(movement.created_at)}</td>
+                        <td>{movement.almacen_nombre}</td>
                         <td>
                           <div className="inventory-cell-main">{movement.material_nombre}</div>
                           <div className="inventory-cell-sub">{movement.material_sku}</div>
@@ -1300,29 +1545,54 @@ export default function PurchaseOrdersPage() {
             >
               {submitting ? "Aplicando..." : "Confirmar recepción"}
             </ActionButton>
-            <ActionButton onClick={() => setReceiveOpen(false)} type="button">
+            <ActionButton
+              onClick={() => {
+                setReceiveOpen(false);
+                setReceiveForm(defaultReceiveForm);
+              }}
+              type="button"
+            >
               Cerrar
             </ActionButton>
           </>
         }
-        onClose={() => setReceiveOpen(false)}
+        onClose={() => {
+          setReceiveOpen(false);
+          setReceiveForm(defaultReceiveForm);
+        }}
         open={receiveOpen}
         size="xl"
-        subtitle="Esta recepción aumentará inventario en el almacén destino."
+        subtitle="Esta recepción registrará el documento del proveedor y creará la entrada a inventario."
         title={selectedOrder ? `Recibir OC ${selectedOrder.folio}` : "Recibir orden de compra"}
       >
         {!selectedOrder ? null : (
           <div className="inventory-modal-form">
             <section className="inventory-form-section">
-              <SectionTitle subtitle="Datos de recepción y documento asociado." title="Recepción" />
+              <SectionTitle subtitle="Datos de recepción y documento / remisión asociado." title="Recepción" />
               <FormGrid>
                 <Field label="Proveedor">
                   <input disabled type="text" value={selectedOrder.proveedor_nombre} />
                 </Field>
                 <Field label="Almacén destino">
-                  <input disabled type="text" value={selectedOrder.almacen_destino_nombre} />
+                  <select
+                    disabled
+                    onChange={(event) =>
+                      setReceiveForm((current) => ({
+                        ...current,
+                        almacen_id: event.target.value,
+                      }))
+                    }
+                    value={receiveForm.almacen_id}
+                  >
+                    <option value="">Selecciona un almacén</option>
+                    {warehouses.map((warehouse) => (
+                      <option key={warehouse.id} value={warehouse.id}>
+                        {warehouse.nombre} ({warehouse.codigo})
+                      </option>
+                    ))}
+                  </select>
                 </Field>
-                <Field hint="Remisión, factura o referencia del proveedor" label="Documento de referencia">
+                <Field hint="Remisión, factura o referencia del proveedor" label="Documento / remisión">
                   <input
                     onChange={(event) =>
                       setReceiveForm((current) => ({

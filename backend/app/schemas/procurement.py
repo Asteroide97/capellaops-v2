@@ -242,10 +242,16 @@ class PurchaseOrderDetailUpdateRequest(BaseModel):
 
 class PurchaseOrderReceiveLineRequest(BaseModel):
     detail_id: str = Field(min_length=1, max_length=64)
-    cantidad: Decimal = Field(gt=0)
+    cantidad: Decimal | None = Field(default=None, gt=0)
+    cantidad_recibida: Decimal | None = Field(default=None, gt=0)
+
+    @property
+    def resolved_cantidad(self) -> Decimal:
+        return self.cantidad_recibida if self.cantidad_recibida is not None else self.cantidad or Decimal("0")
 
 
 class PurchaseOrderReceiveRequest(BaseModel):
+    almacen_id: str = Field(min_length=1, max_length=64)
     documento_referencia: str | None = Field(default=None, max_length=160)
     notas: str | None = Field(default=None, max_length=2000)
     items: list[PurchaseOrderReceiveLineRequest] = Field(min_length=1)
@@ -265,11 +271,14 @@ class PurchaseOrderDetailItem(BaseModel):
     subtotal_linea: Decimal
     total_linea: Decimal
     estado_linea: str
+    ultima_recepcion_at: datetime | None = None
 
 
 class PurchaseOrderMovementTraceItem(BaseModel):
     id: str
     created_at: datetime
+    almacen_id: str
+    almacen_nombre: str
     tipo: str
     material_id: str
     material_sku: str
@@ -279,6 +288,47 @@ class PurchaseOrderMovementTraceItem(BaseModel):
     notas: str | None = None
     recibido_por: str | None = None
     created_by_nombre: str | None = None
+    grupo_referencia: str | None = None
+
+
+class PurchaseOrderPendingQuantityItem(BaseModel):
+    detail_id: str
+    material_id: str
+    material_sku: str
+    material_nombre: str
+    cantidad_ordenada: Decimal
+    cantidad_recibida: Decimal
+    cantidad_pendiente: Decimal
+    estado_linea: str
+
+
+class PurchaseOrderReceiptDetailItem(BaseModel):
+    id: str
+    recepcion_id: str
+    orden_compra_detalle_id: str
+    material_id: str
+    material_sku: str
+    material_nombre: str
+    material_unidad: str
+    cantidad_recibida: Decimal
+    costo_unitario_snapshot: Decimal
+    movimiento_inventario_id: str | None = None
+
+
+class PurchaseOrderReceiptItem(BaseModel):
+    id: str
+    empresa_id: str
+    orden_compra_id: str
+    almacen_id: str
+    almacen_nombre: str
+    documento_referencia: str | None = None
+    notas: str | None = None
+    recibido_por_user_id: str
+    recibido_por_nombre: str
+    created_at: datetime
+    updated_at: datetime
+    items: list[PurchaseOrderReceiptDetailItem] = Field(default_factory=list)
+    movements: list[PurchaseOrderMovementTraceItem] = Field(default_factory=list)
 
 
 class PurchaseOrderItem(BaseModel):
@@ -296,6 +346,16 @@ class PurchaseOrderItem(BaseModel):
     descuento_total: Decimal
     impuesto_total: Decimal
     total: Decimal
+    fecha_emitida: datetime | None = None
+    fecha_esperada: datetime | None = None
+    fecha_ultima_recepcion: datetime | None = None
+    documento_referencia: str | None = None
+    notas_recepcion: str | None = None
+    recibido_por_user_id: str | None = None
+    recibido_por_nombre: str | None = None
+    proveedor_contacto_snapshot: str | None = None
+    proveedor_email_snapshot: str | None = None
+    proveedor_telefono_snapshot: str | None = None
     notas: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -304,6 +364,9 @@ class PurchaseOrderItem(BaseModel):
     cantidad_total_ordenada: Decimal
     cantidad_total_recibida: Decimal
     cantidad_total_pendiente: Decimal
+    valor_total_recibido: Decimal = Decimal("0")
+    valor_total_pendiente: Decimal = Decimal("0")
+    recepciones_count: int = 0
     requisicion_id: str | None = None
     requisicion_folio: str | None = None
 
@@ -311,6 +374,7 @@ class PurchaseOrderItem(BaseModel):
 class PurchaseOrderResponse(PurchaseOrderItem):
     details: list[PurchaseOrderDetailItem]
     movements: list[PurchaseOrderMovementTraceItem]
+    receipts: list[PurchaseOrderReceiptItem] = Field(default_factory=list)
 
 
 class PurchaseOrderListResponse(BaseModel):
@@ -318,3 +382,58 @@ class PurchaseOrderListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class PurchaseOrderReceiptListResponse(BaseModel):
+    items: list[PurchaseOrderReceiptItem]
+
+
+class PurchaseOrderReceiveResponse(BaseModel):
+    order: PurchaseOrderResponse
+    receipt: PurchaseOrderReceiptItem
+    movements: list[PurchaseOrderMovementTraceItem]
+    pending_items: list[PurchaseOrderPendingQuantityItem] = Field(default_factory=list)
+    cantidad_total_recibida: Decimal
+    cantidad_total_pendiente: Decimal
+
+
+class PurchaseOrderPendingReportKpis(BaseModel):
+    ordenes_pendientes: int
+    ordenes_parciales: int
+    materiales_pendientes: int
+    monto_pendiente: Decimal
+
+
+class PurchaseOrderPendingReportOrderItem(BaseModel):
+    id: str
+    folio: str
+    proveedor: str
+    estatus: str
+    fecha_emitida: datetime | None = None
+    fecha_esperada: datetime | None = None
+    total: Decimal
+    pendiente: Decimal
+    cantidad_pendiente: Decimal
+
+
+class PurchaseOrderPendingReportMaterialItem(BaseModel):
+    material_id: str
+    material: str
+    sku: str
+    cantidad_pendiente: Decimal
+    proveedor: str
+    ordenes_abiertas: int
+
+
+class PurchaseOrderPendingReportSupplierItem(BaseModel):
+    proveedor_id: str
+    proveedor: str
+    ordenes_abiertas: int
+    monto_pendiente: Decimal
+
+
+class PurchaseOrderPendingReportResponse(BaseModel):
+    kpis: PurchaseOrderPendingReportKpis
+    ordenes: list[PurchaseOrderPendingReportOrderItem] = Field(default_factory=list)
+    materiales: list[PurchaseOrderPendingReportMaterialItem] = Field(default_factory=list)
+    proveedores: list[PurchaseOrderPendingReportSupplierItem] = Field(default_factory=list)

@@ -144,14 +144,25 @@ class OrdenCompra(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default="0",
     )
     total: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"), server_default="0")
+    fecha_emitida: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_esperada: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fecha_ultima_recepcion: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    documento_referencia: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    notas_recepcion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recibido_por_user_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    proveedor_contacto_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    proveedor_email_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    proveedor_telefono_snapshot: Mapped[str | None] = mapped_column(String(40), nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     empresa = relationship("Empresa")
     proveedor = relationship("Proveedor")
     almacen_destino = relationship("Almacen")
-    created_by_user = relationship("Usuario")
+    created_by_user = relationship("Usuario", foreign_keys=[created_by_user_id])
+    recibido_por_user = relationship("Usuario", foreign_keys=[recibido_por_user_id])
     detalles = relationship("OrdenCompraDetalle", back_populates="orden_compra", cascade="all, delete-orphan")
     requisiciones = relationship("Requisicion", back_populates="orden_compra")
+    recepciones = relationship("OrdenCompraRecepcion", back_populates="orden_compra", cascade="all, delete-orphan")
 
 
 class OrdenCompraDetalle(UUIDPrimaryKeyMixin, Base):
@@ -173,9 +184,55 @@ class OrdenCompraDetalle(UUIDPrimaryKeyMixin, Base):
         default=Decimal("0"),
         server_default="0",
     )
+    ultima_recepcion_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     costo_unitario: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     subtotal_linea: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     total_linea: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
 
     orden_compra = relationship("OrdenCompra", back_populates="detalles")
     material = relationship("Material")
+    recepcion_detalles = relationship("OrdenCompraRecepcionDetalle", back_populates="orden_compra_detalle")
+
+
+class OrdenCompraRecepcion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "ordenes_compra_recepciones"
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    orden_compra_id: Mapped[str] = mapped_column(ForeignKey("ordenes_compra.id"), nullable=False, index=True)
+    almacen_id: Mapped[str] = mapped_column(ForeignKey("almacenes.id"), nullable=False, index=True)
+    documento_referencia: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    notas: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recibido_por_user_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
+
+    empresa = relationship("Empresa")
+    orden_compra = relationship("OrdenCompra", back_populates="recepciones")
+    almacen = relationship("Almacen")
+    recibido_por_user = relationship("Usuario")
+    detalles = relationship("OrdenCompraRecepcionDetalle", back_populates="recepcion", cascade="all, delete-orphan")
+
+
+class OrdenCompraRecepcionDetalle(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "ordenes_compra_recepcion_detalles"
+    __table_args__ = (
+        CheckConstraint("cantidad_recibida > 0", name="ck_orden_compra_recepcion_detalle_cantidad_positive"),
+        CheckConstraint(
+            "costo_unitario_snapshot >= 0",
+            name="ck_orden_compra_recepcion_detalle_costo_nonnegative",
+        ),
+    )
+
+    recepcion_id: Mapped[str] = mapped_column(ForeignKey("ordenes_compra_recepciones.id"), nullable=False, index=True)
+    orden_compra_detalle_id: Mapped[str] = mapped_column(ForeignKey("ordenes_compra_detalles.id"), nullable=False, index=True)
+    material_id: Mapped[str] = mapped_column(ForeignKey("materiales.id"), nullable=False, index=True)
+    cantidad_recibida: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    costo_unitario_snapshot: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
+    movimiento_inventario_id: Mapped[str | None] = mapped_column(
+        ForeignKey("movimientos_inventario.id"),
+        nullable=True,
+        index=True,
+    )
+
+    recepcion = relationship("OrdenCompraRecepcion", back_populates="detalles")
+    orden_compra_detalle = relationship("OrdenCompraDetalle", back_populates="recepcion_detalles")
+    material = relationship("Material")
+    movimiento_inventario = relationship("MovimientoInventario")

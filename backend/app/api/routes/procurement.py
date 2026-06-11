@@ -10,11 +10,14 @@ from app.api.deps import TenantContext, get_tenant_context
 from app.db.session import get_db
 from app.schemas.procurement import (
     RequisitionApproveRequest,
+    PurchaseOrderPendingReportResponse,
     PurchaseOrderCreateRequest,
     PurchaseOrderDetailCreateRequest,
     PurchaseOrderDetailUpdateRequest,
     PurchaseOrderListResponse,
+    PurchaseOrderReceiptListResponse,
     PurchaseOrderReceiveRequest,
+    PurchaseOrderReceiveResponse,
     PurchaseOrderResponse,
     PurchaseOrderUpdateRequest,
     RequisitionCreatePurchaseOrderRequest,
@@ -47,6 +50,8 @@ from app.services.procurement import (
     delete_requisition_detail,
     fulfill_requisition,
     get_purchase_order_for_company,
+    get_purchase_order_receipts_response,
+    get_purchase_report_pending,
     get_requisition_for_company,
     get_supplier_for_company,
     issue_purchase_order,
@@ -586,6 +591,15 @@ def purchase_order_detail(
     return serialize_purchase_order_response(db, order)
 
 
+@router.get("/purchase-orders/{order_id}/receipts", response_model=PurchaseOrderReceiptListResponse)
+def purchase_order_receipts(
+    order_id: str,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> PurchaseOrderReceiptListResponse:
+    return PurchaseOrderReceiptListResponse(items=get_purchase_order_receipts_response(db, context.empresa.id, order_id))
+
+
 @router.get("/purchase-orders/{order_id}/pdf")
 def purchase_order_pdf(
     order_id: str,
@@ -739,14 +753,14 @@ def cancel_purchase_order_endpoint(
     )
 
 
-@router.post("/purchase-orders/{order_id}/receive", response_model=PurchaseOrderResponse)
+@router.post("/purchase-orders/{order_id}/receive", response_model=PurchaseOrderReceiveResponse)
 def receive_purchase_order_endpoint(
     order_id: str,
     payload: PurchaseOrderReceiveRequest,
     request: Request,
     context: TenantContext = Depends(get_inventory_context),
     db: Session = Depends(get_db),
-) -> PurchaseOrderResponse:
+) -> PurchaseOrderReceiveResponse:
     return run_inventory_write(
         db,
         "receive_purchase_order",
@@ -756,8 +770,17 @@ def receive_purchase_order_endpoint(
             user=context.user,
             order_id=order_id,
             items=payload.items,
+            almacen_id=payload.almacen_id,
             documento_referencia=payload.documento_referencia,
             notas_recepcion=payload.notas,
             ip_address=request.client.host if request.client else None,
         ),
     )
+
+
+@router.get("/purchase-reports/pending", response_model=PurchaseOrderPendingReportResponse)
+def purchase_reports_pending(
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> PurchaseOrderPendingReportResponse:
+    return get_purchase_report_pending(db, context.empresa.id)

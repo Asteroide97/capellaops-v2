@@ -14,6 +14,8 @@ from app.models import (
     Empresa,
     OrdenCompra,
     OrdenCompraDetalle,
+    OrdenCompraRecepcion,
+    OrdenCompraRecepcionDetalle,
     PMProyecto,
     PMProyectoMaterialConsumo,
     Proveedor,
@@ -27,6 +29,15 @@ from app.schemas.procurement import (
     PurchaseOrderDetailItem,
     PurchaseOrderItem,
     PurchaseOrderMovementTraceItem,
+    PurchaseOrderPendingQuantityItem,
+    PurchaseOrderPendingReportKpis,
+    PurchaseOrderPendingReportMaterialItem,
+    PurchaseOrderPendingReportOrderItem,
+    PurchaseOrderPendingReportResponse,
+    PurchaseOrderPendingReportSupplierItem,
+    PurchaseOrderReceiptDetailItem,
+    PurchaseOrderReceiptItem,
+    PurchaseOrderReceiveResponse,
     PurchaseOrderResponse,
     RequisitionDetailItem,
     RequisitionDetailStockItem,
@@ -1629,12 +1640,15 @@ def get_purchase_order_line_state(detail: OrdenCompraDetalle) -> str:
 
 def build_purchase_order_movement_trace_item(
     movement: MovimientoInventario,
+    warehouse: Almacen,
     material: Material,
     user: Usuario | None,
 ) -> PurchaseOrderMovementTraceItem:
     return PurchaseOrderMovementTraceItem(
         id=movement.id,
         created_at=movement.created_at,
+        almacen_id=warehouse.id,
+        almacen_nombre=warehouse.nombre,
         tipo=movement.tipo,
         material_id=movement.material_id,
         material_sku=material.sku,
@@ -1644,12 +1658,14 @@ def build_purchase_order_movement_trace_item(
         notas=movement.notas,
         recibido_por=movement.recibido_por,
         created_by_nombre=user.full_name if user else None,
+        grupo_referencia=movement.grupo_referencia,
     )
 
 
 def list_purchase_order_movements(db: Session, empresa_id: str, order_id: str) -> list[PurchaseOrderMovementTraceItem]:
     rows = db.execute(
-        select(MovimientoInventario, Material, Usuario)
+        select(MovimientoInventario, Almacen, Material, Usuario)
+        .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
         .join(Material, MovimientoInventario.material_id == Material.id)
         .join(Usuario, MovimientoInventario.created_by == Usuario.id)
         .where(
@@ -1659,7 +1675,83 @@ def list_purchase_order_movements(db: Session, empresa_id: str, order_id: str) -
         )
         .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
     ).all()
-    return [build_purchase_order_movement_trace_item(movement, material, user) for movement, material, user in rows]
+    return [build_purchase_order_movement_trace_item(movement, warehouse, material, user) for movement, warehouse, material, user in rows]
+
+
+def list_purchase_order_receipts(db: Session, empresa_id: str, order_id: str) -> list[PurchaseOrderReceiptItem]:
+    receipts = db.scalars(
+        select(OrdenCompraRecepcion)
+        .where(
+            OrdenCompraRecepcion.empresa_id == empresa_id,
+            OrdenCompraRecepcion.orden_compra_id == order_id,
+        )
+        .order_by(desc(OrdenCompraRecepcion.created_at), desc(OrdenCompraRecepcion.id))
+    ).all()
+    if not receipts:
+        return []
+
+    receipt_ids = [item.id for item in receipts]
+    detail_rows = db.execute(
+        select(OrdenCompraRecepcionDetalle, Material)
+        .join(Material, OrdenCompraRecepcionDetalle.material_id == Material.id)
+        .where(OrdenCompraRecepcionDetalle.recepcion_id.in_(receipt_ids))
+        .order_by(OrdenCompraRecepcionDetalle.id.asc())
+    ).all()
+    receipt_detail_map: dict[str, list[PurchaseOrderReceiptDetailItem]] = {receipt_id: [] for receipt_id in receipt_ids}
+    for detail, material in detail_rows:
+        receipt_detail_map.setdefault(detail.recepcion_id, []).append(
+            PurchaseOrderReceiptDetailItem(
+                id=detail.id,
+                recepcion_id=detail.recepcion_id,
+                orden_compra_detalle_id=detail.orden_compra_detalle_id,
+                material_id=detail.material_id,
+                material_sku=material.sku,
+                material_nombre=material.nombre,
+                material_unidad=material.unidad,
+                cantidad_recibida=detail.cantidad_recibida,
+                costo_unitario_snapshot=detail.costo_unitario_snapshot,
+                movimiento_inventario_id=detail.movimiento_inventario_id,
+            )
+        )
+
+    movement_rows = db.execute(
+        select(MovimientoInventario, Almacen, Material, Usuario)
+        .join(Almacen, MovimientoInventario.almacen_id == Almacen.id)
+        .join(Material, MovimientoInventario.material_id == Material.id)
+        .join(Usuario, MovimientoInventario.created_by == Usuario.id)
+        .where(
+            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.grupo_referencia.in_(receipt_ids),
+        )
+        .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
+    ).all()
+    receipt_movement_map: dict[str, list[PurchaseOrderMovementTraceItem]] = {receipt_id: [] for receipt_id in receipt_ids}
+    for movement, warehouse, material, user in movement_rows:
+        group_reference = normalize_optional_text(movement.grupo_referencia)
+        if not group_reference:
+            continue
+        receipt_movement_map.setdefault(group_reference, []).append(
+            build_purchase_order_movement_trace_item(movement, warehouse, material, user)
+        )
+
+    return [
+        PurchaseOrderReceiptItem(
+            id=receipt.id,
+            empresa_id=receipt.empresa_id,
+            orden_compra_id=receipt.orden_compra_id,
+            almacen_id=receipt.almacen_id,
+            almacen_nombre=receipt.almacen.nombre,
+            documento_referencia=receipt.documento_referencia,
+            notas=receipt.notas,
+            recibido_por_user_id=receipt.recibido_por_user_id,
+            recibido_por_nombre=receipt.recibido_por_user.full_name,
+            created_at=receipt.created_at,
+            updated_at=receipt.updated_at,
+            items=receipt_detail_map.get(receipt.id, []),
+            movements=receipt_movement_map.get(receipt.id, []),
+        )
+        for receipt in receipts
+    ]
 
 
 def serialize_purchase_order_detail(detail: OrdenCompraDetalle) -> PurchaseOrderDetailItem:
@@ -1679,6 +1771,7 @@ def serialize_purchase_order_detail(detail: OrdenCompraDetalle) -> PurchaseOrder
         subtotal_linea=detail.subtotal_linea,
         total_linea=detail.total_linea,
         estado_linea=get_purchase_order_line_state(detail),
+        ultima_recepcion_at=detail.ultima_recepcion_at,
     )
 
 
@@ -1688,6 +1781,9 @@ def build_purchase_order_item(
     *,
     cantidad_total_ordenada: Decimal = ZERO,
     cantidad_total_recibida: Decimal = ZERO,
+    valor_total_recibido: Decimal = ZERO,
+    valor_total_pendiente: Decimal = ZERO,
+    recepciones_count: int = 0,
     requisicion_id: str | None = None,
     requisicion_folio: str | None = None,
 ) -> PurchaseOrderItem:
@@ -1707,6 +1803,16 @@ def build_purchase_order_item(
         descuento_total=order.descuento_total,
         impuesto_total=order.impuesto_total,
         total=order.total,
+        fecha_emitida=order.fecha_emitida,
+        fecha_esperada=order.fecha_esperada,
+        fecha_ultima_recepcion=order.fecha_ultima_recepcion,
+        documento_referencia=order.documento_referencia,
+        notas_recepcion=order.notas_recepcion,
+        recibido_por_user_id=order.recibido_por_user_id,
+        recibido_por_nombre=order.recibido_por_user.full_name if order.recibido_por_user else None,
+        proveedor_contacto_snapshot=order.proveedor_contacto_snapshot,
+        proveedor_email_snapshot=order.proveedor_email_snapshot,
+        proveedor_telefono_snapshot=order.proveedor_telefono_snapshot,
         notas=order.notas,
         created_at=order.created_at,
         updated_at=order.updated_at,
@@ -1715,6 +1821,9 @@ def build_purchase_order_item(
         cantidad_total_ordenada=Decimal(cantidad_total_ordenada),
         cantidad_total_recibida=Decimal(cantidad_total_recibida),
         cantidad_total_pendiente=cantidad_total_pendiente,
+        valor_total_recibido=Decimal(valor_total_recibido),
+        valor_total_pendiente=Decimal(valor_total_pendiente),
+        recepciones_count=recepciones_count,
         requisicion_id=requisicion_id,
         requisicion_folio=requisicion_folio,
     )
@@ -1728,12 +1837,24 @@ def serialize_purchase_order_response(db: Session, order: OrdenCompra) -> Purcha
     ).all()
     total_ordenada = sum((Decimal(item.cantidad or ZERO) for item in details), start=ZERO)
     total_recibida = sum((Decimal(item.cantidad_recibida or ZERO) for item in details), start=ZERO)
+    valor_total_recibido = sum(
+        (Decimal(item.cantidad_recibida or ZERO) * Decimal(item.costo_unitario or ZERO) for item in details),
+        start=ZERO,
+    )
+    valor_total_pendiente = sum(
+        ((Decimal(item.cantidad or ZERO) - Decimal(item.cantidad_recibida or ZERO)) * Decimal(item.costo_unitario or ZERO) for item in details),
+        start=ZERO,
+    )
     requisition = get_linked_purchase_requisition(order)
+    receipts = list_purchase_order_receipts(db, order.empresa_id, order.id)
     summary = build_purchase_order_item(
         order,
         len(details),
         cantidad_total_ordenada=total_ordenada,
         cantidad_total_recibida=total_recibida,
+        valor_total_recibido=valor_total_recibido,
+        valor_total_pendiente=max(valor_total_pendiente, ZERO),
+        recepciones_count=len(receipts),
         requisicion_id=requisition.id if requisition else None,
         requisicion_folio=requisition.folio if requisition else None,
     )
@@ -1741,6 +1862,7 @@ def serialize_purchase_order_response(db: Session, order: OrdenCompra) -> Purcha
         **summary.model_dump(),
         details=[serialize_purchase_order_detail(item) for item in details],
         movements=list_purchase_order_movements(db, order.empresa_id, order.id),
+        receipts=receipts,
     )
 
 
@@ -1769,8 +1891,13 @@ def list_purchase_orders(
     limit: int = 25,
     offset: int = 0,
 ) -> tuple[int, list[PurchaseOrderItem]]:
-    id_query = select(OrdenCompra.id).where(OrdenCompra.empresa_id == empresa_id)
-    id_query = apply_text_search(id_query, q, OrdenCompra.folio, OrdenCompra.notas)
+    id_query = (
+        select(OrdenCompra.id)
+        .select_from(OrdenCompra)
+        .join(Proveedor, OrdenCompra.proveedor_id == Proveedor.id)
+        .where(OrdenCompra.empresa_id == empresa_id)
+    )
+    id_query = apply_text_search(id_query, q, OrdenCompra.folio, OrdenCompra.notas, Proveedor.nombre, Proveedor.razon_social)
     if estatus:
         id_query = id_query.where(OrdenCompra.estatus == estatus)
     if proveedor_id:
@@ -1795,9 +1922,30 @@ def list_purchase_orders(
             func.count(OrdenCompraDetalle.id).label("detail_count"),
             func.coalesce(func.sum(OrdenCompraDetalle.cantidad), 0).label("ordered_quantity"),
             func.coalesce(func.sum(OrdenCompraDetalle.cantidad_recibida), 0).label("received_quantity"),
+            func.coalesce(
+                func.sum(OrdenCompraDetalle.cantidad_recibida * OrdenCompraDetalle.costo_unitario),
+                0,
+            ).label("received_value"),
+            func.coalesce(
+                func.sum((OrdenCompraDetalle.cantidad - OrdenCompraDetalle.cantidad_recibida) * OrdenCompraDetalle.costo_unitario),
+                0,
+            ).label("pending_value"),
         )
         .where(OrdenCompraDetalle.orden_compra_id.in_(page_ids))
         .group_by(OrdenCompraDetalle.orden_compra_id)
+        .subquery()
+    )
+
+    receipts_count_subquery = (
+        select(
+            OrdenCompraRecepcion.orden_compra_id.label("orden_compra_id"),
+            func.count(OrdenCompraRecepcion.id).label("receipts_count"),
+        )
+        .where(
+            OrdenCompraRecepcion.empresa_id == empresa_id,
+            OrdenCompraRecepcion.orden_compra_id.in_(page_ids),
+        )
+        .group_by(OrdenCompraRecepcion.orden_compra_id)
         .subquery()
     )
 
@@ -1821,10 +1969,14 @@ def list_purchase_orders(
             func.coalesce(details_count_subquery.c.detail_count, 0).label("detail_count"),
             func.coalesce(details_count_subquery.c.ordered_quantity, 0).label("ordered_quantity"),
             func.coalesce(details_count_subquery.c.received_quantity, 0).label("received_quantity"),
+            func.coalesce(details_count_subquery.c.received_value, 0).label("received_value"),
+            func.coalesce(details_count_subquery.c.pending_value, 0).label("pending_value"),
+            func.coalesce(receipts_count_subquery.c.receipts_count, 0).label("receipts_count"),
             requisition_subquery.c.requisicion_id,
             requisition_subquery.c.requisicion_folio,
         )
         .outerjoin(details_count_subquery, details_count_subquery.c.orden_compra_id == OrdenCompra.id)
+        .outerjoin(receipts_count_subquery, receipts_count_subquery.c.orden_compra_id == OrdenCompra.id)
         .outerjoin(requisition_subquery, requisition_subquery.c.orden_compra_id == OrdenCompra.id)
         .where(OrdenCompra.id.in_(page_ids))
         .order_by(desc(OrdenCompra.created_at), desc(OrdenCompra.id))
@@ -1835,10 +1987,13 @@ def list_purchase_orders(
             int(detail_count),
             cantidad_total_ordenada=Decimal(ordered_quantity or ZERO),
             cantidad_total_recibida=Decimal(received_quantity or ZERO),
+            valor_total_recibido=Decimal(received_value or ZERO),
+            valor_total_pendiente=max(Decimal(pending_value or ZERO), ZERO),
+            recepciones_count=int(receipts_count or 0),
             requisicion_id=requisicion_id,
             requisicion_folio=requisicion_folio,
         )
-        for item, detail_count, ordered_quantity, received_quantity, requisicion_id, requisicion_folio in rows
+        for item, detail_count, ordered_quantity, received_quantity, received_value, pending_value, receipts_count, requisicion_id, requisicion_folio in rows
     ]
 
 
@@ -1880,6 +2035,9 @@ def create_purchase_order_record(
         descuento_total=ZERO,
         impuesto_total=ZERO,
         total=ZERO,
+        proveedor_contacto_snapshot=supplier.contacto_nombre,
+        proveedor_email_snapshot=supplier.correo,
+        proveedor_telefono_snapshot=supplier.telefono,
         notas=normalize_optional_text(notas),
     )
     db.add(order)
@@ -2049,7 +2207,11 @@ def update_purchase_order(
         ensure_unique_purchase_order_folio(db, empresa.id, next_folio, order.id)
         order.folio = next_folio
     if proveedor_id is not None:
-        order.proveedor_id = ensure_active_supplier(db, empresa.id, proveedor_id).id
+        supplier = ensure_active_supplier(db, empresa.id, proveedor_id)
+        order.proveedor_id = supplier.id
+        order.proveedor_contacto_snapshot = supplier.contacto_nombre
+        order.proveedor_email_snapshot = supplier.correo
+        order.proveedor_telefono_snapshot = supplier.telefono
     if almacen_destino_id is not None:
         order.almacen_destino_id = ensure_active_destination_warehouse(db, empresa.id, almacen_destino_id).id
     if notas is not None:
@@ -2210,6 +2372,8 @@ def issue_purchase_order(
     ensure_active_supplier(db, empresa.id, order.proveedor_id)
     ensure_active_destination_warehouse(db, empresa.id, order.almacen_destino_id)
     order.estatus = "emitida"
+    if order.fecha_emitida is None:
+        order.fecha_emitida = datetime.now(timezone.utc)
     create_audit_log(
         db,
         empresa_id=empresa.id,
@@ -2273,6 +2437,22 @@ def cancel_purchase_order(
     return serialize_purchase_order_response(db, order)
 
 
+def build_purchase_order_pending_items(details: list[OrdenCompraDetalle]) -> list[PurchaseOrderPendingQuantityItem]:
+    return [
+        PurchaseOrderPendingQuantityItem(
+            detail_id=detail.id,
+            material_id=detail.material_id,
+            material_sku=detail.material.sku,
+            material_nombre=detail.material.nombre,
+            cantidad_ordenada=Decimal(detail.cantidad or ZERO),
+            cantidad_recibida=Decimal(detail.cantidad_recibida or ZERO),
+            cantidad_pendiente=max(Decimal(detail.cantidad or ZERO) - Decimal(detail.cantidad_recibida or ZERO), ZERO),
+            estado_linea=get_purchase_order_line_state(detail),
+        )
+        for detail in details
+    ]
+
+
 def receive_purchase_order(
     db: Session,
     *,
@@ -2280,18 +2460,24 @@ def receive_purchase_order(
     user: Usuario,
     order_id: str,
     items: list,
+    almacen_id: str,
     documento_referencia: str | None,
     notas_recepcion: str | None,
     ip_address: str | None,
-) -> PurchaseOrderResponse:
+) -> PurchaseOrderReceiveResponse:
     order = get_purchase_order_for_company(db, empresa.id, order_id, for_update=True)
     if order.estatus not in {"emitida", "recibida_parcial"}:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="La orden de compra no puede recibirse en su estatus actual.",
+            detail="La orden de compra no permite recepcion.",
         )
 
-    warehouse = ensure_active_destination_warehouse(db, empresa.id, order.almacen_destino_id)
+    warehouse = ensure_active_destination_warehouse(db, empresa.id, almacen_id)
+    if warehouse.id != order.almacen_destino_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La recepcion debe registrarse en el almacen destino de la orden.",
+        )
     detail_map = {
         detail.id: detail
         for detail in db.scalars(
@@ -2304,7 +2490,20 @@ def receive_purchase_order(
             detail="La orden de compra necesita al menos un detalle.",
         )
 
+    receipt = OrdenCompraRecepcion(
+        empresa_id=empresa.id,
+        orden_compra_id=order.id,
+        almacen_id=warehouse.id,
+        documento_referencia=normalize_optional_text(documento_referencia),
+        notas=normalize_optional_text(notas_recepcion),
+        recibido_por_user_id=user.id,
+    )
+    db.add(receipt)
+    db.flush()
+
+    received_at = datetime.now(timezone.utc)
     applied_any = False
+    received_lines_count = 0
     for item in items:
         detail = detail_map.get(item.detail_id)
         if not detail:
@@ -2313,15 +2512,18 @@ def receive_purchase_order(
                 detail="Detalle de orden de compra no encontrado.",
             )
 
-        receive_quantity = Decimal(item.cantidad)
+        receive_quantity = Decimal(item.resolved_cantidad)
+        if receive_quantity <= ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La cantidad recibida debe ser mayor a cero.",
+            )
         remaining = Decimal(detail.cantidad) - Decimal(detail.cantidad_recibida)
         if receive_quantity > remaining:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail="La cantidad recibida excede lo pendiente por recibir.",
+                detail="La cantidad recibida supera la cantidad pendiente.",
             )
-        if receive_quantity <= ZERO:
-            continue
 
         movement_notes = "\n".join(
             part
@@ -2331,7 +2533,7 @@ def receive_purchase_order(
             ]
             if part
         )
-        apply_inventory_movement(
+        movement = apply_inventory_movement(
             db,
             user=user,
             empresa=empresa,
@@ -2344,21 +2546,38 @@ def receive_purchase_order(
             referencia_id=order.id,
             notas=movement_notes or None,
             ip_address=ip_address,
+            grupo_referencia=receipt.id,
             motivo="Recepcion de compra",
             recibido_por=user.full_name,
             documento_referencia=documento_referencia,
             costo_unitario=detail.costo_unitario,
         )
         detail.cantidad_recibida = Decimal(detail.cantidad_recibida) + receive_quantity
+        detail.ultima_recepcion_at = received_at
+        db.add(
+            OrdenCompraRecepcionDetalle(
+                recepcion_id=receipt.id,
+                orden_compra_detalle_id=detail.id,
+                material_id=detail.material_id,
+                cantidad_recibida=receive_quantity,
+                costo_unitario_snapshot=detail.costo_unitario,
+                movimiento_inventario_id=movement.id,
+            )
+        )
         applied_any = True
+        received_lines_count += 1
 
     if not applied_any:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No se recibio ninguna cantidad valida.",
+            detail="La cantidad recibida debe ser mayor a cero.",
         )
 
     details = list(detail_map.values())
+    order.fecha_ultima_recepcion = received_at
+    order.documento_referencia = normalize_optional_text(documento_referencia)
+    order.notas_recepcion = normalize_optional_text(notas_recepcion)
+    order.recibido_por_user_id = user.id
     if all(Decimal(item.cantidad_recibida) >= Decimal(item.cantidad) for item in details):
         order.estatus = "recibida"
     else:
@@ -2372,8 +2591,169 @@ def receive_purchase_order(
         entity_name="orden_compra",
         entity_id=order.id,
         ip_address=ip_address,
-        metadata_json={"estatus": order.estatus},
+        metadata_json={
+            "estatus": order.estatus,
+            "recepcion_id": receipt.id,
+            "documento_referencia": receipt.documento_referencia,
+            "lineas_recibidas": received_lines_count,
+        },
     )
     db.flush()
     db.refresh(order)
-    return serialize_purchase_order_response(db, order)
+    receipts = list_purchase_order_receipts(db, empresa.id, order.id)
+    current_receipt = next((item for item in receipts if item.id == receipt.id), None)
+    order_response = serialize_purchase_order_response(db, order)
+    pending_items = build_purchase_order_pending_items(details)
+    return PurchaseOrderReceiveResponse(
+        order=order_response,
+        receipt=current_receipt
+        or PurchaseOrderReceiptItem(
+            id=receipt.id,
+            empresa_id=receipt.empresa_id,
+            orden_compra_id=receipt.orden_compra_id,
+            almacen_id=receipt.almacen_id,
+            almacen_nombre=warehouse.nombre,
+            documento_referencia=receipt.documento_referencia,
+            notas=receipt.notas,
+            recibido_por_user_id=receipt.recibido_por_user_id,
+            recibido_por_nombre=user.full_name,
+            created_at=receipt.created_at,
+            updated_at=receipt.updated_at,
+            items=[],
+            movements=[],
+        ),
+        movements=current_receipt.movements if current_receipt else [],
+        pending_items=pending_items,
+        cantidad_total_recibida=order_response.cantidad_total_recibida,
+        cantidad_total_pendiente=order_response.cantidad_total_pendiente,
+    )
+
+
+def get_purchase_order_receipts_response(db: Session, empresa_id: str, order_id: str) -> list[PurchaseOrderReceiptItem]:
+    get_purchase_order_for_company(db, empresa_id, order_id)
+    return list_purchase_order_receipts(db, empresa_id, order_id)
+
+
+def get_purchase_report_pending(db: Session, empresa_id: str) -> PurchaseOrderPendingReportResponse:
+    open_statuses = {"emitida", "recibida_parcial"}
+    orders = db.scalars(
+        select(OrdenCompra)
+        .where(
+            OrdenCompra.empresa_id == empresa_id,
+            OrdenCompra.estatus.in_(open_statuses),
+        )
+        .order_by(desc(OrdenCompra.fecha_emitida), desc(OrdenCompra.created_at), desc(OrdenCompra.id))
+    ).all()
+    if not orders:
+        return PurchaseOrderPendingReportResponse(
+            kpis=PurchaseOrderPendingReportKpis(
+                ordenes_pendientes=0,
+                ordenes_parciales=0,
+                materiales_pendientes=0,
+                monto_pendiente=ZERO,
+            ),
+            ordenes=[],
+            materiales=[],
+            proveedores=[],
+        )
+
+    order_ids = [order.id for order in orders]
+    details = db.scalars(
+        select(OrdenCompraDetalle)
+        .where(OrdenCompraDetalle.orden_compra_id.in_(order_ids))
+        .order_by(OrdenCompraDetalle.orden_compra_id.asc(), OrdenCompraDetalle.id.asc())
+    ).all()
+    details_by_order: dict[str, list[OrdenCompraDetalle]] = {order_id: [] for order_id in order_ids}
+    for detail in details:
+        details_by_order.setdefault(detail.orden_compra_id, []).append(detail)
+
+    material_rows: list[PurchaseOrderPendingReportMaterialItem] = []
+    supplier_map: dict[str, PurchaseOrderPendingReportSupplierItem] = {}
+    order_rows: list[PurchaseOrderPendingReportOrderItem] = []
+    total_pending_amount = ZERO
+    pending_material_lines = 0
+    partial_orders = 0
+    pending_orders = 0
+
+    for order in orders:
+        if order.estatus == "emitida":
+            pending_orders += 1
+        if order.estatus == "recibida_parcial":
+            partial_orders += 1
+
+        pending_quantity_total = ZERO
+        pending_amount_total = ZERO
+        for detail in details_by_order.get(order.id, []):
+            pending_quantity = max(Decimal(detail.cantidad or ZERO) - Decimal(detail.cantidad_recibida or ZERO), ZERO)
+            if pending_quantity <= ZERO:
+                continue
+            pending_material_lines += 1
+            pending_amount = pending_quantity * Decimal(detail.costo_unitario or ZERO)
+            pending_quantity_total += pending_quantity
+            pending_amount_total += pending_amount
+            material_rows.append(
+                PurchaseOrderPendingReportMaterialItem(
+                    material_id=detail.material_id,
+                    material=detail.material.nombre,
+                    sku=detail.material.sku,
+                    cantidad_pendiente=pending_quantity,
+                    proveedor=order.proveedor.nombre,
+                    ordenes_abiertas=1,
+                )
+            )
+
+        total_pending_amount += pending_amount_total
+        order_rows.append(
+            PurchaseOrderPendingReportOrderItem(
+                id=order.id,
+                folio=order.folio,
+                proveedor=order.proveedor.nombre,
+                estatus=order.estatus,
+                fecha_emitida=order.fecha_emitida,
+                fecha_esperada=order.fecha_esperada,
+                total=order.total,
+                pendiente=pending_amount_total,
+                cantidad_pendiente=pending_quantity_total,
+            )
+        )
+        supplier_item = supplier_map.get(order.proveedor_id)
+        if supplier_item is None:
+            supplier_map[order.proveedor_id] = PurchaseOrderPendingReportSupplierItem(
+                proveedor_id=order.proveedor_id,
+                proveedor=order.proveedor.nombre,
+                ordenes_abiertas=1,
+                monto_pendiente=pending_amount_total,
+            )
+        else:
+            supplier_item.ordenes_abiertas += 1
+            supplier_item.monto_pendiente += pending_amount_total
+
+    material_aggregate: dict[tuple[str, str], PurchaseOrderPendingReportMaterialItem] = {}
+    for item in material_rows:
+        key = (item.material_id, item.proveedor)
+        existing = material_aggregate.get(key)
+        if existing is None:
+            material_aggregate[key] = item
+        else:
+            existing.cantidad_pendiente += item.cantidad_pendiente
+            existing.ordenes_abiertas += item.ordenes_abiertas
+
+    return PurchaseOrderPendingReportResponse(
+        kpis=PurchaseOrderPendingReportKpis(
+            ordenes_pendientes=pending_orders,
+            ordenes_parciales=partial_orders,
+            materiales_pendientes=pending_material_lines,
+            monto_pendiente=total_pending_amount,
+        ),
+        ordenes=order_rows,
+        materiales=sorted(
+            material_aggregate.values(),
+            key=lambda item: (Decimal(item.cantidad_pendiente), item.material.lower()),
+            reverse=True,
+        ),
+        proveedores=sorted(
+            supplier_map.values(),
+            key=lambda item: (Decimal(item.monto_pendiente), item.proveedor.lower()),
+            reverse=True,
+        ),
+    )
