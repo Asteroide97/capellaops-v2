@@ -3011,6 +3011,14 @@ textarea {
   background: var(--surface);
 }
 
+.purchase-order-supplier-note {
+  gap: 0.9rem;
+}
+
+.purchase-order-supplier-note .inventory-section-title h2 {
+  font-size: 1rem;
+}
+
 .inventory-form-note-success {
   border-color: rgba(21, 128, 61, 0.16);
   background: #edfdf3;

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from decimal import Decimal
 from typing import Literal
@@ -6,25 +8,61 @@ from pydantic import BaseModel, Field
 
 
 class SupplierCreateRequest(BaseModel):
-    nombre: str = Field(min_length=1, max_length=160)
+    nombre: str | None = Field(default=None, min_length=1, max_length=160)
+    nombre_comercial: str | None = Field(default=None, max_length=160)
     razon_social: str | None = Field(default=None, max_length=200)
     rfc: str | None = Field(default=None, max_length=40)
     contacto_nombre: str | None = Field(default=None, max_length=160)
+    contacto_principal: str | None = Field(default=None, max_length=160)
     correo: str | None = Field(default=None, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
     telefono: str | None = Field(default=None, max_length=40)
+    sitio_web: str | None = Field(default=None, max_length=255)
     direccion: str | None = Field(default=None, max_length=2000)
+    ciudad: str | None = Field(default=None, max_length=120)
+    estado: str | None = Field(default=None, max_length=120)
+    pais: str | None = Field(default=None, max_length=120)
+    codigo_postal: str | None = Field(default=None, max_length=20)
+    telefono_contacto: str | None = Field(default=None, max_length=40)
+    email_contacto: str | None = Field(default=None, max_length=255)
+    moneda_preferida: str | None = Field(default=None, max_length=16)
+    condiciones_pago: str | None = Field(default=None, max_length=2000)
+    dias_credito: int = Field(default=0, ge=0)
+    lead_time_dias: int = Field(default=0, ge=0)
+    metodo_pago_preferido: str | None = Field(default=None, max_length=120)
+    banco: str | None = Field(default=None, max_length=160)
+    cuenta_bancaria: str | None = Field(default=None, max_length=80)
+    clabe: str | None = Field(default=None, max_length=40)
     notas: str | None = Field(default=None, max_length=2000)
     activo: bool = True
 
 
 class SupplierUpdateRequest(BaseModel):
     nombre: str | None = Field(default=None, min_length=1, max_length=160)
+    nombre_comercial: str | None = Field(default=None, max_length=160)
     razon_social: str | None = Field(default=None, max_length=200)
     rfc: str | None = Field(default=None, max_length=40)
     contacto_nombre: str | None = Field(default=None, max_length=160)
+    contacto_principal: str | None = Field(default=None, max_length=160)
     correo: str | None = Field(default=None, max_length=255)
+    email: str | None = Field(default=None, max_length=255)
     telefono: str | None = Field(default=None, max_length=40)
+    sitio_web: str | None = Field(default=None, max_length=255)
     direccion: str | None = Field(default=None, max_length=2000)
+    ciudad: str | None = Field(default=None, max_length=120)
+    estado: str | None = Field(default=None, max_length=120)
+    pais: str | None = Field(default=None, max_length=120)
+    codigo_postal: str | None = Field(default=None, max_length=20)
+    telefono_contacto: str | None = Field(default=None, max_length=40)
+    email_contacto: str | None = Field(default=None, max_length=255)
+    moneda_preferida: str | None = Field(default=None, max_length=16)
+    condiciones_pago: str | None = Field(default=None, max_length=2000)
+    dias_credito: int | None = Field(default=None, ge=0)
+    lead_time_dias: int | None = Field(default=None, ge=0)
+    metodo_pago_preferido: str | None = Field(default=None, max_length=120)
+    banco: str | None = Field(default=None, max_length=160)
+    cuenta_bancaria: str | None = Field(default=None, max_length=80)
+    clabe: str | None = Field(default=None, max_length=40)
     notas: str | None = Field(default=None, max_length=2000)
     activo: bool | None = None
 
@@ -33,12 +71,30 @@ class SupplierItem(BaseModel):
     id: str
     empresa_id: str
     nombre: str
+    nombre_comercial: str | None = None
     razon_social: str | None = None
     rfc: str | None = None
     contacto_nombre: str | None = None
+    contacto_principal: str | None = None
     correo: str | None = None
+    email: str | None = None
     telefono: str | None = None
+    sitio_web: str | None = None
     direccion: str | None = None
+    ciudad: str | None = None
+    estado: str | None = None
+    pais: str | None = None
+    codigo_postal: str | None = None
+    telefono_contacto: str | None = None
+    email_contacto: str | None = None
+    moneda_preferida: str | None = None
+    condiciones_pago: str | None = None
+    dias_credito: int = 0
+    lead_time_dias: int = 0
+    metodo_pago_preferido: str | None = None
+    banco: str | None = None
+    cuenta_bancaria: str | None = None
+    clabe: str | None = None
     notas: str | None = None
     activo: bool
     created_at: datetime
@@ -50,6 +106,48 @@ class SupplierListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class SupplierMaterialItem(BaseModel):
+    material_id: str
+    sku: str
+    nombre: str
+    unidad: str
+    activo: bool
+    es_proveedor_principal: bool = False
+    ordenes_count: int = 0
+    total_ordenado: Decimal = Decimal("0")
+    total_recibido: Decimal = Decimal("0")
+    monto_total_comprado: Decimal = Decimal("0")
+    ultima_orden_at: datetime | None = None
+
+
+class SupplierMaterialListResponse(BaseModel):
+    items: list[SupplierMaterialItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class SupplierReceiptListResponse(BaseModel):
+    items: list["PurchaseOrderReceiptItem"]
+    total: int
+    limit: int
+    offset: int
+
+
+class SupplierSummaryResponse(BaseModel):
+    proveedor: SupplierItem
+    ordenes_totales: int
+    ordenes_abiertas: int
+    ordenes_recibidas: int
+    monto_total_comprado: Decimal
+    monto_pendiente_por_recibir: Decimal
+    recepciones_totales: int
+    materiales_asociados: int
+    ordenes_recientes: list["PurchaseOrderItem"] = Field(default_factory=list)
+    recepciones_recientes: list["PurchaseOrderReceiptItem"] = Field(default_factory=list)
+    materiales_relacionados: list[SupplierMaterialItem] = Field(default_factory=list)
 
 
 class RequisitionCreateRequest(BaseModel):
@@ -356,6 +454,8 @@ class PurchaseOrderItem(BaseModel):
     proveedor_contacto_snapshot: str | None = None
     proveedor_email_snapshot: str | None = None
     proveedor_telefono_snapshot: str | None = None
+    condiciones_pago_snapshot: str | None = None
+    moneda_snapshot: str | None = None
     notas: str | None = None
     created_at: datetime
     updated_at: datetime

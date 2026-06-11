@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Integer,
     Numeric,
     String,
     Text,
@@ -20,6 +21,10 @@ from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
 
 class Proveedor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "proveedores"
+    __table_args__ = (
+        CheckConstraint("dias_credito >= 0", name="ck_proveedor_dias_credito_nonnegative"),
+        CheckConstraint("lead_time_dias >= 0", name="ck_proveedor_lead_time_nonnegative"),
+    )
 
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
     nombre: Mapped[str] = mapped_column(String(160), nullable=False)
@@ -28,7 +33,22 @@ class Proveedor(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     contacto_nombre: Mapped[str | None] = mapped_column(String(160), nullable=True)
     correo: Mapped[str | None] = mapped_column(String(255), nullable=True)
     telefono: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    sitio_web: Mapped[str | None] = mapped_column(String(255), nullable=True)
     direccion: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ciudad: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    estado: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    pais: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    codigo_postal: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    telefono_contacto: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    email_contacto: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    moneda_preferida: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    condiciones_pago: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dias_credito: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    lead_time_dias: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    metodo_pago_preferido: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    banco: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    cuenta_bancaria: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    clabe: Mapped[str | None] = mapped_column(String(40), nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
 
@@ -153,6 +173,8 @@ class OrdenCompra(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     proveedor_contacto_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
     proveedor_email_snapshot: Mapped[str | None] = mapped_column(String(255), nullable=True)
     proveedor_telefono_snapshot: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    condiciones_pago_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    moneda_snapshot: Mapped[str | None] = mapped_column(String(16), nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     empresa = relationship("Empresa")

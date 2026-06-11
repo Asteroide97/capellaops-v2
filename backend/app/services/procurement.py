@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -44,7 +45,9 @@ from app.schemas.procurement import (
     RequisitionItem,
     RequisitionMovementTraceItem,
     RequisitionResponse,
+    SupplierMaterialItem,
     SupplierItem,
+    SupplierSummaryResponse,
 )
 from app.services.inventory import (
     ZERO,
@@ -68,6 +71,9 @@ def generate_procurement_folio(prefix: str) -> str:
 
 
 ALLOWED_REQUISITION_PRIORITY = {"baja", "normal", "alta", "urgente"}
+BASIC_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+BASIC_RFC_RE = re.compile(r"^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$")
+BASIC_POSTAL_CODE_RE = re.compile(r"^\d{5}$")
 
 
 def normalize_optional_folio(value: str | None, prefix: str) -> str:
@@ -88,6 +94,72 @@ def normalize_requisition_priority(value: str | None) -> str:
             detail="Prioridad inválida. Usa baja, normal, alta o urgente.",
         )
     return normalized
+
+
+def normalize_supplier_name(nombre: str | None, nombre_comercial: str | None, *, required: bool) -> str | None:
+    raw_value = normalize_optional_text(nombre_comercial) or normalize_optional_text(nombre)
+    if required:
+        return normalize_required_text(raw_value, "Nombre")
+    if raw_value is None:
+        return None
+    return normalize_required_text(raw_value, "Nombre")
+
+
+def normalize_supplier_contact_name(contacto_nombre: str | None, contacto_principal: str | None) -> str | None:
+    return normalize_optional_text(contacto_principal) or normalize_optional_text(contacto_nombre)
+
+
+def normalize_supplier_email(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if normalized is None:
+        return None
+    lowered = normalized.lower()
+    if not BASIC_EMAIL_RE.match(lowered):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ingresa un email valido.")
+    return lowered
+
+
+def normalize_supplier_rfc(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if normalized is None:
+        return None
+    upper = normalized.upper()
+    if not BASIC_RFC_RE.match(upper):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ingresa un RFC valido.")
+    return upper
+
+
+def normalize_supplier_postal_code(value: str | None) -> str | None:
+    normalized = normalize_optional_text(value)
+    if normalized is None:
+        return None
+    if not BASIC_POSTAL_CODE_RE.match(normalized):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ingresa un codigo postal valido.")
+    return normalized
+
+
+def normalize_nonnegative_int(value: int | None, detail: str, *, default: int = 0) -> int:
+    if value is None:
+        return default
+    if value < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+    return int(value)
+
+
+def resolve_supplier_snapshot_email(supplier: Proveedor) -> str | None:
+    return normalize_optional_text(supplier.email_contacto) or normalize_optional_text(supplier.correo)
+
+
+def resolve_supplier_snapshot_phone(supplier: Proveedor) -> str | None:
+    return normalize_optional_text(supplier.telefono_contacto) or normalize_optional_text(supplier.telefono)
+
+
+def apply_supplier_snapshot(order: OrdenCompra, supplier: Proveedor) -> None:
+    order.proveedor_contacto_snapshot = normalize_optional_text(supplier.contacto_nombre)
+    order.proveedor_email_snapshot = resolve_supplier_snapshot_email(supplier)
+    order.proveedor_telefono_snapshot = resolve_supplier_snapshot_phone(supplier)
+    order.condiciones_pago_snapshot = normalize_optional_text(supplier.condiciones_pago)
+    order.moneda_snapshot = normalize_optional_text(supplier.moneda_preferida)
 
 
 def create_audit_log(
@@ -119,12 +191,30 @@ def serialize_supplier(supplier: Proveedor) -> SupplierItem:
         id=supplier.id,
         empresa_id=supplier.empresa_id,
         nombre=supplier.nombre,
+        nombre_comercial=supplier.nombre,
         razon_social=supplier.razon_social,
         rfc=supplier.rfc,
         contacto_nombre=supplier.contacto_nombre,
+        contacto_principal=supplier.contacto_nombre,
         correo=supplier.correo,
+        email=supplier.correo,
         telefono=supplier.telefono,
+        sitio_web=supplier.sitio_web,
         direccion=supplier.direccion,
+        ciudad=supplier.ciudad,
+        estado=supplier.estado,
+        pais=supplier.pais,
+        codigo_postal=supplier.codigo_postal,
+        telefono_contacto=supplier.telefono_contacto,
+        email_contacto=supplier.email_contacto,
+        moneda_preferida=supplier.moneda_preferida,
+        condiciones_pago=supplier.condiciones_pago,
+        dias_credito=int(supplier.dias_credito or 0),
+        lead_time_dias=int(supplier.lead_time_dias or 0),
+        metodo_pago_preferido=supplier.metodo_pago_preferido,
+        banco=supplier.banco,
+        cuenta_bancaria=supplier.cuenta_bancaria,
+        clabe=supplier.clabe,
         notas=supplier.notas,
         activo=supplier.activo,
         created_at=supplier.created_at,
@@ -163,8 +253,19 @@ def list_suppliers(
         Proveedor.contacto_nombre,
         Proveedor.correo,
         Proveedor.telefono,
+        Proveedor.sitio_web,
+        Proveedor.ciudad,
+        Proveedor.estado,
+        Proveedor.pais,
+        Proveedor.codigo_postal,
+        Proveedor.email_contacto,
+        Proveedor.telefono_contacto,
+        Proveedor.moneda_preferida,
+        Proveedor.metodo_pago_preferido,
     )
-    if activo is not None:
+    if activo is None:
+        query = query.where(Proveedor.activo == True)
+    else:
         query = query.where(Proveedor.activo == activo)
 
     total = count_rows(db, query)
@@ -178,25 +279,58 @@ def create_supplier(
     empresa: Empresa,
     user: Usuario,
     nombre: str,
+    nombre_comercial: str | None,
     razon_social: str | None,
     rfc: str | None,
     contacto_nombre: str | None,
+    contacto_principal: str | None,
     correo: str | None,
+    email: str | None,
     telefono: str | None,
+    sitio_web: str | None,
     direccion: str | None,
+    ciudad: str | None,
+    estado: str | None,
+    pais: str | None,
+    codigo_postal: str | None,
+    telefono_contacto: str | None,
+    email_contacto: str | None,
+    moneda_preferida: str | None,
+    condiciones_pago: str | None,
+    dias_credito: int,
+    lead_time_dias: int,
+    metodo_pago_preferido: str | None,
+    banco: str | None,
+    cuenta_bancaria: str | None,
+    clabe: str | None,
     notas: str | None,
     activo: bool,
     ip_address: str | None,
 ) -> SupplierItem:
     supplier = Proveedor(
         empresa_id=empresa.id,
-        nombre=normalize_required_text(nombre, "Nombre"),
+        nombre=normalize_supplier_name(nombre, nombre_comercial, required=True),
         razon_social=normalize_optional_text(razon_social),
-        rfc=normalize_optional_text(rfc.upper() if rfc else None),
-        contacto_nombre=normalize_optional_text(contacto_nombre),
-        correo=normalize_optional_text(correo),
+        rfc=normalize_supplier_rfc(rfc),
+        contacto_nombre=normalize_supplier_contact_name(contacto_nombre, contacto_principal),
+        correo=normalize_supplier_email(email or correo),
         telefono=normalize_optional_text(telefono),
+        sitio_web=normalize_optional_text(sitio_web),
         direccion=normalize_optional_text(direccion),
+        ciudad=normalize_optional_text(ciudad),
+        estado=normalize_optional_text(estado),
+        pais=normalize_optional_text(pais),
+        codigo_postal=normalize_supplier_postal_code(codigo_postal),
+        telefono_contacto=normalize_optional_text(telefono_contacto),
+        email_contacto=normalize_supplier_email(email_contacto),
+        moneda_preferida=normalize_optional_text(moneda_preferida.upper() if moneda_preferida else None),
+        condiciones_pago=normalize_optional_text(condiciones_pago),
+        dias_credito=normalize_nonnegative_int(dias_credito, "Los dias de credito no pueden ser negativos."),
+        lead_time_dias=normalize_nonnegative_int(lead_time_dias, "El lead time no puede ser negativo."),
+        metodo_pago_preferido=normalize_optional_text(metodo_pago_preferido),
+        banco=normalize_optional_text(banco),
+        cuenta_bancaria=normalize_optional_text(cuenta_bancaria),
+        clabe=normalize_optional_text(clabe),
         notas=normalize_optional_text(notas),
         activo=activo,
     )
@@ -210,7 +344,12 @@ def create_supplier(
         entity_name="proveedor",
         entity_id=supplier.id,
         ip_address=ip_address,
-        metadata_json={"nombre": supplier.nombre, "rfc": supplier.rfc, "activo": supplier.activo},
+        metadata_json={
+            "nombre": supplier.nombre,
+            "rfc": supplier.rfc,
+            "activo": supplier.activo,
+            "moneda_preferida": supplier.moneda_preferida,
+        },
     )
     return serialize_supplier(supplier)
 
@@ -222,31 +361,91 @@ def update_supplier(
     user: Usuario,
     supplier_id: str,
     nombre: str | None,
+    nombre_comercial: str | None,
     razon_social: str | None,
     rfc: str | None,
     contacto_nombre: str | None,
+    contacto_principal: str | None,
     correo: str | None,
+    email: str | None,
     telefono: str | None,
+    sitio_web: str | None,
     direccion: str | None,
+    ciudad: str | None,
+    estado: str | None,
+    pais: str | None,
+    codigo_postal: str | None,
+    telefono_contacto: str | None,
+    email_contacto: str | None,
+    moneda_preferida: str | None,
+    condiciones_pago: str | None,
+    dias_credito: int | None,
+    lead_time_dias: int | None,
+    metodo_pago_preferido: str | None,
+    banco: str | None,
+    cuenta_bancaria: str | None,
+    clabe: str | None,
     notas: str | None,
     activo: bool | None,
     ip_address: str | None,
 ) -> SupplierItem:
     supplier = get_supplier_for_company(db, empresa.id, supplier_id)
-    if nombre is not None:
-        supplier.nombre = normalize_required_text(nombre, "Nombre")
+    if nombre is not None or nombre_comercial is not None:
+        supplier.nombre = normalize_supplier_name(
+            nombre if nombre is not None else supplier.nombre,
+            nombre_comercial,
+            required=True,
+        )
     if razon_social is not None:
         supplier.razon_social = normalize_optional_text(razon_social)
     if rfc is not None:
-        supplier.rfc = normalize_optional_text(rfc.upper())
-    if contacto_nombre is not None:
-        supplier.contacto_nombre = normalize_optional_text(contacto_nombre)
-    if correo is not None:
-        supplier.correo = normalize_optional_text(correo)
+        supplier.rfc = normalize_supplier_rfc(rfc)
+    if contacto_nombre is not None or contacto_principal is not None:
+        supplier.contacto_nombre = normalize_supplier_contact_name(contacto_nombre, contacto_principal)
+    if correo is not None or email is not None:
+        supplier.correo = normalize_supplier_email(email if email is not None else correo)
     if telefono is not None:
         supplier.telefono = normalize_optional_text(telefono)
+    if sitio_web is not None:
+        supplier.sitio_web = normalize_optional_text(sitio_web)
     if direccion is not None:
         supplier.direccion = normalize_optional_text(direccion)
+    if ciudad is not None:
+        supplier.ciudad = normalize_optional_text(ciudad)
+    if estado is not None:
+        supplier.estado = normalize_optional_text(estado)
+    if pais is not None:
+        supplier.pais = normalize_optional_text(pais)
+    if codigo_postal is not None:
+        supplier.codigo_postal = normalize_supplier_postal_code(codigo_postal)
+    if telefono_contacto is not None:
+        supplier.telefono_contacto = normalize_optional_text(telefono_contacto)
+    if email_contacto is not None:
+        supplier.email_contacto = normalize_supplier_email(email_contacto)
+    if moneda_preferida is not None:
+        supplier.moneda_preferida = normalize_optional_text(moneda_preferida.upper())
+    if condiciones_pago is not None:
+        supplier.condiciones_pago = normalize_optional_text(condiciones_pago)
+    if dias_credito is not None:
+        supplier.dias_credito = normalize_nonnegative_int(
+            dias_credito,
+            "Los dias de credito no pueden ser negativos.",
+            default=int(supplier.dias_credito or 0),
+        )
+    if lead_time_dias is not None:
+        supplier.lead_time_dias = normalize_nonnegative_int(
+            lead_time_dias,
+            "El lead time no puede ser negativo.",
+            default=int(supplier.lead_time_dias or 0),
+        )
+    if metodo_pago_preferido is not None:
+        supplier.metodo_pago_preferido = normalize_optional_text(metodo_pago_preferido)
+    if banco is not None:
+        supplier.banco = normalize_optional_text(banco)
+    if cuenta_bancaria is not None:
+        supplier.cuenta_bancaria = normalize_optional_text(cuenta_bancaria)
+    if clabe is not None:
+        supplier.clabe = normalize_optional_text(clabe)
     if notas is not None:
         supplier.notas = normalize_optional_text(notas)
     if activo is not None:
@@ -260,7 +459,12 @@ def update_supplier(
         entity_name="proveedor",
         entity_id=supplier.id,
         ip_address=ip_address,
-        metadata_json={"nombre": supplier.nombre, "rfc": supplier.rfc, "activo": supplier.activo},
+        metadata_json={
+            "nombre": supplier.nombre,
+            "rfc": supplier.rfc,
+            "activo": supplier.activo,
+            "moneda_preferida": supplier.moneda_preferida,
+        },
     )
     db.flush()
     db.refresh(supplier)
@@ -1678,19 +1882,15 @@ def list_purchase_order_movements(db: Session, empresa_id: str, order_id: str) -
     return [build_purchase_order_movement_trace_item(movement, warehouse, material, user) for movement, warehouse, material, user in rows]
 
 
-def list_purchase_order_receipts(db: Session, empresa_id: str, order_id: str) -> list[PurchaseOrderReceiptItem]:
-    receipts = db.scalars(
-        select(OrdenCompraRecepcion)
-        .where(
-            OrdenCompraRecepcion.empresa_id == empresa_id,
-            OrdenCompraRecepcion.orden_compra_id == order_id,
-        )
-        .order_by(desc(OrdenCompraRecepcion.created_at), desc(OrdenCompraRecepcion.id))
-    ).all()
+def build_purchase_order_receipts_from_models(
+    db: Session,
+    receipts: list[OrdenCompraRecepcion],
+) -> list[PurchaseOrderReceiptItem]:
     if not receipts:
         return []
 
     receipt_ids = [item.id for item in receipts]
+    receipt_empresa_id = receipts[0].empresa_id
     detail_rows = db.execute(
         select(OrdenCompraRecepcionDetalle, Material)
         .join(Material, OrdenCompraRecepcionDetalle.material_id == Material.id)
@@ -1720,7 +1920,7 @@ def list_purchase_order_receipts(db: Session, empresa_id: str, order_id: str) ->
         .join(Material, MovimientoInventario.material_id == Material.id)
         .join(Usuario, MovimientoInventario.created_by == Usuario.id)
         .where(
-            MovimientoInventario.empresa_id == empresa_id,
+            MovimientoInventario.empresa_id == receipt_empresa_id,
             MovimientoInventario.grupo_referencia.in_(receipt_ids),
         )
         .order_by(desc(MovimientoInventario.created_at), desc(MovimientoInventario.id))
@@ -1752,6 +1952,218 @@ def list_purchase_order_receipts(db: Session, empresa_id: str, order_id: str) ->
         )
         for receipt in receipts
     ]
+
+
+def list_purchase_order_receipts(db: Session, empresa_id: str, order_id: str) -> list[PurchaseOrderReceiptItem]:
+    receipts = db.scalars(
+        select(OrdenCompraRecepcion)
+        .where(
+            OrdenCompraRecepcion.empresa_id == empresa_id,
+            OrdenCompraRecepcion.orden_compra_id == order_id,
+        )
+        .order_by(desc(OrdenCompraRecepcion.created_at), desc(OrdenCompraRecepcion.id))
+    ).all()
+    return build_purchase_order_receipts_from_models(db, receipts)
+
+
+def list_supplier_receipts(
+    db: Session,
+    empresa_id: str,
+    supplier_id: str,
+    *,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[int, list[PurchaseOrderReceiptItem]]:
+    get_supplier_for_company(db, empresa_id, supplier_id)
+    id_query = (
+        select(OrdenCompraRecepcion.id)
+        .join(OrdenCompra, OrdenCompraRecepcion.orden_compra_id == OrdenCompra.id)
+        .where(
+            OrdenCompraRecepcion.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier_id,
+        )
+    )
+    total = count_rows(db, id_query)
+    receipts = db.scalars(
+        select(OrdenCompraRecepcion)
+        .join(OrdenCompra, OrdenCompraRecepcion.orden_compra_id == OrdenCompra.id)
+        .where(
+            OrdenCompraRecepcion.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier_id,
+        )
+        .order_by(desc(OrdenCompraRecepcion.created_at), desc(OrdenCompraRecepcion.id))
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return total, build_purchase_order_receipts_from_models(db, receipts)
+
+
+def list_supplier_materials(
+    db: Session,
+    empresa_id: str,
+    supplier_id: str,
+    *,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[int, list[SupplierMaterialItem]]:
+    supplier = get_supplier_for_company(db, empresa_id, supplier_id)
+    ordered_rows = db.execute(
+        select(
+            Material,
+            func.count(func.distinct(OrdenCompra.id)).label("orders_count"),
+            func.coalesce(func.sum(OrdenCompraDetalle.cantidad), 0).label("total_ordenado"),
+            func.coalesce(func.sum(OrdenCompraDetalle.cantidad_recibida), 0).label("total_recibido"),
+            func.coalesce(func.sum(OrdenCompraDetalle.total_linea), 0).label("monto_total"),
+            func.max(OrdenCompra.created_at).label("ultima_orden_at"),
+        )
+        .join(OrdenCompraDetalle, OrdenCompraDetalle.material_id == Material.id)
+        .join(OrdenCompra, OrdenCompra.id == OrdenCompraDetalle.orden_compra_id)
+        .where(
+            Material.empresa_id == empresa_id,
+            OrdenCompra.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier.id,
+        )
+        .group_by(Material.id)
+    ).all()
+
+    material_map: dict[str, SupplierMaterialItem] = {}
+    for material, orders_count, total_ordenado, total_recibido, monto_total, ultima_orden_at in ordered_rows:
+        material_map[material.id] = SupplierMaterialItem(
+            material_id=material.id,
+            sku=material.sku,
+            nombre=material.nombre,
+            unidad=material.unidad,
+            activo=material.activo,
+            es_proveedor_principal=material.proveedor_principal_id == supplier.id,
+            ordenes_count=int(orders_count or 0),
+            total_ordenado=Decimal(total_ordenado or ZERO),
+            total_recibido=Decimal(total_recibido or ZERO),
+            monto_total_comprado=Decimal(monto_total or ZERO),
+            ultima_orden_at=ultima_orden_at,
+        )
+
+    principal_materials = db.scalars(
+        select(Material)
+        .where(
+            Material.empresa_id == empresa_id,
+            Material.proveedor_principal_id == supplier.id,
+        )
+        .order_by(Material.nombre.asc(), Material.sku.asc())
+    ).all()
+    for material in principal_materials:
+        existing = material_map.get(material.id)
+        if existing is None:
+            material_map[material.id] = SupplierMaterialItem(
+                material_id=material.id,
+                sku=material.sku,
+                nombre=material.nombre,
+                unidad=material.unidad,
+                activo=material.activo,
+                es_proveedor_principal=True,
+            )
+        else:
+            existing.es_proveedor_principal = True
+
+    min_datetime = datetime.min.replace(tzinfo=timezone.utc)
+    items = sorted(
+        material_map.values(),
+        key=lambda item: (
+            item.ultima_orden_at or min_datetime,
+            Decimal(item.monto_total_comprado or ZERO),
+            item.nombre.lower(),
+        ),
+        reverse=True,
+    )
+    total = len(items)
+    return total, items[offset : offset + limit]
+
+
+def get_supplier_summary(db: Session, empresa_id: str, supplier_id: str) -> SupplierSummaryResponse:
+    supplier = get_supplier_for_company(db, empresa_id, supplier_id)
+    open_statuses = {"emitida", "recibida_parcial"}
+    ordenes_totales = db.scalar(
+        select(func.count(OrdenCompra.id)).where(
+            OrdenCompra.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier.id,
+        )
+    ) or 0
+    ordenes_abiertas = db.scalar(
+        select(func.count(OrdenCompra.id)).where(
+            OrdenCompra.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier.id,
+            OrdenCompra.estatus.in_(open_statuses),
+        )
+    ) or 0
+    ordenes_recibidas = db.scalar(
+        select(func.count(OrdenCompra.id)).where(
+            OrdenCompra.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier.id,
+            OrdenCompra.estatus == "recibida",
+        )
+    ) or 0
+    monto_total_comprado = db.scalar(
+        select(func.coalesce(func.sum(OrdenCompra.total), 0)).where(
+            OrdenCompra.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier.id,
+            OrdenCompra.estatus != "cancelada",
+        )
+    ) or ZERO
+    monto_pendiente_por_recibir = db.scalar(
+        select(
+            func.coalesce(
+                func.sum((OrdenCompraDetalle.cantidad - OrdenCompraDetalle.cantidad_recibida) * OrdenCompraDetalle.costo_unitario),
+                0,
+            )
+        )
+        .join(OrdenCompra, OrdenCompra.id == OrdenCompraDetalle.orden_compra_id)
+        .where(
+            OrdenCompra.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier.id,
+            OrdenCompra.estatus.in_(open_statuses),
+        )
+    ) or ZERO
+    recepciones_totales = db.scalar(
+        select(func.count(OrdenCompraRecepcion.id))
+        .join(OrdenCompra, OrdenCompraRecepcion.orden_compra_id == OrdenCompra.id)
+        .where(
+            OrdenCompraRecepcion.empresa_id == empresa_id,
+            OrdenCompra.proveedor_id == supplier.id,
+        )
+    ) or 0
+    _, ordenes_recientes = list_purchase_orders(
+        db,
+        empresa_id,
+        proveedor_id=supplier.id,
+        limit=5,
+        offset=0,
+    )
+    _, recepciones_recientes = list_supplier_receipts(
+        db,
+        empresa_id,
+        supplier.id,
+        limit=5,
+        offset=0,
+    )
+    materiales_asociados, materiales_relacionados = list_supplier_materials(
+        db,
+        empresa_id,
+        supplier.id,
+        limit=5,
+        offset=0,
+    )
+    return SupplierSummaryResponse(
+        proveedor=serialize_supplier(supplier),
+        ordenes_totales=int(ordenes_totales),
+        ordenes_abiertas=int(ordenes_abiertas),
+        ordenes_recibidas=int(ordenes_recibidas),
+        monto_total_comprado=Decimal(monto_total_comprado or ZERO),
+        monto_pendiente_por_recibir=Decimal(monto_pendiente_por_recibir or ZERO),
+        recepciones_totales=int(recepciones_totales),
+        materiales_asociados=int(materiales_asociados),
+        ordenes_recientes=ordenes_recientes,
+        recepciones_recientes=recepciones_recientes,
+        materiales_relacionados=materiales_relacionados,
+    )
 
 
 def serialize_purchase_order_detail(detail: OrdenCompraDetalle) -> PurchaseOrderDetailItem:
@@ -1813,6 +2225,8 @@ def build_purchase_order_item(
         proveedor_contacto_snapshot=order.proveedor_contacto_snapshot,
         proveedor_email_snapshot=order.proveedor_email_snapshot,
         proveedor_telefono_snapshot=order.proveedor_telefono_snapshot,
+        condiciones_pago_snapshot=order.condiciones_pago_snapshot,
+        moneda_snapshot=order.moneda_snapshot,
         notas=order.notas,
         created_at=order.created_at,
         updated_at=order.updated_at,
@@ -2035,11 +2449,9 @@ def create_purchase_order_record(
         descuento_total=ZERO,
         impuesto_total=ZERO,
         total=ZERO,
-        proveedor_contacto_snapshot=supplier.contacto_nombre,
-        proveedor_email_snapshot=supplier.correo,
-        proveedor_telefono_snapshot=supplier.telefono,
         notas=normalize_optional_text(notas),
     )
+    apply_supplier_snapshot(order, supplier)
     db.add(order)
     db.flush()
     return order
@@ -2209,9 +2621,7 @@ def update_purchase_order(
     if proveedor_id is not None:
         supplier = ensure_active_supplier(db, empresa.id, proveedor_id)
         order.proveedor_id = supplier.id
-        order.proveedor_contacto_snapshot = supplier.contacto_nombre
-        order.proveedor_email_snapshot = supplier.correo
-        order.proveedor_telefono_snapshot = supplier.telefono
+        apply_supplier_snapshot(order, supplier)
     if almacen_destino_id is not None:
         order.almacen_destino_id = ensure_active_destination_warehouse(db, empresa.id, almacen_destino_id).id
     if notas is not None:
@@ -2369,8 +2779,9 @@ def issue_purchase_order(
             detail="La orden de compra necesita al menos un detalle.",
         )
 
-    ensure_active_supplier(db, empresa.id, order.proveedor_id)
+    supplier = ensure_active_supplier(db, empresa.id, order.proveedor_id)
     ensure_active_destination_warehouse(db, empresa.id, order.almacen_destino_id)
+    apply_supplier_snapshot(order, supplier)
     order.estatus = "emitida"
     if order.fecha_emitida is None:
         order.fecha_emitida = datetime.now(timezone.utc)

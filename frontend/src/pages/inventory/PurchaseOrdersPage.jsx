@@ -419,6 +419,10 @@ export default function PurchaseOrdersPage() {
     );
   }, [materials, materialSearch]);
 
+  const selectedSupplierProfile = useMemo(() => {
+    return suppliers.find((item) => item.id === editorForm.proveedor_id) || null;
+  }, [editorForm.proveedor_id, suppliers]);
+
   const previewTotals = useMemo(() => {
     const subtotal = editorLines.reduce((sum, line) => sum + calculateLineSubtotal(line), 0);
     return {
@@ -1161,6 +1165,68 @@ export default function PurchaseOrdersPage() {
                 />
               </Field>
             </FormGrid>
+
+            {selectedSupplierProfile ? (
+              <div className="inventory-form-note purchase-order-supplier-note">
+                <SectionTitle
+                  subtitle="Referencia rapida de contacto y condiciones comerciales del proveedor seleccionado."
+                  title="Condiciones comerciales del proveedor"
+                />
+                <div className="inventory-detail-grid">
+                  <div>
+                    <strong>Contacto</strong>
+                    <p>
+                      {safeDisplayText(
+                        selectedSupplierProfile.contacto_principal || selectedSupplierProfile.contacto_nombre,
+                        "No registrado",
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <strong>Email</strong>
+                    <p>
+                      {safeDisplayText(
+                        selectedSupplierProfile.email || selectedSupplierProfile.correo,
+                        "No registrado",
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <strong>Telefono</strong>
+                    <p>
+                      {safeDisplayText(
+                        selectedSupplierProfile.telefono_contacto || selectedSupplierProfile.telefono,
+                        "No registrado",
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <strong>Condiciones de pago</strong>
+                    <p>{safeDisplayText(selectedSupplierProfile.condiciones_pago, "Sin definir")}</p>
+                  </div>
+                  <div>
+                    <strong>Moneda</strong>
+                    <p>{safeDisplayText(selectedSupplierProfile.moneda_preferida, "No definida")}</p>
+                  </div>
+                  <div>
+                    <strong>Credito / lead time</strong>
+                    <p>
+                      {`${formatNumber(selectedSupplierProfile.dias_credito || 0)} dias de credito · ${formatNumber(
+                        selectedSupplierProfile.lead_time_dias || 0,
+                      )} dias lead time`}
+                    </p>
+                  </div>
+                  <div>
+                    <strong>Metodo de pago preferido</strong>
+                    <p>{safeDisplayText(selectedSupplierProfile.metodo_pago_preferido, "No definido")}</p>
+                  </div>
+                  <div className="inventory-form-span-2">
+                    <strong>Notas comerciales</strong>
+                    <p>{safeDisplayText(selectedSupplierProfile.notas, "Sin notas")}</p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
           </section>
 
           <section className="inventory-form-section">
@@ -1250,7 +1316,12 @@ export default function PurchaseOrdersPage() {
 
           <section className="inventory-metric-grid inventory-metric-grid-4">
             <MetricCard icon={<ClipboardList size={16} />} label="Renglones" meta="Vista previa local" value={editorLines.length} />
-            <MetricCard icon={<Truck size={16} />} label="Proveedor" meta="Seleccionado" value={suppliers.find((item) => item.id === editorForm.proveedor_id)?.nombre || "—"} />
+            <MetricCard
+              icon={<Truck size={16} />}
+              label="Proveedor"
+              meta="Seleccionado"
+              value={selectedSupplierProfile?.nombre || "—"}
+            />
             <MetricCard icon={<Warehouse size={16} />} label="Almacén" meta="Destino" value={warehouses.find((item) => item.id === editorForm.almacen_destino_id)?.codigo || "—"} />
             <MetricCard icon={<DollarSign size={16} />} label="Total estimado" meta="Se recalcula en backend" tone="success" value={formatMoney(previewTotals.total)} />
           </section>
@@ -1368,6 +1439,14 @@ export default function PurchaseOrdersPage() {
                 <div>
                   <strong>Teléfono proveedor</strong>
                   <p>{safeDisplayText(selectedOrder.proveedor_telefono_snapshot, "No registrado")}</p>
+                </div>
+                <div>
+                  <strong>Condiciones de pago</strong>
+                  <p>{safeDisplayText(selectedOrder.condiciones_pago_snapshot, "No definidas")}</p>
+                </div>
+                <div>
+                  <strong>Moneda</strong>
+                  <p>{safeDisplayText(selectedOrder.moneda_snapshot, "No definida")}</p>
                 </div>
                 <div className="inventory-form-span-2">
                   <strong>Notas</strong>

@@ -530,6 +530,11 @@ def build_purchase_order_pdf(company: Empresa, order: PurchaseOrderResponse) -> 
             ("Creada por", _text(order.created_by_nombre)),
             ("Actualizada", _date_label(order.updated_at)),
             ("Requisicion", _text(order.requisicion_folio, "Sin vinculo")),
+            ("Contacto proveedor", _text(order.proveedor_contacto_snapshot, "No registrado")),
+            ("Email proveedor", _text(order.proveedor_email_snapshot, "No registrado")),
+            ("Telefono proveedor", _text(order.proveedor_telefono_snapshot, "No registrado")),
+            ("Condiciones de pago", _text(order.condiciones_pago_snapshot, "No registradas")),
+            ("Moneda", _text(order.moneda_snapshot, "No registrada")),
         ]
         line_rows = [
             [

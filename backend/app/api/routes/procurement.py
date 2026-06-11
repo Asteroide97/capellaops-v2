@@ -32,6 +32,9 @@ from app.schemas.procurement import (
     SupplierCreateRequest,
     SupplierItem,
     SupplierListResponse,
+    SupplierMaterialListResponse,
+    SupplierReceiptListResponse,
+    SupplierSummaryResponse,
     SupplierUpdateRequest,
 )
 from app.services.inventory import get_warehouse_for_company, validate_inventory_access
@@ -54,9 +57,12 @@ from app.services.procurement import (
     get_purchase_report_pending,
     get_requisition_for_company,
     get_supplier_for_company,
+    get_supplier_summary,
     issue_purchase_order,
     list_purchase_orders,
     list_requisitions,
+    list_supplier_materials,
+    list_supplier_receipts,
     list_suppliers,
     reject_requisition,
     receive_purchase_order,
@@ -150,12 +156,30 @@ def create_supplier_endpoint(
             empresa=context.empresa,
             user=context.user,
             nombre=payload.nombre,
+            nombre_comercial=payload.nombre_comercial,
             razon_social=payload.razon_social,
             rfc=payload.rfc,
             contacto_nombre=payload.contacto_nombre,
+            contacto_principal=payload.contacto_principal,
             correo=payload.correo,
+            email=payload.email,
             telefono=payload.telefono,
+            sitio_web=payload.sitio_web,
             direccion=payload.direccion,
+            ciudad=payload.ciudad,
+            estado=payload.estado,
+            pais=payload.pais,
+            codigo_postal=payload.codigo_postal,
+            telefono_contacto=payload.telefono_contacto,
+            email_contacto=payload.email_contacto,
+            moneda_preferida=payload.moneda_preferida,
+            condiciones_pago=payload.condiciones_pago,
+            dias_credito=payload.dias_credito,
+            lead_time_dias=payload.lead_time_dias,
+            metodo_pago_preferido=payload.metodo_pago_preferido,
+            banco=payload.banco,
+            cuenta_bancaria=payload.cuenta_bancaria,
+            clabe=payload.clabe,
             notas=payload.notas,
             activo=payload.activo,
             ip_address=request.client.host if request.client else None,
@@ -190,17 +214,107 @@ def update_supplier_endpoint(
             user=context.user,
             supplier_id=supplier_id,
             nombre=payload.nombre,
+            nombre_comercial=payload.nombre_comercial,
             razon_social=payload.razon_social,
             rfc=payload.rfc,
             contacto_nombre=payload.contacto_nombre,
+            contacto_principal=payload.contacto_principal,
             correo=payload.correo,
+            email=payload.email,
             telefono=payload.telefono,
+            sitio_web=payload.sitio_web,
             direccion=payload.direccion,
+            ciudad=payload.ciudad,
+            estado=payload.estado,
+            pais=payload.pais,
+            codigo_postal=payload.codigo_postal,
+            telefono_contacto=payload.telefono_contacto,
+            email_contacto=payload.email_contacto,
+            moneda_preferida=payload.moneda_preferida,
+            condiciones_pago=payload.condiciones_pago,
+            dias_credito=payload.dias_credito,
+            lead_time_dias=payload.lead_time_dias,
+            metodo_pago_preferido=payload.metodo_pago_preferido,
+            banco=payload.banco,
+            cuenta_bancaria=payload.cuenta_bancaria,
+            clabe=payload.clabe,
             notas=payload.notas,
             activo=payload.activo,
             ip_address=request.client.host if request.client else None,
         ),
     )
+
+
+@router.get("/suppliers/{supplier_id}/summary", response_model=SupplierSummaryResponse)
+def supplier_summary(
+    supplier_id: str,
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> SupplierSummaryResponse:
+    return get_supplier_summary(db, context.empresa.id, supplier_id)
+
+
+@router.get("/suppliers/{supplier_id}/purchase-orders", response_model=PurchaseOrderListResponse)
+def supplier_purchase_orders(
+    supplier_id: str,
+    q: str | None = None,
+    estatus: Literal["borrador", "emitida", "recibida_parcial", "recibida", "cancelada"] | None = None,
+    fecha_desde: date | None = None,
+    fecha_hasta: date | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> PurchaseOrderListResponse:
+    get_supplier_for_company(db, context.empresa.id, supplier_id)
+    total, items = list_purchase_orders(
+        db,
+        context.empresa.id,
+        q=q,
+        estatus=estatus,
+        proveedor_id=supplier_id,
+        fecha_desde=fecha_desde,
+        fecha_hasta=fecha_hasta,
+        limit=limit,
+        offset=offset,
+    )
+    return PurchaseOrderListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/suppliers/{supplier_id}/receipts", response_model=SupplierReceiptListResponse)
+def supplier_receipts(
+    supplier_id: str,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> SupplierReceiptListResponse:
+    total, items = list_supplier_receipts(
+        db,
+        context.empresa.id,
+        supplier_id,
+        limit=limit,
+        offset=offset,
+    )
+    return SupplierReceiptListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get("/suppliers/{supplier_id}/materials", response_model=SupplierMaterialListResponse)
+def supplier_materials(
+    supplier_id: str,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_inventory_context),
+    db: Session = Depends(get_db),
+) -> SupplierMaterialListResponse:
+    total, items = list_supplier_materials(
+        db,
+        context.empresa.id,
+        supplier_id,
+        limit=limit,
+        offset=offset,
+    )
+    return SupplierMaterialListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/requisitions", response_model=RequisitionListResponse)

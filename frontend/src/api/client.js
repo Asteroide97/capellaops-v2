@@ -2226,6 +2226,51 @@ export function getSupplierDetail({ supplierId, token, empresaId }) {
 }
 
 
+export function getSupplierSummary({ supplierId, token, empresaId }) {
+  return apiRequest(`/inventory/suppliers/${supplierId}/summary`, { token, empresaId });
+}
+
+
+export function getSupplierPurchaseOrders({ supplierId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/suppliers/${supplierId}/purchase-orders${suffix ? `?${suffix}` : ""}`, {
+    token,
+    empresaId,
+  });
+}
+
+
+export function getSupplierReceipts({ supplierId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/suppliers/${supplierId}/receipts${suffix ? `?${suffix}` : ""}`, {
+    token,
+    empresaId,
+  });
+}
+
+
+export function getSupplierMaterials({ supplierId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/inventory/suppliers/${supplierId}/materials${suffix ? `?${suffix}` : ""}`, {
+    token,
+    empresaId,
+  });
+}
+
+
 export function createSupplier({ token, empresaId, payload }) {
   return apiRequest("/inventory/suppliers", {
     method: "POST",
