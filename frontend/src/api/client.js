@@ -2547,6 +2547,219 @@ export function getPendingPurchaseOrderReport({ token, empresaId }) {
 }
 
 
+export function getCrmSummary({ token, empresaId }) {
+  return apiRequest("/crm/summary", { token, empresaId });
+}
+
+
+export function listCrmClients({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "tipo", filters.tipo);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/crm/clients${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createCrmClient({ token, empresaId, payload }) {
+  return apiRequest("/crm/clients", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getCrmClient({ clientId, token, empresaId }) {
+  return apiRequest(`/crm/clients/${clientId}`, { token, empresaId });
+}
+
+
+export function updateCrmClient({ clientId, token, empresaId, payload }) {
+  return apiRequest(`/crm/clients/${clientId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivateCrmClient({ clientId, token, empresaId }) {
+  return apiRequest(`/crm/clients/${clientId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function reactivateCrmClient({ clientId, token, empresaId }) {
+  return apiRequest(`/crm/clients/${clientId}/reactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function listCrmClientContacts({ clientId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "activo", filters.activo);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/crm/clients/${clientId}/contacts${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createCrmContact({ clientId, token, empresaId, payload }) {
+  return apiRequest(`/crm/clients/${clientId}/contacts`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateCrmContact({ contactId, token, empresaId, payload }) {
+  return apiRequest(`/crm/contacts/${contactId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivateCrmContact({ contactId, token, empresaId }) {
+  return apiRequest(`/crm/contacts/${contactId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function listCrmOpportunities({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "etapa", filters.etapa);
+  appendQueryValue(query, "activa", filters.activa);
+  appendQueryValue(query, "client_id", filters.client_id);
+  appendQueryValue(query, "responsable_user_id", filters.responsable_user_id);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/crm/opportunities${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createCrmOpportunity({ token, empresaId, payload }) {
+  return apiRequest("/crm/opportunities", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getCrmOpportunity({ opportunityId, token, empresaId }) {
+  return apiRequest(`/crm/opportunities/${opportunityId}`, { token, empresaId });
+}
+
+
+export function updateCrmOpportunity({ opportunityId, token, empresaId, payload }) {
+  return apiRequest(`/crm/opportunities/${opportunityId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function closeCrmOpportunityWon({ opportunityId, token, empresaId, payload }) {
+  return apiRequest(`/crm/opportunities/${opportunityId}/close-won`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function closeCrmOpportunityLost({ opportunityId, token, empresaId, payload }) {
+  return apiRequest(`/crm/opportunities/${opportunityId}/close-lost`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function listCrmActivities({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "q", filters.q);
+  appendQueryValue(query, "tipo", filters.tipo);
+  appendQueryValue(query, "completada", filters.completada);
+  appendQueryValue(query, "activo", filters.activo);
+  appendQueryValue(query, "client_id", filters.client_id);
+  appendQueryValue(query, "opportunity_id", filters.opportunity_id);
+  appendQueryValue(query, "vencidas", filters.vencidas);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/crm/activities${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createCrmActivity({ token, empresaId, payload }) {
+  return apiRequest("/crm/activities", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updateCrmActivity({ activityId, token, empresaId, payload }) {
+  return apiRequest(`/crm/activities/${activityId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function completeCrmActivity({ activityId, token, empresaId }) {
+  return apiRequest(`/crm/activities/${activityId}/complete`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function deactivateCrmActivity({ activityId, token, empresaId }) {
+  return apiRequest(`/crm/activities/${activityId}/deactivate`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
 export function getSuperadminOverview({ token }) {
   return apiRequest("/superadmin/overview", { token });
 }
