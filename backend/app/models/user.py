@@ -1,10 +1,10 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
-from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin, utcnow
 
 
 class Usuario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -32,6 +32,7 @@ class Usuario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     memberships = relationship("EmpresaUsuario", back_populates="usuario", cascade="all, delete-orphan")
     audit_logs = relationship("AuditLog", back_populates="usuario")
+    password_reset_tokens = relationship("PasswordResetToken", back_populates="usuario", cascade="all, delete-orphan")
 
 
 class EmpresaUsuario(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -107,3 +108,25 @@ class PendingRegistration(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PasswordResetToken(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "password_reset_tokens"
+    __table_args__ = (
+        Index("ix_password_reset_tokens_usuario_id", "usuario_id"),
+        Index("uq_password_reset_tokens_token_hash", "token_hash", unique=True),
+    )
+
+    usuario_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    phone_e164: Mapped[str] = mapped_column(String(20), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+
+    usuario = relationship("Usuario", back_populates="password_reset_tokens")

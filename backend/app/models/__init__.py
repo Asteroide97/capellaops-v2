@@ -54,7 +54,7 @@ from app.models.procurement import (
     Requisicion,
     RequisicionDetalle,
 )
-from app.models.user import EmpresaUsuario, EmpresaUsuarioInvitacion, PendingRegistration, Usuario
+from app.models.user import EmpresaUsuario, EmpresaUsuarioInvitacion, PasswordResetToken, PendingRegistration, Usuario
 
 __all__ = [
     "Almacen",
@@ -103,6 +103,7 @@ __all__ = [
     "PMTareaDependencia",
     "PMTarea",
     "PMTimeEntry",
+    "PasswordResetToken",
     "PendingRegistration",
     "Plan",
     "PosTurnoCaja",

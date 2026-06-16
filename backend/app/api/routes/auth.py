@@ -9,18 +9,30 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.catalog import ALLOWED_PLAN_CODES, PLAN_CATALOG
 from app.core.config import get_settings
-from app.core.security import create_access_token, get_password_hash, verify_password
+from app.core.security import (
+    create_access_token,
+    generate_secret_token,
+    get_password_hash,
+    hash_secret_token,
+    verify_password,
+)
 from app.db.session import get_db
-from app.models import AuditLog, Empresa, EmpresaUsuario, PendingRegistration, Plan, Usuario
+from app.models import AuditLog, Empresa, EmpresaUsuario, PasswordResetToken, PendingRegistration, Plan, Usuario
 from app.schemas.auth import (
     LoginRequest,
+    PasswordResetCompleteRequest,
+    PasswordResetCompleteResponse,
+    PasswordResetGenericResponse,
+    PasswordResetStartRequest,
+    PasswordResetVerifyRequest,
+    PasswordResetVerifyResponse,
     RegisterStartRequest,
     RegisterStartResponse,
     RegisterVerifyRequest,
     TokenResponse,
 )
 from app.schemas.common import EmpresaSummary, MembershipSummary, UserSummary
-from app.services.phone import PhoneValidationError, mask_phone, normalize_phone
+from app.services.phone import PhoneValidationError, mask_phone, normalize_phone, normalize_phone_e164
 from app.services.recaptcha import (
     RecaptchaConfigurationError,
     RecaptchaServiceError,
@@ -38,6 +50,8 @@ from app.services.twilio_verify import (
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+PASSWORD_RESET_TOKEN_TTL_MINUTES = 15
+PASSWORD_RESET_START_MESSAGE = "Si los datos coinciden, enviaremos un codigo de verificacion."
 
 
 def slugify(value: str) -> str:
@@ -111,6 +125,35 @@ def get_pending_registration_by_phone(db: Session, phone_e164: str) -> PendingRe
             PendingRegistration.status == "pending",
         )
     )
+
+
+def get_user_by_email(db: Session, email: str) -> Usuario | None:
+    return db.scalar(select(Usuario).where(Usuario.email == normalize_email(email)))
+
+
+def get_active_user_for_password_reset(db: Session, email: str, phone: str) -> tuple[Usuario | None, str | None]:
+    try:
+        normalized_phone = normalize_phone_e164(phone)
+    except PhoneValidationError:
+        return None, None
+
+    user = get_user_by_email(db, email)
+    if not user or not user.is_active or not user.phone_e164:
+        return None, normalized_phone["phone_e164"]
+    if user.phone_e164 != normalized_phone["phone_e164"]:
+        return None, normalized_phone["phone_e164"]
+    return user, normalized_phone["phone_e164"]
+
+
+def invalidate_password_reset_tokens(db: Session, user_id: str, now: datetime) -> None:
+    tokens = db.scalars(
+        select(PasswordResetToken).where(
+            PasswordResetToken.usuario_id == user_id,
+            PasswordResetToken.used_at.is_(None),
+        )
+    ).all()
+    for token in tokens:
+        token.used_at = now
 
 
 def build_token_response(user: Usuario, empresa: Empresa, membership: EmpresaUsuario) -> TokenResponse:
@@ -516,3 +559,124 @@ def login(
     db.commit()
 
     return build_token_response(user, selected_membership.empresa, selected_membership)
+
+
+@router.post("/password-reset/start", response_model=PasswordResetGenericResponse)
+def password_reset_start(
+    payload: PasswordResetStartRequest,
+    db: Session = Depends(get_db),
+) -> PasswordResetGenericResponse:
+    user, phone_e164 = get_active_user_for_password_reset(db, payload.email, payload.phone)
+    if user and phone_e164:
+        try:
+            start_phone_verification(phone_e164)
+        except (TwilioVerifyConfigurationError, TwilioVerifyServiceError):
+            pass
+
+    return PasswordResetGenericResponse(ok=True, message=PASSWORD_RESET_START_MESSAGE)
+
+
+@router.post("/password-reset/verify", response_model=PasswordResetVerifyResponse)
+def password_reset_verify(
+    payload: PasswordResetVerifyRequest,
+    db: Session = Depends(get_db),
+) -> PasswordResetVerifyResponse:
+    now = datetime.now(timezone.utc)
+    user, phone_e164 = get_active_user_for_password_reset(db, payload.email, payload.phone)
+    if not user or not phone_e164:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No se pudo validar el codigo.",
+        )
+
+    try:
+        is_valid_code = check_phone_verification(phone_e164, payload.code)
+    except TwilioVerifyInvalidCodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No se pudo validar el codigo.",
+        ) from exc
+    except TwilioVerifyConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    except TwilioVerifyServiceError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    if not is_valid_code:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No se pudo validar el codigo.",
+        )
+
+    invalidate_password_reset_tokens(db, user.id, now)
+
+    reset_token = generate_secret_token()
+    db.add(
+        PasswordResetToken(
+            usuario_id=user.id,
+            token_hash=hash_secret_token(reset_token),
+            phone_e164=phone_e164,
+            expires_at=now + timedelta(minutes=PASSWORD_RESET_TOKEN_TTL_MINUTES),
+        )
+    )
+    db.commit()
+
+    return PasswordResetVerifyResponse(
+        reset_token=reset_token,
+        expires_in_minutes=PASSWORD_RESET_TOKEN_TTL_MINUTES,
+    )
+
+
+@router.post("/password-reset/complete", response_model=PasswordResetCompleteResponse)
+def password_reset_complete(
+    payload: PasswordResetCompleteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> PasswordResetCompleteResponse:
+    now = datetime.now(timezone.utc)
+    token_hash = hash_secret_token(payload.reset_token)
+    reset_token = db.scalar(
+        select(PasswordResetToken).where(
+            PasswordResetToken.token_hash == token_hash,
+            PasswordResetToken.used_at.is_(None),
+        )
+    )
+    if not reset_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El token para restablecer la contrasena no es valido o expiro.",
+        )
+
+    expires_at = ensure_utc(reset_token.expires_at)
+    if expires_at is None or expires_at <= now:
+        reset_token.used_at = now
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El token para restablecer la contrasena no es valido o expiro.",
+        )
+
+    user = db.get(Usuario, reset_token.usuario_id)
+    if not user or not user.is_active:
+        reset_token.used_at = now
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El token para restablecer la contrasena no es valido o expiro.",
+        )
+
+    user.password_hash = get_password_hash(payload.new_password)
+    reset_token.used_at = now
+    db.add(
+        AuditLog(
+            empresa_id=None,
+            usuario_id=user.id,
+            action="auth.password_reset.complete",
+            entity_name="usuario",
+            entity_id=user.id,
+            ip_address=request.client.host if request.client else None,
+            metadata_json={"phone_e164": reset_token.phone_e164},
+        )
+    )
+    db.commit()
+
+    return PasswordResetCompleteResponse(ok=True, message="Contrasena actualizada.")

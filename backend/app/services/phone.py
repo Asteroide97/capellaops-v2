@@ -47,6 +47,21 @@ def normalize_phone(country_code: str, phone_number: str) -> dict[str, str]:
     }
 
 
+def normalize_phone_e164(phone: str) -> dict[str, str]:
+    raw_value = (phone or "").strip().replace(" ", "")
+    if not raw_value:
+        raise PhoneValidationError("Numero de telefono invalido.")
+
+    digits = re.sub(r"\D", "", raw_value)
+    phone_e164 = f"+{digits}"
+
+    total_digits = len(phone_e164) - 1
+    if total_digits < 8 or total_digits > 15 or not validate_phone_e164(phone_e164):
+        raise PhoneValidationError("Numero de telefono invalido.")
+
+    return {"phone_e164": phone_e164}
+
+
 def mask_phone(phone_e164: str, country_code: str | None = None) -> str:
     if not phone_e164:
         return ""

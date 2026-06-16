@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 
 import jwt
 from pwdlib import PasswordHash
@@ -15,6 +17,14 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def get_password_hash(password: str) -> str:
     return password_hash.hash(password)
+
+
+def generate_secret_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def hash_secret_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
 def build_token_expiration(expires_minutes: int | None = None) -> datetime:

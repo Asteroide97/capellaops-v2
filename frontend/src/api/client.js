@@ -254,6 +254,40 @@ export async function uploadFormDataRequest(path, { formData, token, empresaId }
 }
 
 
+export function startPasswordReset(payload) {
+  return apiRequest("/auth/password-reset/start", {
+    method: "POST",
+    body: {
+      email: payload.email,
+      phone: payload.phone,
+    },
+  });
+}
+
+
+export function verifyPasswordReset(payload) {
+  return apiRequest("/auth/password-reset/verify", {
+    method: "POST",
+    body: {
+      email: payload.email,
+      phone: payload.phone,
+      code: payload.code,
+    },
+  });
+}
+
+
+export function completePasswordReset(payload) {
+  return apiRequest("/auth/password-reset/complete", {
+    method: "POST",
+    body: {
+      reset_token: payload.reset_token,
+      new_password: payload.new_password,
+    },
+  });
+}
+
+
 function extractFilenameFromDisposition(value, fallback = "documento.pdf") {
   const disposition = String(value || "");
   const utfMatch = disposition.match(/filename\*=UTF-8''([^;]+)/i);

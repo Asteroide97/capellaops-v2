@@ -229,6 +229,14 @@ textarea {
   color: var(--success);
 }
 
+.auth-success-banner {
+  margin: 0;
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(21, 128, 61, 0.14);
+  background: rgba(240, 253, 244, 0.9);
+}
+
 .security-note {
   display: grid;
   gap: 0.25rem;
@@ -339,6 +347,32 @@ textarea {
   color: var(--danger);
   font-size: 0.86rem;
   font-weight: 500;
+}
+
+.auth-inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.auth-inline-link {
+  font-weight: 600;
+}
+
+.auth-reset-summary {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border-soft);
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text-secondary);
+}
+
+.auth-reset-summary strong {
+  color: var(--text-primary);
 }
 
 .password-field {
