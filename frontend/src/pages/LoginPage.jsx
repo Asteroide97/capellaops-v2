@@ -10,12 +10,13 @@ import { useAuth } from "../auth/AuthContext";
 
 
 const RESET_START_MESSAGE = "Si los datos coinciden, enviaremos un codigo de verificacion.";
+const MEXICO_COUNTRY_CODE = "+52";
 
 
 function buildInitialResetForm(email = "") {
   return {
     email,
-    phone: "",
+    phoneDigits: "",
     code: "",
     newPassword: "",
     confirmPassword: "",
@@ -25,7 +26,7 @@ function buildInitialResetForm(email = "") {
 
 function getResetErrorMessage(step, error) {
   if (step === 1) {
-    return "No pudimos enviar el codigo en este momento. Intenta nuevamente.";
+    return "No pudimos continuar en este momento. Revisa los datos e intenta nuevamente.";
   }
 
   if (step === 2) {
@@ -37,6 +38,31 @@ function getResetErrorMessage(step, error) {
   }
 
   return "No se pudo actualizar la contrasena en este momento. Intenta nuevamente.";
+}
+
+
+function sanitizeMexPhone(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 10);
+}
+
+
+function formatMexPhone(value) {
+  const digits = sanitizeMexPhone(value);
+  if (!digits) {
+    return "";
+  }
+
+  const part1 = digits.slice(0, 3);
+  const part2 = digits.slice(3, 6);
+  const part3 = digits.slice(6, 10);
+
+  return [part1, part2, part3].filter(Boolean).join(" ");
+}
+
+
+function buildMexPhoneE164(phoneDigits) {
+  const digits = sanitizeMexPhone(phoneDigits);
+  return `${MEXICO_COUNTRY_CODE}${digits}`;
 }
 
 
@@ -98,7 +124,7 @@ export default function LoginPage() {
     setLoginSuccess("");
     setResetForm((current) => ({
       ...buildInitialResetForm(form.email.trim() || current.email),
-      phone: current.phone,
+      phoneDigits: current.phoneDigits,
     }));
   }
 
@@ -124,10 +150,17 @@ export default function LoginPage() {
 
     try {
       if (resetStep === 1) {
+        const cleanPhone = sanitizeMexPhone(resetForm.phoneDigits);
+        if (cleanPhone.length !== 10) {
+          setResetError("Ingresa un telefono valido de 10 digitos.");
+          return;
+        }
+
         const response = await startPasswordReset({
           email: resetForm.email.trim(),
-          phone: resetForm.phone.trim(),
+          phone: buildMexPhoneE164(cleanPhone),
         });
+        updateResetField("phoneDigits", cleanPhone);
         setResetNotice(response.message || RESET_START_MESSAGE);
         setResetStep(2);
         return;
@@ -136,7 +169,7 @@ export default function LoginPage() {
       if (resetStep === 2) {
         const response = await verifyPasswordReset({
           email: resetForm.email.trim(),
-          phone: resetForm.phone.trim(),
+          phone: buildMexPhoneE164(resetForm.phoneDigits),
           code: resetForm.code.trim(),
         });
         setResetToken(response.reset_token);
@@ -295,14 +328,20 @@ export default function LoginPage() {
 
               <label>
                 Telefono
-                <input
-                  autoComplete="tel"
-                  onChange={(event) => updateResetField("phone", event.target.value)}
-                  placeholder="+528711234567"
-                  required
-                  type="tel"
-                  value={resetForm.phone}
-                />
+                <div className="auth-phone-input-group">
+                  <span className="auth-phone-prefix">{MEXICO_COUNTRY_CODE}</span>
+                  <input
+                    autoComplete="tel"
+                    inputMode="numeric"
+                    maxLength={12}
+                    onChange={(event) => updateResetField("phoneDigits", sanitizeMexPhone(event.target.value))}
+                    placeholder="811 254 8064"
+                    required
+                    type="tel"
+                    value={formatMexPhone(resetForm.phoneDigits)}
+                  />
+                </div>
+                <span className="field-hint">Captura 10 digitos. Puedes pegarlo con espacios, guiones o parentesis.</span>
               </label>
             </div>
           ) : null}
@@ -319,7 +358,7 @@ export default function LoginPage() {
                   <strong>Correo:</strong> {resetForm.email}
                 </span>
                 <span>
-                  <strong>Telefono:</strong> {resetForm.phone}
+                  <strong>Telefono:</strong> {`${MEXICO_COUNTRY_CODE} ${formatMexPhone(resetForm.phoneDigits)}`}
                 </span>
               </div>
 

@@ -375,6 +375,38 @@ textarea {
   color: var(--text-primary);
 }
 
+.auth-phone-input-group {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.auth-phone-prefix {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100%;
+  padding: 0.95rem 0.9rem;
+  border-right: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.auth-phone-input-group input {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.auth-phone-input-group input:focus {
+  outline: none;
+}
+
 .password-field {
   position: relative;
   display: flex;

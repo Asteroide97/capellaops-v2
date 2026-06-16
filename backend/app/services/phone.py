@@ -53,7 +53,10 @@ def normalize_phone_e164(phone: str) -> dict[str, str]:
         raise PhoneValidationError("Numero de telefono invalido.")
 
     digits = re.sub(r"\D", "", raw_value)
-    phone_e164 = f"+{digits}"
+    if len(digits) == 10:
+        phone_e164 = f"+52{digits}"
+    else:
+        phone_e164 = f"+{digits}"
 
     total_digits = len(phone_e164) - 1
     if total_digits < 8 or total_digits > 15 or not validate_phone_e164(phone_e164):
