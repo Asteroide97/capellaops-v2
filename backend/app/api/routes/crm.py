@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import Callable, Literal, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -92,12 +93,25 @@ def run_crm_write(db: Session, action: str, operation: Callable[[], T]) -> T:
         ) from exc
 
 
+def run_crm_read(action: str, operation: Callable[[], T]) -> T:
+    try:
+        return operation()
+    except HTTPException:
+        raise
+    except SQLAlchemyError as exc:
+        logger.exception("Error de consulta en CRM durante %s.", action)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo consultar la informacion de CRM.",
+        ) from exc
+
+
 @router.get("/summary", response_model=CRMSummaryResponse)
 def crm_summary(
     context: TenantContext = Depends(get_crm_context),
     db: Session = Depends(get_db),
 ) -> CRMSummaryResponse:
-    return build_crm_summary(db, context.empresa.id)
+    return run_crm_read("summary", lambda: build_crm_summary(db, context.empresa.id))
 
 
 @router.get("/clients", response_model=CRMClientListResponse)
@@ -497,28 +511,40 @@ def crm_activities(
     tipo: Literal["llamada", "email", "reunion", "tarea", "nota", "whatsapp", "otro"] | None = None,
     completada: bool | None = None,
     activo: bool | None = None,
-    client_id: str | None = None,
-    opportunity_id: str | None = None,
+    cliente_id: str | None = None,
+    client_id: str | None = Query(default=None, include_in_schema=False),
+    oportunidad_id: str | None = None,
+    opportunity_id: str | None = Query(default=None, include_in_schema=False),
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
     vencidas: bool = False,
     limit: int = Query(default=25, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     context: TenantContext = Depends(get_crm_context),
     db: Session = Depends(get_db),
 ) -> CRMActivityListResponse:
-    total, items = list_activities(
-        db,
-        context.empresa.id,
-        q=q,
-        tipo=tipo,
-        completada=completada,
-        activo=activo,
-        client_id=client_id,
-        opportunity_id=opportunity_id,
-        overdue_only=vencidas,
-        limit=limit,
-        offset=offset,
-    )
-    return CRMActivityListResponse(items=items, total=total, limit=limit, offset=offset)
+    resolved_client_id = cliente_id or client_id
+    resolved_opportunity_id = oportunidad_id or opportunity_id
+
+    def operation() -> CRMActivityListResponse:
+        total, items = list_activities(
+            db,
+            context.empresa.id,
+            q=q,
+            tipo=tipo,
+            completada=completada,
+            activo=activo,
+            client_id=resolved_client_id,
+            opportunity_id=resolved_opportunity_id,
+            fecha_desde=fecha_desde,
+            fecha_hasta=fecha_hasta,
+            overdue_only=vencidas,
+            limit=limit,
+            offset=offset,
+        )
+        return CRMActivityListResponse(items=items, total=total, limit=limit, offset=offset)
+
+    return run_crm_read("activities", operation)
 
 
 @router.post("/activities", response_model=CRMActivityItem, status_code=status.HTTP_201_CREATED)

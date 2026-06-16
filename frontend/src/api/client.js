@@ -2712,8 +2712,10 @@ export function listCrmActivities({ token, empresaId, filters = {} }) {
   appendQueryValue(query, "tipo", filters.tipo);
   appendQueryValue(query, "completada", filters.completada);
   appendQueryValue(query, "activo", filters.activo);
-  appendQueryValue(query, "client_id", filters.client_id);
-  appendQueryValue(query, "opportunity_id", filters.opportunity_id);
+  appendQueryValue(query, "cliente_id", filters.cliente_id ?? filters.client_id);
+  appendQueryValue(query, "oportunidad_id", filters.oportunidad_id ?? filters.opportunity_id);
+  appendQueryValue(query, "fecha_desde", filters.fecha_desde);
+  appendQueryValue(query, "fecha_hasta", filters.fecha_hasta);
   appendQueryValue(query, "vencidas", filters.vencidas);
   appendQueryValue(query, "limit", filters.limit);
   appendQueryValue(query, "offset", filters.offset);

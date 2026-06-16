@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, func, select
+from sqlalchemy import case, desc, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import AuditLog, CRMActividad, CRMCliente, CRMContacto, CRMOportunidad, Empresa, EmpresaUsuario, Usuario
@@ -127,6 +127,10 @@ def normalize_activity_type(value: str | None, *, default: str = "nota") -> str:
     if normalized not in ACTIVITY_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tipo de actividad invalido.")
     return normalized
+
+
+def nulls_last_rank(column):
+    return case((column.is_(None), 1), else_=0)
 
 
 def normalize_probability(value: int | None, *, default: int = 0) -> int:
@@ -968,6 +972,8 @@ def list_activities(
     activo: bool | None = None,
     client_id: str | None = None,
     opportunity_id: str | None = None,
+    fecha_desde: datetime | None = None,
+    fecha_hasta: datetime | None = None,
     overdue_only: bool = False,
     limit: int = 25,
     offset: int = 0,
@@ -994,6 +1000,10 @@ def list_activities(
         query = query.where(CRMActividad.cliente_id == client_id)
     if opportunity_id:
         query = query.where(CRMActividad.oportunidad_id == opportunity_id)
+    if fecha_desde is not None:
+        query = query.where(CRMActividad.fecha_actividad >= ensure_utc_datetime(fecha_desde))
+    if fecha_hasta is not None:
+        query = query.where(CRMActividad.fecha_actividad <= ensure_utc_datetime(fecha_hasta))
     if overdue_only:
         query = query.where(
             CRMActividad.activo == True,
@@ -1005,7 +1015,7 @@ def list_activities(
     items = db.scalars(
         query.order_by(
             CRMActividad.completada.asc(),
-            CRMActividad.fecha_vencimiento.is_(None),
+            nulls_last_rank(CRMActividad.fecha_vencimiento).asc(),
             CRMActividad.fecha_vencimiento.asc(),
             desc(CRMActividad.fecha_actividad),
         )
@@ -1296,7 +1306,7 @@ def build_crm_summary(db: Session, empresa_id: str) -> CRMSummaryResponse:
             CRMActividad.completada == False,
         )
         .order_by(
-            CRMActividad.fecha_vencimiento.is_(None),
+            nulls_last_rank(CRMActividad.fecha_vencimiento).asc(),
             CRMActividad.fecha_vencimiento.asc(),
             desc(CRMActividad.fecha_actividad),
         )
