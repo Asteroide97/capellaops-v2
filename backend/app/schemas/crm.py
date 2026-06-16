@@ -73,6 +73,33 @@ class CRMClientListResponse(BaseModel):
     offset: int
 
 
+class CRMClientTimelineItem(BaseModel):
+    tipo: str
+    fecha: datetime
+    titulo: str
+    descripcion: str | None = None
+    monto: Decimal | None = None
+    estatus: str | None = None
+    referencia_id: str
+
+
+class CRMClientTimelineResponse(BaseModel):
+    items: list[CRMClientTimelineItem]
+
+
+class CRMClientCommercialSummaryResponse(BaseModel):
+    client_id: str
+    total_ventas_pos: Decimal = Decimal("0")
+    ventas_count: int = 0
+    proyectos_count: int = 0
+    proyectos_activos: int = 0
+    oportunidades_abiertas: int = 0
+    monto_pipeline: Decimal = Decimal("0")
+    facturas_solicitadas: int = 0
+    actividades_pendientes: int = 0
+    ultima_actividad_at: datetime | None = None
+
+
 class CRMContactCreateRequest(BaseModel):
     nombre: str = Field(min_length=1, max_length=160)
     puesto: str | None = Field(default=None, max_length=120)

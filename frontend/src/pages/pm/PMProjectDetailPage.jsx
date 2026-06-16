@@ -37,6 +37,9 @@ import {
   getPmProjectMaterials,
   getPmProjectPlanning,
   getPmProjectWorkCalendar,
+  linkPmProjectToCrm,
+  listCrmClientContacts,
+  listCrmClients,
   listPmProjectBaselines,
   listPmProjectMembers,
   listPmProjectAlerts,
@@ -44,6 +47,7 @@ import {
   refreshPmProjectPlanning,
   resolvePmAlert,
   submitPmProjectChange,
+  unlinkPmProjectFromCrm,
   updatePmProjectWorkCalendar,
   updatePmTaskDates,
   updatePmTask,
@@ -117,6 +121,11 @@ const defaultMemberForm = {
   rol_en_proyecto: "colaborador",
 };
 
+const defaultCrmLinkForm = {
+  cliente_id: "",
+  contacto_id: "",
+};
+
 
 function PlaceholderView({ title, note }) {
   return (
@@ -166,6 +175,34 @@ function formatTaskTitleList(items) {
     return `${titles[0]} y ${titles[1]}`;
   }
   return `${titles[0]}, ${titles[1]} y ${titles.length - 2} más`;
+}
+
+
+function getCrmClientOptionLabel(client) {
+  const name = client?.nombre_comercial || client?.razon_social || "Sin cliente";
+  const suffix = client?.rfc ? ` • ${client.rfc}` : "";
+  const inactiveTag = client?.estatus === "inactivo" ? " (inactivo)" : "";
+  return `${name}${suffix}${inactiveTag}`;
+}
+
+
+function getCrmContactOptionLabel(contact) {
+  const name = contact?.nombre || "Sin contacto";
+  const role = contact?.puesto ? ` • ${contact.puesto}` : "";
+  const principalTag = contact?.principal ? " • Principal" : "";
+  return `${name}${role}${principalTag}`;
+}
+
+
+function getPmUiError(requestError, fallback) {
+  const rawMessage = String(requestError?.message ?? "").trim();
+  if (!rawMessage || rawMessage.startsWith("[object")) {
+    return fallback;
+  }
+  if (requestError?.status === 404) {
+    return "No se pudo cargar la información del proyecto. Intenta actualizar.";
+  }
+  return rawMessage;
 }
 
 
@@ -321,6 +358,14 @@ export default function PMProjectDetailPage() {
   const [memberModalOpen, setMemberModalOpen] = useState(false);
   const [selectedTaskModalId, setSelectedTaskModalId] = useState(null);
   const [workCalendarModalOpen, setWorkCalendarModalOpen] = useState(false);
+  const [crmLinkModalOpen, setCrmLinkModalOpen] = useState(false);
+  const [crmLinkSubmitting, setCrmLinkSubmitting] = useState(false);
+  const [crmClientsLoading, setCrmClientsLoading] = useState(false);
+  const [crmContactsLoading, setCrmContactsLoading] = useState(false);
+  const [crmClientSearch, setCrmClientSearch] = useState("");
+  const [crmClientOptions, setCrmClientOptions] = useState([]);
+  const [crmContactOptions, setCrmContactOptions] = useState([]);
+  const [crmLinkForm, setCrmLinkForm] = useState(defaultCrmLinkForm);
   const [calendarSaving, setCalendarSaving] = useState(false);
   const [rescheduleModalState, setRescheduleModalState] = useState({
     open: false,
@@ -497,6 +542,186 @@ export default function PMProjectDetailPage() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+    }
+  }
+
+  async function refreshProjectIdentity() {
+    if (!token || !empresaId || !id) {
+      return null;
+    }
+    const response = await getPmProject({ projectId: id, token, empresaId });
+    setProject(response);
+    return response;
+  }
+
+  async function loadCrmClientsForProjectLink(query = crmClientSearch) {
+    setCrmClientsLoading(true);
+    try {
+      const response = await listCrmClients({
+        token,
+        empresaId,
+        filters: {
+          q: query,
+          limit: 50,
+          offset: 0,
+        },
+      });
+      setCrmClientOptions(response.items ?? []);
+      return response.items ?? [];
+    } finally {
+      setCrmClientsLoading(false);
+    }
+  }
+
+  async function loadCrmContactsForProjectLink(clientId, { selectedContactId = "", syncForm = true } = {}) {
+    if (!clientId) {
+      setCrmContactOptions([]);
+      if (syncForm) {
+        setCrmLinkForm((current) => ({ ...current, contacto_id: "" }));
+      }
+      return [];
+    }
+
+    setCrmContactsLoading(true);
+    try {
+      const response = await listCrmClientContacts({
+        clientId,
+        token,
+        empresaId,
+        filters: {
+          limit: 100,
+          offset: 0,
+        },
+      });
+      const items = response.items ?? [];
+      setCrmContactOptions(items);
+      if (syncForm) {
+        const suggestedContactId =
+          selectedContactId ||
+          items.find((item) => item.principal && item.activo !== false)?.id ||
+          items.find((item) => item.activo !== false)?.id ||
+          "";
+        setCrmLinkForm((current) => ({ ...current, contacto_id: suggestedContactId }));
+      }
+      return items;
+    } finally {
+      setCrmContactsLoading(false);
+    }
+  }
+
+  function closeCrmLinkModal() {
+    setCrmLinkModalOpen(false);
+    setCrmClientSearch("");
+    setCrmClientOptions([]);
+    setCrmContactOptions([]);
+    setCrmLinkForm(defaultCrmLinkForm);
+  }
+
+  async function openCrmLinkModal() {
+    if (!project?.id) {
+      setError("Selecciona un proyecto para ligar el cliente CRM.");
+      return;
+    }
+
+    const initialSearch = project.crm_cliente_nombre || "";
+    setCrmLinkModalOpen(true);
+    setCrmClientSearch(initialSearch);
+    setCrmClientOptions([]);
+    setCrmContactOptions([]);
+    setCrmLinkForm({
+      cliente_id: project.crm_cliente_id || "",
+      contacto_id: project.crm_contacto_id || "",
+    });
+    setError("");
+    setSuccess("");
+
+    try {
+      await loadCrmClientsForProjectLink(initialSearch);
+      if (project.crm_cliente_id) {
+        await loadCrmContactsForProjectLink(project.crm_cliente_id, {
+          selectedContactId: project.crm_contacto_id || "",
+          syncForm: false,
+        });
+      }
+    } catch (requestError) {
+      setError(getPmUiError(requestError, "No se pudo cargar la información del CRM."));
+    }
+  }
+
+  async function handleCrmClientSearch(event) {
+    event?.preventDefault?.();
+    try {
+      await loadCrmClientsForProjectLink(crmClientSearch);
+    } catch (requestError) {
+      setError(getPmUiError(requestError, "No se pudo cargar la información del CRM."));
+    }
+  }
+
+  async function handleCrmClientChange(clientId) {
+    setCrmLinkForm((current) => ({ ...current, cliente_id: clientId, contacto_id: "" }));
+    try {
+      await loadCrmContactsForProjectLink(clientId);
+    } catch (requestError) {
+      setError(getPmUiError(requestError, "No se pudo cargar la información del CRM."));
+    }
+  }
+
+  async function handleSaveCrmProjectLink(event) {
+    event.preventDefault();
+    if (!project?.id) {
+      setError("Selecciona un proyecto para ligar el cliente CRM.");
+      return;
+    }
+    if (!crmLinkForm.cliente_id) {
+      setError("Selecciona un cliente CRM.");
+      return;
+    }
+
+    setCrmLinkSubmitting(true);
+    setError("");
+    setSuccess("");
+    try {
+      await linkPmProjectToCrm({
+        projectId: project.id,
+        token,
+        empresaId,
+        payload: {
+          cliente_id: crmLinkForm.cliente_id,
+          contacto_id: crmLinkForm.contacto_id || null,
+        },
+      });
+      await refreshProjectIdentity();
+      closeCrmLinkModal();
+      setSuccess("Proyecto ligado a cliente CRM.");
+    } catch (requestError) {
+      setError(getPmUiError(requestError, "No se pudo guardar el vínculo CRM."));
+    } finally {
+      setCrmLinkSubmitting(false);
+    }
+  }
+
+  async function handleUnlinkCrmProject() {
+    if (!project?.id) {
+      setError("Selecciona un proyecto para quitar el vínculo CRM.");
+      return;
+    }
+
+    setCrmLinkSubmitting(true);
+    setError("");
+    setSuccess("");
+    try {
+      await unlinkPmProjectFromCrm({
+        projectId: project.id,
+        token,
+        empresaId,
+      });
+      await refreshProjectIdentity();
+      closeCrmLinkModal();
+      setSuccess("Vínculo CRM eliminado.");
+    } catch (requestError) {
+      setError(getPmUiError(requestError, "No se pudo quitar el vínculo CRM."));
+    } finally {
+      setCrmLinkSubmitting(false);
     }
   }
 
@@ -719,6 +944,46 @@ export default function PMProjectDetailPage() {
   const projectEditable = isPmProjectEditable(project);
   const canManageActiveProjectUi = canManagePmUi && projectEditable;
   const canEditActiveProjectUi = canEditProjectUi && projectEditable;
+  const canEditCrmLinkUi = canEditProjectUi;
+
+  const crmClientSelectOptions = useMemo(() => {
+    if (
+      crmLinkForm.cliente_id &&
+      project?.crm_cliente_nombre &&
+      !crmClientOptions.some((item) => item.id === crmLinkForm.cliente_id)
+    ) {
+      return [
+        {
+          id: crmLinkForm.cliente_id,
+          nombre_comercial: project.crm_cliente_nombre,
+          razon_social: project.crm_cliente_nombre,
+          rfc: null,
+          estatus: "activo",
+        },
+        ...crmClientOptions,
+      ];
+    }
+    return crmClientOptions;
+  }, [crmClientOptions, crmLinkForm.cliente_id, project?.crm_cliente_nombre]);
+
+  const crmContactSelectOptions = useMemo(() => {
+    if (
+      crmLinkForm.contacto_id &&
+      project?.crm_contacto_nombre &&
+      !crmContactOptions.some((item) => item.id === crmLinkForm.contacto_id)
+    ) {
+      return [
+        {
+          id: crmLinkForm.contacto_id,
+          nombre: project.crm_contacto_nombre,
+          puesto: null,
+          principal: false,
+        },
+        ...crmContactOptions,
+      ];
+    }
+    return crmContactOptions;
+  }, [crmContactOptions, crmLinkForm.contacto_id, project?.crm_contacto_nombre]);
 
   const alertItems = useMemo(() => {
     const items = [];
@@ -1274,6 +1539,10 @@ export default function PMProjectDetailPage() {
             <strong>{safeDisplayText(project.cliente_nombre_snapshot, "Sin cliente")}</strong>
           </div>
           <div className="pm-project-header-item">
+            <span>Cliente CRM</span>
+            <strong>{safeDisplayText(project.crm_cliente_nombre, "Sin cliente CRM ligado")}</strong>
+          </div>
+          <div className="pm-project-header-item">
             <span>Inicio</span>
             <strong>{safeDisplayText(formatDate(project.fecha_inicio), "—")}</strong>
           </div>
@@ -1339,6 +1608,40 @@ export default function PMProjectDetailPage() {
 
       {activeView === "general" ? (
         <div className="inventory-content-grid inventory-content-grid-2">
+          <DataCard
+            actions={
+              canEditCrmLinkUi ? (
+                <div className="inventory-actions">
+                  <ActionButton onClick={openCrmLinkModal} tone="primary" type="button">
+                    {project.crm_cliente_id ? "Cambiar" : "Ligar cliente CRM"}
+                  </ActionButton>
+                  {project.crm_cliente_id ? (
+                    <ActionButton disabled={crmLinkSubmitting} onClick={handleUnlinkCrmProject} tone="danger" type="button">
+                      {crmLinkSubmitting ? "Quitando..." : "Quitar vínculo"}
+                    </ActionButton>
+                  ) : null}
+                </div>
+              ) : null
+            }
+            subtitle="Vínculo comercial del proyecto con cliente y contacto CRM."
+            title="Cliente CRM"
+          >
+            {project.crm_cliente_id ? (
+              <div className="pm-meta-list">
+                <div>
+                  <strong>Cliente CRM</strong>
+                  <span>{safeDisplayText(project.crm_cliente_nombre, "Sin cliente CRM")}</span>
+                </div>
+                <div>
+                  <strong>Contacto CRM</strong>
+                  <span>{safeDisplayText(project.crm_contacto_nombre, "Sin contacto CRM")}</span>
+                </div>
+              </div>
+            ) : (
+              <EmptyState compact note="Sin cliente CRM ligado." title="Sin vínculo comercial" />
+            )}
+          </DataCard>
+
           <DataCard subtitle="Contexto y objetivos del proyecto." title="Resumen del proyecto">
             <div className="pm-meta-list">
               <div>
@@ -1850,6 +2153,99 @@ export default function PMProjectDetailPage() {
       {activeView === "portal" ? (
         <PMProjectPortalTab empresaId={empresaId} canManage={canManagePmUi} project={project} projectEditable={projectEditable} projectId={id} token={token} />
       ) : null}
+
+      <ModalShell
+        footer={
+          <div className="inventory-actions inventory-actions-wrap">
+            <ActionButton disabled={crmLinkSubmitting} onClick={closeCrmLinkModal} type="button">
+              Cerrar
+            </ActionButton>
+            <ActionButton disabled={crmLinkSubmitting || !crmLinkForm.cliente_id} form="pm-project-crm-link-form" tone="primary" type="submit">
+              {crmLinkSubmitting ? "Guardando..." : "Guardar vínculo"}
+            </ActionButton>
+          </div>
+        }
+        onClose={closeCrmLinkModal}
+        open={crmLinkModalOpen}
+        size="lg"
+        subtitle="Guarda el vínculo comercial del proyecto con un cliente y contacto CRM. No modifica presupuesto, tareas, estimaciones ni materiales."
+        title="Ligar cliente CRM"
+      >
+        <form className="inventory-modal-form" id="pm-project-crm-link-form" onSubmit={handleSaveCrmProjectLink}>
+          <section className="inventory-form-section">
+            <FormGrid>
+              <Field label="Buscar cliente" span={2}>
+                <div className="pm-crm-search-row">
+                  <input
+                    onChange={(event) => setCrmClientSearch(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleCrmClientSearch();
+                      }
+                    }}
+                    placeholder="Nombre comercial, razón social o RFC"
+                    type="text"
+                    value={crmClientSearch}
+                  />
+                  <ActionButton disabled={crmClientsLoading} onClick={handleCrmClientSearch} type="button">
+                    {crmClientsLoading ? "Buscando..." : "Buscar"}
+                  </ActionButton>
+                </div>
+              </Field>
+
+              <Field label="Cliente CRM" span={2}>
+                <select onChange={(event) => handleCrmClientChange(event.target.value)} value={crmLinkForm.cliente_id}>
+                  <option value="">Selecciona un cliente CRM</option>
+                  {crmClientSelectOptions.map((client) => (
+                    <option key={client.id} value={client.id}>
+                      {getCrmClientOptionLabel(client)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Contacto opcional" span={2}>
+                <select
+                  disabled={!crmLinkForm.cliente_id || crmContactsLoading}
+                  onChange={(event) => setCrmLinkForm((current) => ({ ...current, contacto_id: event.target.value }))}
+                  value={crmLinkForm.contacto_id}
+                >
+                  <option value="">Sin contacto</option>
+                  {crmContactSelectOptions.map((contact) => (
+                    <option key={contact.id} value={contact.id}>
+                      {getCrmContactOptionLabel(contact)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </FormGrid>
+
+            <div className="pm-project-header-grid">
+              <div className="pm-project-header-item">
+                <span>Proyecto</span>
+                <strong>{safeDisplayText(project.nombre, "Proyecto PM")}</strong>
+              </div>
+              <div className="pm-project-header-item">
+                <span>Cliente actual</span>
+                <strong>{safeDisplayText(project.crm_cliente_nombre, "Sin cliente CRM ligado")}</strong>
+              </div>
+              <div className="pm-project-header-item">
+                <span>Contacto actual</span>
+                <strong>{safeDisplayText(project.crm_contacto_nombre, "Sin contacto CRM")}</strong>
+              </div>
+            </div>
+
+            <div className="pm-crm-link-helper">
+              {crmClientsLoading ? <p className="table-note">Buscando clientes CRM...</p> : null}
+              {!crmClientsLoading && crmClientSelectOptions.length === 0 ? (
+                <p className="table-note">No se encontraron clientes CRM con esa búsqueda.</p>
+              ) : null}
+              {crmContactsLoading ? <p className="table-note">Cargando contactos del cliente...</p> : null}
+            </div>
+          </section>
+        </form>
+      </ModalShell>
 
       <ModalShell
         footer={

@@ -56,6 +56,8 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     responsable_user_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
     responsable_nombre_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
     cliente_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
+    crm_cliente_id: Mapped[str | None] = mapped_column(ForeignKey("crm_clientes.id"), nullable=True, index=True)
+    crm_contacto_id: Mapped[str | None] = mapped_column(ForeignKey("crm_contactos.id"), nullable=True, index=True)
     presupuesto_estimado: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True, default=0, server_default="0")
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     created_by: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
@@ -83,6 +85,8 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         uselist=False,
     )
+    crm_cliente = relationship("CRMCliente", foreign_keys=[crm_cliente_id])
+    crm_contacto = relationship("CRMContacto", foreign_keys=[crm_contacto_id])
 
 
 class PMProyectoMiembro(UUIDPrimaryKeyMixin, TimestampMixin, Base):

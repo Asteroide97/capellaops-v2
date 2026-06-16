@@ -24,6 +24,7 @@ from app.schemas.pos import (
     PosTicketResponse,
     SaleCancelRequest,
     SaleCreateRequest,
+    SaleCrmLinkRequest,
     SaleListResponse,
     SaleResponse,
 )
@@ -45,10 +46,12 @@ from app.services.pos import (
     list_invoice_requests,
     list_sales,
     list_shifts,
+    link_sale_to_crm,
     open_shift,
     pay_suspended_sale,
     resume_suspended_sale,
     serialize_sale_response,
+    unlink_sale_from_crm,
     upsert_sale_invoice_request,
     validate_pos_access,
 )
@@ -330,6 +333,49 @@ def sale_detail(
 ) -> SaleResponse:
     sale = get_sale_for_company(db, context.empresa.id, sale_id)
     return serialize_sale_response(db, sale)
+
+
+@router.put("/sales/{sale_id}/crm-link", response_model=SaleResponse)
+def link_sale_to_crm_endpoint(
+    sale_id: str,
+    payload: SaleCrmLinkRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleResponse:
+    return run_pos_write(
+        db,
+        "link_sale_to_crm",
+        lambda: link_sale_to_crm(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
+            cliente_id=payload.cliente_id,
+            contacto_id=payload.contacto_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.delete("/sales/{sale_id}/crm-link", response_model=SaleResponse)
+def unlink_sale_from_crm_endpoint(
+    sale_id: str,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleResponse:
+    return run_pos_write(
+        db,
+        "unlink_sale_from_crm",
+        lambda: unlink_sale_from_crm(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.post("/sales/{sale_id}/request-invoice", response_model=PosInvoiceRequestResponse)

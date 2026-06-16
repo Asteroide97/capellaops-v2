@@ -33,6 +33,8 @@ import {
   deactivateCrmClient,
   deactivateCrmContact,
   getCrmClient,
+  getCrmClientCommercialSummary,
+  getCrmClientTimeline,
   getCrmOpportunity,
   getCrmSummary,
   listCrmActivities,
@@ -129,6 +131,19 @@ const defaultClientFilters = {
   estatus: "activo",
   limit: DEFAULT_PAGE_SIZE,
   offset: 0,
+};
+
+const defaultClientCommercialSummary = {
+  client_id: "",
+  total_ventas_pos: 0,
+  ventas_count: 0,
+  proyectos_count: 0,
+  proyectos_activos: 0,
+  oportunidades_abiertas: 0,
+  monto_pipeline: 0,
+  facturas_solicitadas: 0,
+  actividades_pendientes: 0,
+  ultima_actividad_at: null,
 };
 
 const defaultContactFilters = {
@@ -306,6 +321,93 @@ function clientTypeLabel(value) {
 
 function activityTypeLabel(value) {
   return ACTIVITY_TYPE_OPTIONS.find((option) => option.value === value)?.label || safeDisplayText(value, "Sin tipo");
+}
+
+
+function humanizeStatus(value) {
+  if (!value) {
+    return "Sin estatus";
+  }
+  return String(value)
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+
+function timelineTypeLabel(value) {
+  switch (value) {
+    case "venta_pos":
+      return "Venta POS";
+    case "proyecto_pm":
+      return "Proyecto PM";
+    case "oportunidad":
+      return "Oportunidad";
+    case "actividad":
+      return "Actividad";
+    case "solicitud_factura_pos":
+      return "Solicitud de factura";
+    default:
+      return safeDisplayText(value, "Sin tipo");
+  }
+}
+
+
+function timelineTypeTone(value) {
+  switch (value) {
+    case "venta_pos":
+      return "success";
+    case "proyecto_pm":
+      return "info";
+    case "oportunidad":
+      return "warning";
+    case "actividad":
+      return "neutral";
+    case "solicitud_factura_pos":
+      return "info";
+    default:
+      return "neutral";
+  }
+}
+
+
+function timelineStatusLabel(item) {
+  if (!item?.estatus) {
+    return "Sin estatus";
+  }
+  if (item.tipo === "oportunidad") {
+    return opportunityStageLabel(item.estatus);
+  }
+  return humanizeStatus(item.estatus);
+}
+
+
+function timelineStatusTone(item) {
+  if (!item?.estatus) {
+    return "neutral";
+  }
+  if (item.tipo === "oportunidad") {
+    return opportunityStageTone(item.estatus);
+  }
+  switch (item.estatus) {
+    case "pagada":
+    case "completada":
+    case "activo":
+    case "lista_para_facturar":
+    case "preparada":
+      return "success";
+    case "cancelada":
+    case "perdida":
+    case "descartada":
+      return "danger";
+    case "pendiente":
+    case "pendiente_datos":
+    case "suspendida":
+    case "solicitada":
+    case "en_revision":
+      return "warning";
+    default:
+      return "neutral";
+  }
 }
 
 
@@ -537,6 +639,8 @@ export default function CrmPage() {
   const [clientForm, setClientForm] = useState(defaultClientForm);
   const [clientDetailOpen, setClientDetailOpen] = useState(false);
   const [clientDetail, setClientDetail] = useState(null);
+  const [clientDetailCommercialSummary, setClientDetailCommercialSummary] = useState(defaultClientCommercialSummary);
+  const [clientDetailTimeline, setClientDetailTimeline] = useState([]);
   const [clientDetailContacts, setClientDetailContacts] = useState([]);
   const [clientDetailOpportunities, setClientDetailOpportunities] = useState([]);
   const [clientDetailActivities, setClientDetailActivities] = useState([]);
@@ -587,6 +691,72 @@ export default function CrmPage() {
       items: opportunities.filter((item) => item.etapa === stage),
     }));
   }, [opportunities, summary.pipeline_por_etapa]);
+
+  const clientCommercialMetrics = useMemo(() => ([
+    {
+      key: "total_ventas_pos",
+      label: "Total ventas POS",
+      meta: "Ventas pagadas relacionadas",
+      value: formatMoney(clientDetailCommercialSummary.total_ventas_pos),
+      tone: "success",
+    },
+    {
+      key: "ventas_count",
+      label: "Numero de ventas",
+      meta: "Ventas POS ligadas al cliente",
+      value: formatNumber(clientDetailCommercialSummary.ventas_count),
+      tone: "info",
+    },
+    {
+      key: "proyectos_count",
+      label: "Proyectos",
+      meta: "Total de proyectos vinculados",
+      value: formatNumber(clientDetailCommercialSummary.proyectos_count),
+      tone: "info",
+    },
+    {
+      key: "proyectos_activos",
+      label: "Proyectos activos",
+      meta: "Proyectos en curso",
+      value: formatNumber(clientDetailCommercialSummary.proyectos_activos),
+      tone: "warning",
+    },
+    {
+      key: "oportunidades_abiertas",
+      label: "Oportunidades abiertas",
+      meta: "Pipeline actual",
+      value: formatNumber(clientDetailCommercialSummary.oportunidades_abiertas),
+      tone: "warning",
+    },
+    {
+      key: "monto_pipeline",
+      label: "Monto pipeline",
+      meta: "Valor estimado abierto",
+      value: formatMoney(clientDetailCommercialSummary.monto_pipeline),
+      tone: "warning",
+    },
+    {
+      key: "facturas_solicitadas",
+      label: "Facturas solicitadas",
+      meta: "Solicitudes POS relacionadas",
+      value: formatNumber(clientDetailCommercialSummary.facturas_solicitadas),
+      tone: "info",
+    },
+    {
+      key: "actividades_pendientes",
+      label: "Actividades pendientes",
+      meta: "Seguimiento por hacer",
+      value: formatNumber(clientDetailCommercialSummary.actividades_pendientes),
+      tone: clientDetailCommercialSummary.actividades_pendientes > 0 ? "warning" : "success",
+    },
+    {
+      key: "ultima_actividad_at",
+      label: "Ultima actividad",
+      meta: "Actividad comercial mas reciente",
+      value: clientDetailCommercialSummary.ultima_actividad_at ? formatDateTime(clientDetailCommercialSummary.ultima_actividad_at) : "Sin actividad",
+      tone: "neutral",
+    },
+  ]), [clientDetailCommercialSummary]);
 
   async function loadSummaryData() {
     setSummaryLoading(true);
@@ -727,8 +897,10 @@ export default function CrmPage() {
   }
 
   async function loadClientDetailBundle(clientId) {
-    const [clientResponse, contactsResponse, opportunitiesResponse, activitiesResponse] = await Promise.all([
+    const [clientResponse, commercialSummaryResponse, timelineResponse, contactsResponse, opportunitiesResponse, activitiesResponse] = await Promise.all([
       getCrmClient({ clientId, token, empresaId }),
+      getCrmClientCommercialSummary({ clientId, token, empresaId }),
+      getCrmClientTimeline({ clientId, token, empresaId }),
       listCrmClientContacts({
         clientId,
         token,
@@ -747,10 +919,22 @@ export default function CrmPage() {
       }),
     ]);
     setClientDetail(clientResponse);
+    setClientDetailCommercialSummary(commercialSummaryResponse || defaultClientCommercialSummary);
+    setClientDetailTimeline(timelineResponse.items || []);
     setClientDetailContacts(contactsResponse.items || []);
     setClientDetailOpportunities(opportunitiesResponse.items || []);
     setClientDetailActivities(activitiesResponse.items || []);
     return clientResponse;
+  }
+
+  function closeClientDetailModal() {
+    setClientDetailOpen(false);
+    setClientDetail(null);
+    setClientDetailCommercialSummary(defaultClientCommercialSummary);
+    setClientDetailTimeline([]);
+    setClientDetailContacts([]);
+    setClientDetailOpportunities([]);
+    setClientDetailActivities([]);
   }
 
   useEffect(() => {
@@ -901,6 +1085,9 @@ export default function CrmPage() {
   async function openClientDetailModal(clientId) {
     setClientDetailOpen(true);
     setDetailLoading(true);
+    setClientDetail(null);
+    setClientDetailCommercialSummary(defaultClientCommercialSummary);
+    setClientDetailTimeline([]);
     setError("");
     try {
       await loadClientDetailBundle(clientId);
@@ -2331,7 +2518,7 @@ export default function CrmPage() {
       </ModalShell>
 
       <ModalShell
-        onClose={() => setClientDetailOpen(false)}
+        onClose={closeClientDetailModal}
         open={clientDetailOpen}
         size="xl"
         subtitle="Resumen comercial del cliente con contactos, oportunidades y actividades recientes."
@@ -2368,6 +2555,23 @@ export default function CrmPage() {
                 <p className="inventory-form-span-2"><strong>Notas:</strong> {safeDisplayText(clientDetail.notas, "Sin notas")}</p>
               </div>
             </section>
+
+            <DataCard
+              subtitle="Ventas POS, proyectos, pipeline, facturacion pendiente y ultima actividad."
+              title="Resumen comercial"
+            >
+              <div className="crm-stage-summary-grid">
+                {clientCommercialMetrics.map((metric) => (
+                  <article className={`crm-stage-summary-card tone-${metric.tone}`} key={metric.key}>
+                    <div>
+                      <strong>{metric.label}</strong>
+                      <span>{metric.meta}</span>
+                    </div>
+                    <b>{metric.value}</b>
+                  </article>
+                ))}
+              </div>
+            </DataCard>
 
             <section className="crm-summary-grid">
               <DataCard subtitle="Hasta 5 contactos para este cliente." title="Contactos">
@@ -2426,6 +2630,36 @@ export default function CrmPage() {
                 )}
               </DataCard>
             </section>
+
+            <DataCard
+              subtitle="Eventos operativos relacionados con ventas POS, proyectos, oportunidades, actividades y solicitudes de factura."
+              title="Timeline comercial"
+            >
+              {clientDetailTimeline.length === 0 ? (
+                <EmptyState compact note="No hay actividad comercial registrada." title="Sin timeline comercial" />
+              ) : (
+                <div className="crm-timeline-list">
+                  {clientDetailTimeline.map((item) => (
+                    <article className="crm-timeline-item" key={`${item.tipo}-${item.referencia_id}-${item.fecha}`}>
+                      <div className="crm-timeline-item-top">
+                        <div className="crm-timeline-item-headings">
+                          <div className="crm-timeline-badges">
+                            <StatusBadge tone={timelineTypeTone(item.tipo)}>{timelineTypeLabel(item.tipo)}</StatusBadge>
+                            <StatusBadge tone={timelineStatusTone(item)}>{timelineStatusLabel(item)}</StatusBadge>
+                          </div>
+                          <strong>{safeDisplayText(item.titulo, "Sin titulo")}</strong>
+                        </div>
+                        <div className="crm-timeline-item-meta">
+                          <span>{formatDateTime(item.fecha)}</span>
+                          {item.monto !== null && item.monto !== undefined ? <b>{formatMoney(item.monto)}</b> : null}
+                        </div>
+                      </div>
+                      <p>{safeDisplayText(item.descripcion, "Sin descripcion adicional")}</p>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </DataCard>
 
             <DataCard subtitle="Hasta 5 actividades recientes del cliente." title="Actividades">
               {clientDetailActivities.length === 0 ? (

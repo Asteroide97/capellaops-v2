@@ -5,14 +5,28 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import and_, case, desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import AuditLog, CRMActividad, CRMCliente, CRMContacto, CRMOportunidad, Empresa, EmpresaUsuario, Usuario
+from app.models import (
+    AuditLog,
+    CRMActividad,
+    CRMCliente,
+    CRMContacto,
+    CRMOportunidad,
+    Empresa,
+    EmpresaUsuario,
+    PMProyecto,
+    Usuario,
+    Venta,
+)
 from app.schemas.crm import (
     CRMActivityItem,
     CRMClientItem,
+    CRMClientCommercialSummaryResponse,
     CRMContactItem,
+    CRMClientTimelineItem,
+    CRMClientTimelineResponse,
     CRMOpportunityItem,
     CRMSummaryKpis,
     CRMSummaryPipelineStageItem,
@@ -210,6 +224,10 @@ def get_activity_for_company(db: Session, empresa_id: str, activity_id: str) -> 
     if not activity:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Actividad no encontrada.")
     return activity
+
+
+def resolve_invoice_request_display_status(sale: Venta) -> str:
+    return normalize_optional_text(sale.factura_revision_estado) or normalize_optional_text(sale.factura_estado) or "no_solicitada"
 
 
 def serialize_client(client: CRMCliente) -> CRMClientItem:
@@ -1335,4 +1353,222 @@ def build_crm_summary(db: Session, empresa_id: str) -> CRMSummaryResponse:
         oportunidades_recientes=[serialize_opportunity(item) for item in recent_opportunities],
         actividades_pendientes=[serialize_activity(item) for item in pending_activities],
         clientes_recientes=[serialize_client(item) for item in recent_clients],
+    )
+
+
+def get_client_timeline(
+    db: Session,
+    empresa_id: str,
+    client_id: str,
+) -> CRMClientTimelineResponse:
+    get_client_for_company(db, empresa_id, client_id)
+
+    sales = db.scalars(
+        select(Venta)
+        .where(
+            Venta.empresa_id == empresa_id,
+            Venta.crm_cliente_id == client_id,
+        )
+        .order_by(desc(func.coalesce(Venta.paid_at, Venta.created_at)), desc(Venta.id))
+    ).all()
+    projects = db.scalars(
+        select(PMProyecto)
+        .where(
+            PMProyecto.empresa_id == empresa_id,
+            PMProyecto.crm_cliente_id == client_id,
+        )
+        .order_by(desc(PMProyecto.updated_at), desc(PMProyecto.id))
+    ).all()
+    opportunities = db.scalars(
+        select(CRMOportunidad)
+        .options(selectinload(CRMOportunidad.contacto))
+        .where(
+            CRMOportunidad.empresa_id == empresa_id,
+            CRMOportunidad.cliente_id == client_id,
+        )
+        .order_by(desc(CRMOportunidad.updated_at), desc(CRMOportunidad.id))
+    ).all()
+    activities = db.scalars(
+        select(CRMActividad)
+        .options(
+            selectinload(CRMActividad.contacto),
+            selectinload(CRMActividad.oportunidad),
+        )
+        .where(
+            CRMActividad.empresa_id == empresa_id,
+            CRMActividad.cliente_id == client_id,
+            CRMActividad.activo == True,
+        )
+        .order_by(desc(CRMActividad.fecha_actividad), desc(CRMActividad.id))
+    ).all()
+    invoice_sales = db.scalars(
+        select(Venta)
+        .where(
+            Venta.empresa_id == empresa_id,
+            Venta.factura_estado != "no_solicitada",
+            or_(
+                Venta.factura_crm_cliente_id == client_id,
+                and_(Venta.factura_crm_cliente_id.is_(None), Venta.crm_cliente_id == client_id),
+            ),
+        )
+        .order_by(desc(func.coalesce(Venta.factura_solicitada_at, Venta.paid_at, Venta.created_at)), desc(Venta.id))
+    ).all()
+
+    items: list[CRMClientTimelineItem] = []
+
+    for sale in sales:
+        items.append(
+            CRMClientTimelineItem(
+                tipo="venta_pos",
+                fecha=sale.paid_at or sale.created_at,
+                titulo=f"Venta POS {sale.folio}",
+                descripcion=sale.notas or sale.cliente_nombre,
+                monto=Decimal(sale.total or ZERO),
+                estatus=sale.estatus,
+                referencia_id=sale.id,
+            )
+        )
+
+    for project in projects:
+        items.append(
+            CRMClientTimelineItem(
+                tipo="proyecto_pm",
+                fecha=project.updated_at,
+                titulo=f"Proyecto PM {project.nombre}",
+                descripcion=project.codigo or project.descripcion,
+                monto=Decimal(project.presupuesto_estimado or ZERO),
+                estatus=project.estatus,
+                referencia_id=project.id,
+            )
+        )
+
+    for opportunity in opportunities:
+        items.append(
+            CRMClientTimelineItem(
+                tipo="oportunidad",
+                fecha=opportunity.updated_at,
+                titulo=opportunity.titulo,
+                descripcion=opportunity.descripcion or (opportunity.contacto.nombre if opportunity.contacto else None),
+                monto=Decimal(opportunity.monto_estimado or ZERO),
+                estatus=opportunity.etapa,
+                referencia_id=opportunity.id,
+            )
+        )
+
+    for activity in activities:
+        items.append(
+            CRMClientTimelineItem(
+                tipo="actividad",
+                fecha=activity.fecha_actividad,
+                titulo=activity.titulo,
+                descripcion=activity.descripcion or activity.tipo,
+                monto=None,
+                estatus="completada" if activity.completada else "pendiente",
+                referencia_id=activity.id,
+            )
+        )
+
+    for sale in invoice_sales:
+        items.append(
+            CRMClientTimelineItem(
+                tipo="solicitud_factura_pos",
+                fecha=sale.factura_solicitada_at or sale.paid_at or sale.created_at,
+                titulo=f"Solicitud de factura {sale.folio}",
+                descripcion=sale.factura_razon_social or sale.factura_rfc or sale.factura_email,
+                monto=Decimal(sale.total or ZERO),
+                estatus=resolve_invoice_request_display_status(sale),
+                referencia_id=sale.id,
+            )
+        )
+
+    items.sort(key=lambda item: (item.fecha, item.referencia_id), reverse=True)
+    return CRMClientTimelineResponse(items=items)
+
+
+def get_client_commercial_summary(
+    db: Session,
+    empresa_id: str,
+    client_id: str,
+) -> CRMClientCommercialSummaryResponse:
+    get_client_for_company(db, empresa_id, client_id)
+
+    total_ventas_pos = db.scalar(
+        select(func.coalesce(func.sum(Venta.total), 0)).where(
+            Venta.empresa_id == empresa_id,
+            Venta.crm_cliente_id == client_id,
+            Venta.estatus == "pagada",
+        )
+    ) or ZERO
+    ventas_count = db.scalar(
+        select(func.count(Venta.id)).where(
+            Venta.empresa_id == empresa_id,
+            Venta.crm_cliente_id == client_id,
+            Venta.estatus == "pagada",
+        )
+    ) or 0
+    proyectos_count = db.scalar(
+        select(func.count(PMProyecto.id)).where(
+            PMProyecto.empresa_id == empresa_id,
+            PMProyecto.crm_cliente_id == client_id,
+        )
+    ) or 0
+    proyectos_activos = db.scalar(
+        select(func.count(PMProyecto.id)).where(
+            PMProyecto.empresa_id == empresa_id,
+            PMProyecto.crm_cliente_id == client_id,
+            PMProyecto.activo == True,
+            PMProyecto.estatus.not_in(["completado", "cancelado"]),
+        )
+    ) or 0
+    oportunidades_abiertas = db.scalar(
+        select(func.count(CRMOportunidad.id)).where(
+            CRMOportunidad.empresa_id == empresa_id,
+            CRMOportunidad.cliente_id == client_id,
+            CRMOportunidad.activa == True,
+        )
+    ) or 0
+    monto_pipeline = db.scalar(
+        select(func.coalesce(func.sum(CRMOportunidad.monto_estimado), 0)).where(
+            CRMOportunidad.empresa_id == empresa_id,
+            CRMOportunidad.cliente_id == client_id,
+            CRMOportunidad.activa == True,
+        )
+    ) or ZERO
+    facturas_solicitadas = db.scalar(
+        select(func.count(Venta.id)).where(
+            Venta.empresa_id == empresa_id,
+            Venta.factura_estado != "no_solicitada",
+            or_(
+                Venta.factura_crm_cliente_id == client_id,
+                and_(Venta.factura_crm_cliente_id.is_(None), Venta.crm_cliente_id == client_id),
+            ),
+        )
+    ) or 0
+    actividades_pendientes = db.scalar(
+        select(func.count(CRMActividad.id)).where(
+            CRMActividad.empresa_id == empresa_id,
+            CRMActividad.cliente_id == client_id,
+            CRMActividad.activo == True,
+            CRMActividad.completada == False,
+        )
+    ) or 0
+    ultima_actividad_at = db.scalar(
+        select(func.max(CRMActividad.fecha_actividad)).where(
+            CRMActividad.empresa_id == empresa_id,
+            CRMActividad.cliente_id == client_id,
+            CRMActividad.activo == True,
+        )
+    )
+
+    return CRMClientCommercialSummaryResponse(
+        client_id=client_id,
+        total_ventas_pos=Decimal(total_ventas_pos or ZERO),
+        ventas_count=int(ventas_count),
+        proyectos_count=int(proyectos_count),
+        proyectos_activos=int(proyectos_activos),
+        oportunidades_abiertas=int(oportunidades_abiertas),
+        monto_pipeline=Decimal(monto_pipeline or ZERO),
+        facturas_solicitadas=int(facturas_solicitadas),
+        actividades_pendientes=int(actividades_pendientes),
+        ultima_actividad_at=ultima_actividad_at,
     )

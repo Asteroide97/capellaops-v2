@@ -30,6 +30,7 @@ import {
   createPosSale,
   createPosShiftManualIncome,
   createPosShiftManualWithdrawal,
+  getCrmClient,
   getPosActiveShift,
   getPosCatalog,
   getPosInvoiceRequests,
@@ -41,11 +42,15 @@ import {
   getPosShifts,
   getPosTicket,
   getWarehouses,
+  linkPosSaleToCrm,
+  listCrmClientContacts,
+  listCrmClients,
   openPosShift,
   paySuspendedPosSale,
   requestPosSaleInvoice,
   resumePosSale,
   suspendPosSale,
+  unlinkPosSaleFromCrm,
   updatePosSaleInvoiceRequest,
 } from "../api/client";
 
@@ -145,6 +150,27 @@ const defaultInvoiceRequestForm = {
   regimen_fiscal: "616",
   codigo_postal: "",
   notas: "",
+};
+
+const defaultInvoiceCrmSuggestion = {
+  crm_cliente_id: "",
+  crm_cliente_nombre: "",
+  crm_contacto_id: "",
+  crm_contacto_nombre: "",
+  factura_crm_cliente_id: "",
+  factura_crm_cliente_nombre: "",
+  factura_crm_contacto_id: "",
+  factura_crm_contacto_nombre: "",
+  cliente_nombre: "",
+  razon_social: "",
+  rfc: "",
+  email: "",
+  codigo_postal: "",
+};
+
+const defaultCrmLinkForm = {
+  cliente_id: "",
+  contacto_id: "",
 };
 
 const invoiceUsageOptions = [
@@ -328,6 +354,22 @@ function safeText(value, fallback = "-") {
 }
 
 
+function getCrmClientOptionLabel(client) {
+  const name = client?.nombre_comercial || client?.razon_social || "Sin cliente";
+  const suffix = client?.rfc ? ` • ${client.rfc}` : "";
+  const inactiveTag = client?.estatus === "inactivo" ? " (inactivo)" : "";
+  return `${name}${suffix}${inactiveTag}`;
+}
+
+
+function getCrmContactOptionLabel(contact) {
+  const name = contact?.nombre || "Sin contacto";
+  const role = contact?.puesto ? ` • ${contact.puesto}` : "";
+  const principalTag = contact?.principal ? " • Principal" : "";
+  return `${name}${role}${principalTag}`;
+}
+
+
 function toReportDateStart(value) {
   return value ? `${value}T00:00:00` : "";
 }
@@ -503,6 +545,35 @@ function buildInvoiceRequestForm(requestData) {
     regimen_fiscal: requestData?.regimen_fiscal ?? "616",
     codigo_postal: requestData?.codigo_postal ?? "",
     notas: requestData?.notas ?? "",
+  };
+}
+
+
+function buildInvoiceCrmSuggestion({ saleDetail, requestData, crmClient, crmContact }) {
+  return {
+    crm_cliente_id: saleDetail?.crm_cliente_id ?? "",
+    crm_cliente_nombre: saleDetail?.crm_cliente_nombre ?? "",
+    crm_contacto_id: saleDetail?.crm_contacto_id ?? "",
+    crm_contacto_nombre: saleDetail?.crm_contacto_nombre ?? "",
+    factura_crm_cliente_id: requestData?.factura_crm_cliente_id ?? "",
+    factura_crm_cliente_nombre: requestData?.factura_crm_cliente_nombre ?? "",
+    factura_crm_contacto_id: requestData?.factura_crm_contacto_id ?? "",
+    factura_crm_contacto_nombre: requestData?.factura_crm_contacto_nombre ?? "",
+    cliente_nombre:
+      crmClient?.nombre_comercial ||
+      crmClient?.razon_social ||
+      saleDetail?.cliente_nombre ||
+      requestData?.cliente_nombre ||
+      "",
+    razon_social: crmClient?.razon_social || requestData?.razon_social || "",
+    rfc: crmClient?.rfc || requestData?.rfc || "",
+    email:
+      crmClient?.email ||
+      crmContact?.email ||
+      saleDetail?.cliente_email ||
+      requestData?.email ||
+      "",
+    codigo_postal: crmClient?.codigo_postal || requestData?.codigo_postal || "",
   };
 }
 
@@ -798,7 +869,18 @@ export default function PosPage() {
   const [selectedShiftReport, setSelectedShiftReport] = useState(null);
   const [invoiceRequestModalOpen, setInvoiceRequestModalOpen] = useState(false);
   const [selectedInvoiceRequest, setSelectedInvoiceRequest] = useState(null);
+  const [selectedInvoiceSaleContext, setSelectedInvoiceSaleContext] = useState(null);
   const [invoiceRequestForm, setInvoiceRequestForm] = useState(defaultInvoiceRequestForm);
+  const [invoiceCrmLoading, setInvoiceCrmLoading] = useState(false);
+  const [invoiceCrmSuggestion, setInvoiceCrmSuggestion] = useState(defaultInvoiceCrmSuggestion);
+  const [crmLinkModalOpen, setCrmLinkModalOpen] = useState(false);
+  const [crmLinkSubmitting, setCrmLinkSubmitting] = useState(false);
+  const [crmClientsLoading, setCrmClientsLoading] = useState(false);
+  const [crmContactsLoading, setCrmContactsLoading] = useState(false);
+  const [crmClientSearch, setCrmClientSearch] = useState("");
+  const [crmClientOptions, setCrmClientOptions] = useState([]);
+  const [crmContactOptions, setCrmContactOptions] = useState([]);
+  const [crmLinkForm, setCrmLinkForm] = useState(defaultCrmLinkForm);
   const [resumedSaleId, setResumedSaleId] = useState("");
   const [shiftMovementModalType, setShiftMovementModalType] = useState("");
   const [closeShiftModalOpen, setCloseShiftModalOpen] = useState(false);
@@ -807,6 +889,45 @@ export default function PosPage() {
     () => warehouses.find((warehouse) => warehouse.id === selectedWarehouseId) ?? null,
     [warehouses, selectedWarehouseId],
   );
+
+  const crmClientSelectOptions = useMemo(() => {
+    if (
+      crmLinkForm.cliente_id &&
+      selectedSale?.crm_cliente_nombre &&
+      !crmClientOptions.some((item) => item.id === crmLinkForm.cliente_id)
+    ) {
+      return [
+        {
+          id: crmLinkForm.cliente_id,
+          nombre_comercial: selectedSale.crm_cliente_nombre,
+          razon_social: selectedSale.crm_cliente_nombre,
+          rfc: null,
+          estatus: "activo",
+        },
+        ...crmClientOptions,
+      ];
+    }
+    return crmClientOptions;
+  }, [crmClientOptions, crmLinkForm.cliente_id, selectedSale?.crm_cliente_nombre]);
+
+  const crmContactSelectOptions = useMemo(() => {
+    if (
+      crmLinkForm.contacto_id &&
+      selectedSale?.crm_contacto_nombre &&
+      !crmContactOptions.some((item) => item.id === crmLinkForm.contacto_id)
+    ) {
+      return [
+        {
+          id: crmLinkForm.contacto_id,
+          nombre: selectedSale.crm_contacto_nombre,
+          puesto: null,
+          principal: false,
+        },
+        ...crmContactOptions,
+      ];
+    }
+    return crmContactOptions;
+  }, [crmContactOptions, crmLinkForm.contacto_id, selectedSale?.crm_contacto_nombre]);
 
   const hasActiveShift = Boolean(activeShift?.id);
   const cartSubtotal = useMemo(
@@ -1137,6 +1258,61 @@ export default function PosPage() {
     setSelectedTicket(ticket);
     setCancelReason("");
     return { saleDetail, ticket };
+  }
+
+  async function loadCrmClientsForSaleLink(query = crmClientSearch) {
+    setCrmClientsLoading(true);
+    try {
+      const response = await listCrmClients({
+        token,
+        empresaId,
+        filters: {
+          q: query,
+          limit: 50,
+          offset: 0,
+        },
+      });
+      setCrmClientOptions(response.items ?? []);
+      return response.items ?? [];
+    } finally {
+      setCrmClientsLoading(false);
+    }
+  }
+
+  async function loadCrmContactsForSaleLink(clientId, { selectedContactId = "", syncForm = true } = {}) {
+    if (!clientId) {
+      setCrmContactOptions([]);
+      if (syncForm) {
+        setCrmLinkForm((current) => ({ ...current, contacto_id: "" }));
+      }
+      return [];
+    }
+
+    setCrmContactsLoading(true);
+    try {
+      const response = await listCrmClientContacts({
+        clientId,
+        token,
+        empresaId,
+        filters: {
+          limit: 100,
+          offset: 0,
+        },
+      });
+      const items = response.items ?? [];
+      setCrmContactOptions(items);
+      if (syncForm) {
+        const suggestedContactId =
+          selectedContactId ||
+          items.find((item) => item.principal && item.activo !== false)?.id ||
+          items.find((item) => item.activo !== false)?.id ||
+          "";
+        setCrmLinkForm((current) => ({ ...current, contacto_id: suggestedContactId }));
+      }
+      return items;
+    } finally {
+      setCrmContactsLoading(false);
+    }
   }
 
   async function loadPosData() {
@@ -1912,6 +2088,121 @@ export default function PosPage() {
     }
   }
 
+  function closeCrmLinkModal() {
+    setCrmLinkModalOpen(false);
+    setCrmClientSearch("");
+    setCrmClientOptions([]);
+    setCrmContactOptions([]);
+    setCrmLinkForm(defaultCrmLinkForm);
+  }
+
+  async function openCrmLinkModal() {
+    if (!selectedSale?.id) {
+      setError("Selecciona una venta para ligar el cliente CRM.");
+      return;
+    }
+
+    const initialSearch = selectedSale.crm_cliente_nombre || "";
+    setCrmLinkModalOpen(true);
+    setCrmClientSearch(initialSearch);
+    setCrmClientOptions([]);
+    setCrmContactOptions([]);
+    setCrmLinkForm({
+      cliente_id: selectedSale.crm_cliente_id || "",
+      contacto_id: selectedSale.crm_contacto_id || "",
+    });
+    clearFeedback();
+
+    try {
+      await loadCrmClientsForSaleLink(initialSearch);
+      if (selectedSale.crm_cliente_id) {
+        await loadCrmContactsForSaleLink(selectedSale.crm_cliente_id, {
+          selectedContactId: selectedSale.crm_contacto_id || "",
+          syncForm: false,
+        });
+      }
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    }
+  }
+
+  async function handleCrmClientSearch(event) {
+    event?.preventDefault?.();
+    try {
+      await loadCrmClientsForSaleLink(crmClientSearch);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    }
+  }
+
+  async function handleCrmClientChange(clientId) {
+    setCrmLinkForm((current) => ({ ...current, cliente_id: clientId, contacto_id: "" }));
+    try {
+      await loadCrmContactsForSaleLink(clientId);
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    }
+  }
+
+  async function handleSaveCrmSaleLink(event) {
+    event.preventDefault();
+    if (!selectedSale?.id) {
+      setError("Selecciona una venta para ligar el cliente CRM.");
+      return;
+    }
+    if (!crmLinkForm.cliente_id) {
+      setError("Selecciona un cliente CRM.");
+      return;
+    }
+
+    setCrmLinkSubmitting(true);
+    clearFeedback();
+    try {
+      const response = await linkPosSaleToCrm({
+        saleId: selectedSale.id,
+        token,
+        empresaId,
+        payload: {
+          cliente_id: crmLinkForm.cliente_id,
+          contacto_id: crmLinkForm.contacto_id || null,
+        },
+      });
+      setSelectedSale(response);
+      await loadSales(saleFilters);
+      closeCrmLinkModal();
+      setSuccess("Venta ligada a cliente CRM.");
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo guardar el vinculo CRM."));
+    } finally {
+      setCrmLinkSubmitting(false);
+    }
+  }
+
+  async function handleUnlinkCrmSale() {
+    if (!selectedSale?.id) {
+      setError("Selecciona una venta para quitar el vinculo CRM.");
+      return;
+    }
+
+    setCrmLinkSubmitting(true);
+    clearFeedback();
+    try {
+      const response = await unlinkPosSaleFromCrm({
+        saleId: selectedSale.id,
+        token,
+        empresaId,
+      });
+      setSelectedSale(response);
+      await loadSales(saleFilters);
+      closeCrmLinkModal();
+      setSuccess("Vinculo CRM eliminado.");
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo quitar el vinculo CRM."));
+    } finally {
+      setCrmLinkSubmitting(false);
+    }
+  }
+
   async function openSaleDetail(record) {
     setSubmitting(true);
     clearFeedback();
@@ -1939,14 +2230,92 @@ export default function PosPage() {
     }
   }
 
+  async function loadInvoiceCrmSuggestion(requestData, saleDetail) {
+    if (!saleDetail?.crm_cliente_id) {
+      setInvoiceCrmSuggestion({
+        ...defaultInvoiceCrmSuggestion,
+        factura_crm_cliente_id: requestData?.factura_crm_cliente_id ?? "",
+        factura_crm_cliente_nombre: requestData?.factura_crm_cliente_nombre ?? "",
+        factura_crm_contacto_id: requestData?.factura_crm_contacto_id ?? "",
+        factura_crm_contacto_nombre: requestData?.factura_crm_contacto_nombre ?? "",
+      });
+      return;
+    }
+
+    setInvoiceCrmLoading(true);
+    try {
+      const [crmClient, crmContactsResponse] = await Promise.all([
+        getCrmClient({ clientId: saleDetail.crm_cliente_id, token, empresaId }),
+        listCrmClientContacts({
+          clientId: saleDetail.crm_cliente_id,
+          token,
+          empresaId,
+          filters: { limit: 100, offset: 0 },
+        }),
+      ]);
+      const crmContactId =
+        requestData?.factura_crm_contacto_id ||
+        saleDetail?.crm_contacto_id ||
+        "";
+      const crmContact =
+        (crmContactsResponse.items ?? []).find((item) => item.id === crmContactId) ??
+        null;
+      setInvoiceCrmSuggestion(
+        buildInvoiceCrmSuggestion({
+          saleDetail,
+          requestData,
+          crmClient,
+          crmContact,
+        }),
+      );
+    } catch (_requestError) {
+      setInvoiceCrmSuggestion(
+        buildInvoiceCrmSuggestion({
+          saleDetail,
+          requestData,
+          crmClient: null,
+          crmContact: null,
+        }),
+      );
+    } finally {
+      setInvoiceCrmLoading(false);
+    }
+  }
+
+  function closeInvoiceRequestModal() {
+    setInvoiceRequestModalOpen(false);
+    setSelectedInvoiceRequest(null);
+    setSelectedInvoiceSaleContext(null);
+    setInvoiceCrmSuggestion(defaultInvoiceCrmSuggestion);
+    setInvoiceCrmLoading(false);
+  }
+
+  function applyInvoiceCrmSuggestion() {
+    setInvoiceRequestForm((current) => ({
+      ...current,
+      cliente_nombre: invoiceCrmSuggestion.cliente_nombre || current.cliente_nombre,
+      razon_social: invoiceCrmSuggestion.razon_social || current.razon_social,
+      rfc: invoiceCrmSuggestion.rfc || current.rfc,
+      email: invoiceCrmSuggestion.email || current.email,
+      codigo_postal: invoiceCrmSuggestion.codigo_postal || current.codigo_postal,
+    }));
+  }
+
   async function openInvoiceRequestModal(saleId) {
     setInvoiceSubmitting(true);
     clearFeedback();
     try {
-      const requestData = await getPosSaleInvoiceRequest({ saleId, token, empresaId });
+      setSelectedInvoiceSaleContext(null);
+      setInvoiceCrmSuggestion(defaultInvoiceCrmSuggestion);
+      const [requestData, saleDetail] = await Promise.all([
+        getPosSaleInvoiceRequest({ saleId, token, empresaId }),
+        getPosSaleDetail({ saleId, token, empresaId }),
+      ]);
       setSelectedInvoiceRequest(requestData);
+      setSelectedInvoiceSaleContext(saleDetail);
       setInvoiceRequestForm(buildInvoiceRequestForm(requestData));
       setInvoiceRequestModalOpen(true);
+      await loadInvoiceCrmSuggestion(requestData, saleDetail);
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
@@ -2001,7 +2370,7 @@ export default function PosPage() {
       if (activeView === "invoicing") {
         await loadInvoiceRequests(invoiceRequestFilters);
       }
-      setInvoiceRequestModalOpen(false);
+      closeInvoiceRequestModal();
       setSuccess(
         response.factura_estado === "lista_para_facturar"
           ? "Solicitud lista para facturar."
@@ -3862,6 +4231,41 @@ export default function PosPage() {
 
             <section className="feature-card pos-note-card">
               <div className="feature-header">
+                <p className="eyebrow">CRM</p>
+                <h3>Cliente CRM</h3>
+              </div>
+
+              {selectedSale.crm_cliente_id ? (
+                <div className="pos-ticket-meta-grid">
+                  <article className="mini-card">
+                    <span className="eyebrow">Cliente CRM</span>
+                    <strong>{selectedSale.crm_cliente_nombre || "Cliente ligado"}</strong>
+                    <p>{selectedSale.crm_cliente_id}</p>
+                  </article>
+                  <article className="mini-card">
+                    <span className="eyebrow">Contacto CRM</span>
+                    <strong>{selectedSale.crm_contacto_nombre || "Sin contacto"}</strong>
+                    <p>{selectedSale.crm_contacto_id || "Sin contacto ligado"}</p>
+                  </article>
+                </div>
+              ) : (
+                <p className="table-note">Sin cliente CRM ligado.</p>
+              )}
+
+              <div className="pos-action-row">
+                <button className="ghost-button" onClick={openCrmLinkModal} type="button">
+                  {selectedSale.crm_cliente_id ? "Cambiar" : "Ligar cliente CRM"}
+                </button>
+                {selectedSale.crm_cliente_id ? (
+                  <button className="ghost-button" disabled={crmLinkSubmitting} onClick={handleUnlinkCrmSale} type="button">
+                    {crmLinkSubmitting ? "Quitando..." : "Quitar vinculo"}
+                  </button>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="feature-card pos-note-card">
+              <div className="feature-header">
                 <p className="eyebrow">Facturación</p>
                 <h3>Solicitud de factura</h3>
               </div>
@@ -3941,7 +4345,103 @@ export default function PosPage() {
       </PosModal>
 
       <PosModal
-        onClose={() => setInvoiceRequestModalOpen(false)}
+        onClose={closeCrmLinkModal}
+        open={crmLinkModalOpen}
+        subtitle="Guarda el vinculo comercial de la venta con un cliente y contacto CRM. No modifica pagos, inventario ni estatus."
+        title="Ligar cliente CRM"
+      >
+        <form className="pos-modal-stack" onSubmit={handleSaveCrmSaleLink}>
+          <div className="pos-form-grid">
+            <label className="pos-crm-link-field pos-crm-link-field-span-2">
+              Buscar cliente
+              <div className="pos-crm-search-row">
+                <input
+                  className="pos-input"
+                  onChange={(event) => setCrmClientSearch(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      handleCrmClientSearch();
+                    }
+                  }}
+                  placeholder="Nombre comercial, razon social o RFC"
+                  type="text"
+                  value={crmClientSearch}
+                />
+                <button className="ghost-button" disabled={crmClientsLoading} onClick={handleCrmClientSearch} type="button">
+                  {crmClientsLoading ? "Buscando..." : "Buscar"}
+                </button>
+              </div>
+            </label>
+
+            <label className="pos-crm-link-field pos-crm-link-field-span-2">
+              Cliente CRM
+              <select
+                className="pos-input"
+                onChange={(event) => handleCrmClientChange(event.target.value)}
+                value={crmLinkForm.cliente_id}
+              >
+                <option value="">Selecciona un cliente CRM</option>
+                {crmClientSelectOptions.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {getCrmClientOptionLabel(client)}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="pos-crm-link-field pos-crm-link-field-span-2">
+              Contacto opcional
+              <select
+                className="pos-input"
+                disabled={!crmLinkForm.cliente_id || crmContactsLoading}
+                onChange={(event) => setCrmLinkForm((current) => ({ ...current, contacto_id: event.target.value }))}
+                value={crmLinkForm.contacto_id}
+              >
+                <option value="">Sin contacto</option>
+                {crmContactSelectOptions.map((contact) => (
+                  <option key={contact.id} value={contact.id}>
+                    {getCrmContactOptionLabel(contact)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="pos-ticket-meta-grid">
+            <article className="mini-card">
+              <span className="eyebrow">Venta</span>
+              <strong>{selectedSale?.folio || "Sin venta"}</strong>
+              <p>{selectedSale ? formatMoney(selectedSale.total) : "-"}</p>
+            </article>
+            <article className="mini-card">
+              <span className="eyebrow">Cliente actual</span>
+              <strong>{selectedSale?.crm_cliente_nombre || "Sin cliente CRM ligado"}</strong>
+              <p>{selectedSale?.crm_contacto_nombre || "Sin contacto CRM"}</p>
+            </article>
+          </div>
+
+          <div className="pos-crm-link-helper">
+            {crmClientsLoading ? <p className="table-note">Buscando clientes CRM...</p> : null}
+            {!crmClientsLoading && crmClientSelectOptions.length === 0 ? (
+              <p className="table-note">No se encontraron clientes CRM con esa búsqueda.</p>
+            ) : null}
+            {crmContactsLoading ? <p className="table-note">Cargando contactos del cliente...</p> : null}
+          </div>
+
+          <div className="pos-action-row">
+            <button className="ghost-button" onClick={closeCrmLinkModal} type="button">
+              Cerrar
+            </button>
+            <button className="primary-button" disabled={crmLinkSubmitting || !crmLinkForm.cliente_id} type="submit">
+              {crmLinkSubmitting ? "Guardando..." : "Guardar vinculo"}
+            </button>
+          </div>
+        </form>
+      </PosModal>
+
+      <PosModal
+        onClose={closeInvoiceRequestModal}
         open={invoiceRequestModalOpen}
         subtitle="Captura los datos fiscales del cliente. Esta solicitud quedará pendiente; aún no se timbra CFDI."
         title="Solicitar factura"
@@ -3965,6 +4465,61 @@ export default function PosPage() {
                 <p>{selectedInvoiceRequest.fecha_solicitud ? formatDateTime(selectedInvoiceRequest.fecha_solicitud) : "Sin solicitud registrada"}</p>
               </article>
             </div>
+
+            <section className="feature-card pos-note-card">
+              <div className="feature-header">
+                <div>
+                  <p className="eyebrow">CRM</p>
+                  <h3>Datos sugeridos desde CRM</h3>
+                </div>
+                {selectedInvoiceRequest.factura_crm_cliente_id ? (
+                  <StatusBadge label="Solicitud ligada a CRM" tone="info" />
+                ) : null}
+              </div>
+
+              {selectedInvoiceSaleContext?.crm_cliente_id ? (
+                <>
+                  <div className="pos-ticket-meta-grid">
+                    <article className="mini-card">
+                      <span className="eyebrow">Cliente CRM ligado</span>
+                      <strong>{invoiceCrmSuggestion.crm_cliente_nombre || "Cliente CRM"}</strong>
+                      <p>{invoiceCrmSuggestion.crm_contacto_nombre || "Sin contacto CRM"}</p>
+                    </article>
+                    {selectedInvoiceRequest.factura_crm_cliente_id ? (
+                      <article className="mini-card">
+                        <span className="eyebrow">Solicitud ligada</span>
+                        <strong>{selectedInvoiceRequest.factura_crm_cliente_nombre || invoiceCrmSuggestion.factura_crm_cliente_nombre || "Cliente CRM"}</strong>
+                        <p>{selectedInvoiceRequest.factura_crm_contacto_nombre || invoiceCrmSuggestion.factura_crm_contacto_nombre || "Sin contacto CRM"}</p>
+                      </article>
+                    ) : null}
+                  </div>
+                  <p className="table-note">
+                    Puedes usar estos datos como base para la solicitud y seguir editándolos manualmente.
+                  </p>
+                  {invoiceCrmLoading ? (
+                    <p className="table-note">Cargando datos sugeridos desde CRM...</p>
+                  ) : null}
+                  <div className="pos-action-row">
+                    <button className="ghost-button" onClick={applyInvoiceCrmSuggestion} type="button">
+                      Usar datos CRM
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p className="table-note">Esta venta no tiene cliente CRM ligado.</p>
+                  {selectedInvoiceRequest.factura_crm_cliente_id ? (
+                    <div className="pos-ticket-meta-grid">
+                      <article className="mini-card">
+                        <span className="eyebrow">Solicitud ligada</span>
+                        <strong>{selectedInvoiceRequest.factura_crm_cliente_nombre || "Cliente CRM"}</strong>
+                        <p>{selectedInvoiceRequest.factura_crm_contacto_nombre || "Sin contacto CRM"}</p>
+                      </article>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </section>
 
             <div className="pos-form-grid">
               <label>
@@ -4060,7 +4615,7 @@ export default function PosPage() {
             </div>
 
             <div className="pos-action-row">
-              <button className="ghost-button" onClick={() => setInvoiceRequestModalOpen(false)} type="button">
+              <button className="ghost-button" onClick={closeInvoiceRequestModal} type="button">
                 Cerrar
               </button>
               <button className="primary-button" disabled={invoiceSubmitting} type="submit">

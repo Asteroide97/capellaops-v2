@@ -87,6 +87,7 @@ from app.schemas.pm import (
     PMProyectoMiembroOut,
     PMProyectoEstimacionesResumenOut,
     PMProyectoOut,
+    PMProjectCrmLinkRequest,
     PMProyectoUpdate,
     PMTarifaHoraRolCreate,
     PMTarifaHoraRolListResponse,
@@ -201,6 +202,7 @@ from app.services.pm import (
     list_project_members,
     list_task_dependencies,
     list_projects,
+    link_project_to_crm,
     list_role_hourly_rates,
     list_tasks,
     list_user_hourly_rates,
@@ -246,6 +248,7 @@ from app.services.pm import (
     submit_project_requisition,
     submit_project_change,
     submit_estimation,
+    unlink_project_from_crm,
 )
 from app.services.documents_pdf import build_pm_estimation_pdf
 from app.schemas.procurement import RequisitionListResponse, RequisitionResponse
@@ -405,6 +408,47 @@ def get_project_endpoint(
     db: Session = Depends(get_db),
 ) -> PMProyectoOut:
     return get_project(db, pm_context, project_id)
+
+
+@router.put("/projects/{project_id}/crm-link", response_model=PMProyectoOut)
+def link_project_to_crm_endpoint(
+    project_id: str,
+    payload: PMProjectCrmLinkRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoOut:
+    return run_pm_write(
+        db,
+        "link_project_to_crm",
+        lambda: link_project_to_crm(
+            db,
+            pm_context,
+            project_id=project_id,
+            cliente_id=payload.cliente_id,
+            contacto_id=payload.contacto_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.delete("/projects/{project_id}/crm-link", response_model=PMProyectoOut)
+def unlink_project_from_crm_endpoint(
+    project_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMProyectoOut:
+    return run_pm_write(
+        db,
+        "unlink_project_from_crm",
+        lambda: unlink_project_from_crm(
+            db,
+            pm_context,
+            project_id=project_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.get("/projects/{project_id}/materials", response_model=PMProyectoMaterialesOut)

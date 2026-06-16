@@ -14,8 +14,10 @@ from app.schemas.crm import (
     CRMActivityListResponse,
     CRMActivityUpdateRequest,
     CRMClientCreateRequest,
+    CRMClientCommercialSummaryResponse,
     CRMClientItem,
     CRMClientListResponse,
+    CRMClientTimelineResponse,
     CRMClientUpdateRequest,
     CRMContactCreateRequest,
     CRMContactItem,
@@ -40,6 +42,8 @@ from app.services.crm import (
     create_opportunity,
     deactivate_activity,
     deactivate_contact,
+    get_client_commercial_summary,
+    get_client_timeline,
     get_client_for_company,
     get_opportunity_for_company,
     list_activities,
@@ -178,6 +182,27 @@ def crm_client_detail(
     db: Session = Depends(get_db),
 ) -> CRMClientItem:
     return serialize_client(get_client_for_company(db, context.empresa.id, client_id))
+
+
+@router.get("/clients/{client_id}/timeline", response_model=CRMClientTimelineResponse)
+def crm_client_timeline(
+    client_id: str,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMClientTimelineResponse:
+    return run_crm_read("client_timeline", lambda: get_client_timeline(db, context.empresa.id, client_id))
+
+
+@router.get("/clients/{client_id}/commercial-summary", response_model=CRMClientCommercialSummaryResponse)
+def crm_client_commercial_summary(
+    client_id: str,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMClientCommercialSummaryResponse:
+    return run_crm_read(
+        "client_commercial_summary",
+        lambda: get_client_commercial_summary(db, context.empresa.id, client_id),
+    )
 
 
 @router.put("/clients/{client_id}", response_model=CRMClientItem)

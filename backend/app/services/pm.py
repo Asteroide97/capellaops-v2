@@ -10,10 +10,10 @@ import secrets
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import and_, case, desc, func, or_, select
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import TenantContext
-from app.models import Almacen, AuditLog, Empresa, EmpresaModulo, EmpresaUsuario, Material, MovimientoInventario, Requisicion, RequisicionDetalle, Usuario
+from app.models import Almacen, AuditLog, CRMCliente, CRMContacto, Empresa, EmpresaModulo, EmpresaUsuario, Material, MovimientoInventario, Requisicion, RequisicionDetalle, Usuario
 from app.models.pm import (
     EmpresaPMConfig,
     PMAprobacion,
@@ -685,7 +685,12 @@ def get_user_display_name(db: Session, user_id: str | None) -> str | None:
 
 def get_project_for_company(db: Session, empresa_id: str, project_id: str) -> PMProyecto:
     project = db.scalar(
-        select(PMProyecto).where(
+        select(PMProyecto)
+        .options(
+            selectinload(PMProyecto.crm_cliente),
+            selectinload(PMProyecto.crm_contacto),
+        )
+        .where(
             PMProyecto.id == project_id,
             PMProyecto.empresa_id == empresa_id,
         )
@@ -693,6 +698,31 @@ def get_project_for_company(db: Session, empresa_id: str, project_id: str) -> PM
     if not project:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no encontrado.")
     return project
+
+
+def get_crm_client_for_company(db: Session, empresa_id: str, client_id: str) -> CRMCliente:
+    client = db.scalar(
+        select(CRMCliente).where(
+            CRMCliente.id == client_id,
+            CRMCliente.empresa_id == empresa_id,
+        )
+    )
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente CRM no encontrado.")
+    return client
+
+
+def get_crm_contact_for_company(db: Session, empresa_id: str, contact_id: str) -> CRMContacto:
+    contact = db.scalar(
+        select(CRMContacto)
+        .where(
+            CRMContacto.id == contact_id,
+            CRMContacto.empresa_id == empresa_id,
+        )
+    )
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto CRM no encontrado.")
+    return contact
 
 
 def get_task_for_company(db: Session, empresa_id: str, task_id: str) -> PMTarea:
@@ -1249,6 +1279,10 @@ def serialize_project(db: Session, project: PMProyecto) -> PMProyectoOut:
         responsable_user_id=project.responsable_user_id,
         responsable_nombre_snapshot=project.responsable_nombre_snapshot,
         cliente_nombre_snapshot=project.cliente_nombre_snapshot,
+        crm_cliente_id=project.crm_cliente_id,
+        crm_cliente_nombre=project.crm_cliente.nombre_comercial if project.crm_cliente else None,
+        crm_contacto_id=project.crm_contacto_id,
+        crm_contacto_nombre=project.crm_contacto.nombre if project.crm_contacto else None,
         presupuesto_estimado=decimal_or_zero(project.presupuesto_estimado),
         activo=project.activo,
         created_by=project.created_by,
@@ -1291,8 +1325,12 @@ def list_projects(
         query = query.where(PMProyecto.prioridad == normalize_priority(prioridad))
 
     total = db.scalar(select(func.count()).select_from(query.order_by(None).subquery())) or 0
+    data_query = query.options(
+        selectinload(PMProyecto.crm_cliente),
+        selectinload(PMProyecto.crm_contacto),
+    )
     projects = db.scalars(
-        query.order_by(PMProyecto.fecha_fin_planificada.asc(), PMProyecto.created_at.desc()).offset(offset).limit(limit)
+        data_query.order_by(PMProyecto.fecha_fin_planificada.asc(), PMProyecto.created_at.desc()).offset(offset).limit(limit)
     ).all()
     return PMProyectoListResponse(
         items=[serialize_project(db, project) for project in projects],
@@ -1439,6 +1477,78 @@ def update_project(
 
 def get_project(db: Session, pm_context: PMContext, project_id: str) -> PMProyectoOut:
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    return serialize_project(db, project)
+
+
+def link_project_to_crm(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    cliente_id: str,
+    contacto_id: str | None,
+    ip_address: str | None,
+) -> PMProyectoOut:
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden ligar proyectos PM con CRM.")
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    client = get_crm_client_for_company(db, pm_context.empresa_id, cliente_id)
+    contact = get_crm_contact_for_company(db, pm_context.empresa_id, contacto_id) if contacto_id else None
+    if contact and contact.cliente_id != client.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El contacto CRM no pertenece al cliente indicado.",
+        )
+
+    project.crm_cliente_id = client.id
+    project.crm_contacto_id = contact.id if contact else None
+    project.crm_cliente = client
+    project.crm_contacto = contact
+    project.cliente_nombre_snapshot = client.nombre_comercial
+    project.updated_by = pm_context.user.id
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project.crm_link",
+            entity_name="pm_proyecto",
+            entity_id=project.id,
+            ip_address=ip_address,
+            metadata_json={
+                "crm_cliente_id": project.crm_cliente_id,
+                "crm_contacto_id": project.crm_contacto_id,
+            },
+        )
+    )
+    db.flush()
+    return serialize_project(db, project)
+
+
+def unlink_project_from_crm(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    ip_address: str | None,
+) -> PMProyectoOut:
+    ensure_pm_project_manage_access(pm_context, "Solo owner o admin pueden desligar proyectos PM de CRM.")
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    project.crm_cliente_id = None
+    project.crm_contacto_id = None
+    project.crm_cliente = None
+    project.crm_contacto = None
+    project.updated_by = pm_context.user.id
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.project.crm_unlink",
+            entity_name="pm_proyecto",
+            entity_id=project.id,
+            ip_address=ip_address,
+            metadata_json={"codigo": project.codigo},
+        )
+    )
+    db.flush()
     return serialize_project(db, project)
 
 

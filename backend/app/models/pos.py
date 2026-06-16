@@ -188,6 +188,8 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     usuario_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
     cliente_nombre: Mapped[str | None] = mapped_column(String(160), nullable=True)
     cliente_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    crm_cliente_id: Mapped[str | None] = mapped_column(ForeignKey("crm_clientes.id"), nullable=True, index=True)
+    crm_contacto_id: Mapped[str | None] = mapped_column(ForeignKey("crm_contactos.id"), nullable=True, index=True)
     subtotal: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     descuento_lineas_total: Mapped[Decimal] = mapped_column(
         Numeric(18, 4),
@@ -226,6 +228,8 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     factura_rfc: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
     factura_razon_social: Mapped[str | None] = mapped_column(String(200), nullable=True)
     factura_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    factura_crm_cliente_id: Mapped[str | None] = mapped_column(ForeignKey("crm_clientes.id"), nullable=True, index=True)
+    factura_crm_contacto_id: Mapped[str | None] = mapped_column(ForeignKey("crm_contactos.id"), nullable=True, index=True)
     factura_uso_cfdi: Mapped[str | None] = mapped_column(String(10), nullable=True)
     factura_regimen_fiscal: Mapped[str | None] = mapped_column(String(10), nullable=True)
     factura_codigo_postal: Mapped[str | None] = mapped_column(String(12), nullable=True)
@@ -265,6 +269,10 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     usuario = relationship("Usuario", foreign_keys=[usuario_id])
     cancelled_by_user = relationship("Usuario", foreign_keys=[cancelled_by_user_id])
     factura_revisada_por_user = relationship("Usuario", foreign_keys=[factura_revisada_por_user_id])
+    crm_cliente = relationship("CRMCliente", foreign_keys=[crm_cliente_id])
+    crm_contacto = relationship("CRMContacto", foreign_keys=[crm_contacto_id])
+    factura_crm_cliente = relationship("CRMCliente", foreign_keys=[factura_crm_cliente_id])
+    factura_crm_contacto = relationship("CRMContacto", foreign_keys=[factura_crm_contacto_id])
     detalles = relationship("VentaDetalle", back_populates="venta", cascade="all, delete-orphan")
     pagos = relationship("VentaPago", back_populates="venta", cascade="all, delete-orphan")
 

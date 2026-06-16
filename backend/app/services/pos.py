@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
     AuditLog,
+    CRMCliente,
+    CRMContacto,
     Empresa,
     PosTurnoCaja,
     PosTurnoCajaMovimiento,
@@ -271,7 +273,18 @@ def get_sale_for_company(
     *,
     for_update: bool = False,
 ) -> Venta:
-    query = select(Venta).where(Venta.id == sale_id, Venta.empresa_id == empresa_id)
+    query = (
+        select(Venta)
+        .options(
+            selectinload(Venta.empresa),
+            selectinload(Venta.almacen),
+            selectinload(Venta.turno),
+            selectinload(Venta.usuario),
+            selectinload(Venta.crm_cliente),
+            selectinload(Venta.crm_contacto),
+        )
+        .where(Venta.id == sale_id, Venta.empresa_id == empresa_id)
+    )
     if for_update:
         query = query.with_for_update()
     sale = db.scalar(query)
@@ -333,6 +346,32 @@ def get_active_sale_material(db: Session, empresa_id: str, material_id: str) -> 
     return material
 
 
+def get_crm_client_for_company(db: Session, empresa_id: str, client_id: str) -> CRMCliente:
+    client = db.scalar(
+        select(CRMCliente).where(
+            CRMCliente.id == client_id,
+            CRMCliente.empresa_id == empresa_id,
+        )
+    )
+    if not client:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cliente CRM no encontrado.")
+    return client
+
+
+def get_crm_contact_for_company(db: Session, empresa_id: str, contact_id: str) -> CRMContacto:
+    contact = db.scalar(
+        select(CRMContacto)
+        .options(selectinload(CRMContacto.cliente))
+        .where(
+            CRMContacto.id == contact_id,
+            CRMContacto.empresa_id == empresa_id,
+        )
+    )
+    if not contact:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contacto CRM no encontrado.")
+    return contact
+
+
 def create_audit_log(
     db: Session,
     *,
@@ -375,6 +414,43 @@ def build_sale_stock_map(
         )
     ).all()
     return {material_id: Decimal(quantity or ZERO) for material_id, quantity in rows}
+
+
+def coalesce_text(*values: str | None) -> str | None:
+    for value in values:
+        normalized = normalize_optional_text(value)
+        if normalized is not None:
+            return normalized
+    return None
+
+
+def build_sale_invoice_crm_defaults(sale: Venta) -> dict[str, str | None]:
+    crm_client = sale.crm_cliente
+    crm_contact = sale.crm_contacto
+    return {
+        "cliente_nombre": crm_client.nombre_comercial if crm_client else None,
+        "rfc": crm_client.rfc if crm_client else None,
+        "razon_social": crm_client.razon_social if crm_client else None,
+        "email": (crm_contact.email if crm_contact else None) or (crm_client.email if crm_client else None),
+        "codigo_postal": crm_client.codigo_postal if crm_client else None,
+    }
+
+
+def resolve_sale_crm_link(
+    db: Session,
+    *,
+    empresa_id: str,
+    cliente_id: str,
+    contacto_id: str | None,
+) -> tuple[CRMCliente, CRMContacto | None]:
+    client = get_crm_client_for_company(db, empresa_id, cliente_id)
+    contact = get_crm_contact_for_company(db, empresa_id, contacto_id) if contacto_id else None
+    if contact and contact.cliente_id != client.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El contacto CRM no pertenece al cliente indicado.",
+        )
+    return client, contact
 
 
 def serialize_sale_detail(detail: VentaDetalle, *, stock_actual: Decimal | None = None) -> SaleDetailItem:
@@ -459,6 +535,10 @@ def build_sale_item(
         vendedor_nombre=vendedor_nombre,
         cliente_nombre=sale.cliente_nombre,
         cliente_email=sale.cliente_email,
+        crm_cliente_id=sale.crm_cliente_id,
+        crm_cliente_nombre=sale.crm_cliente.nombre_comercial if sale.crm_cliente else None,
+        crm_contacto_id=sale.crm_contacto_id,
+        crm_contacto_nombre=sale.crm_contacto.nombre if sale.crm_contacto else None,
         subtotal=sale.subtotal,
         descuento_lineas_total=sale.descuento_lineas_total,
         descuento_global=sale.descuento_global,
@@ -549,6 +629,10 @@ def serialize_invoice_request_response(sale: Venta) -> PosInvoiceRequestResponse
         regimen_fiscal=sale.factura_regimen_fiscal,
         codigo_postal=sale.factura_codigo_postal,
         notas=sale.factura_notas,
+        factura_crm_cliente_id=sale.factura_crm_cliente_id,
+        factura_crm_cliente_nombre=sale.factura_crm_cliente.nombre_comercial if sale.factura_crm_cliente else None,
+        factura_crm_contacto_id=sale.factura_crm_contacto_id,
+        factura_crm_contacto_nombre=sale.factura_crm_contacto.nombre if sale.factura_crm_contacto else None,
         factura_requiere_factura_global=bool(sale.factura_requiere_factura_global),
     )
 
@@ -655,6 +739,10 @@ def list_sales(
             PosTurnoCaja.folio.label("turno_folio"),
             func.coalesce(detail_count_subquery.c.detail_count, 0).label("detail_count"),
         )
+        .options(
+            selectinload(Venta.crm_cliente),
+            selectinload(Venta.crm_contacto),
+        )
         .join(Almacen, Venta.almacen_id == Almacen.id)
         .join(Usuario, Venta.usuario_id == Usuario.id)
         .outerjoin(PosTurnoCaja, Venta.turno_id == PosTurnoCaja.id)
@@ -677,7 +765,14 @@ def get_sale_invoice_request(
 ) -> PosInvoiceRequestResponse:
     sale = db.scalar(
         select(Venta)
-        .options(selectinload(Venta.almacen), selectinload(Venta.usuario))
+        .options(
+            selectinload(Venta.almacen),
+            selectinload(Venta.usuario),
+            selectinload(Venta.crm_cliente),
+            selectinload(Venta.crm_contacto),
+            selectinload(Venta.factura_crm_cliente),
+            selectinload(Venta.factura_crm_contacto),
+        )
         .where(Venta.id == sale_id, Venta.empresa_id == empresa_id)
     )
     if not sale:
@@ -705,7 +800,14 @@ def upsert_sale_invoice_request(
     validate_pos_access(user, empresa)
     sale = db.scalar(
         select(Venta)
-        .options(selectinload(Venta.almacen), selectinload(Venta.usuario))
+        .options(
+            selectinload(Venta.almacen),
+            selectinload(Venta.usuario),
+            selectinload(Venta.crm_cliente),
+            selectinload(Venta.crm_contacto),
+            selectinload(Venta.factura_crm_cliente),
+            selectinload(Venta.factura_crm_contacto),
+        )
         .where(Venta.id == sale_id, Venta.empresa_id == empresa.id)
         .with_for_update()
     )
@@ -713,15 +815,36 @@ def upsert_sale_invoice_request(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Venta no encontrada.")
 
     validate_sale_invoice_request_allowed(sale)
+    crm_defaults = build_sale_invoice_crm_defaults(sale)
 
-    sale.factura_cliente_nombre = normalize_optional_text(cliente_nombre) or normalize_optional_text(sale.cliente_nombre)
-    sale.factura_rfc = normalize_invoice_rfc(rfc)
-    sale.factura_razon_social = normalize_optional_text(razon_social)
-    sale.factura_email = normalize_invoice_email(email)
-    sale.factura_uso_cfdi = normalize_invoice_catalog_value(uso_cfdi)
-    sale.factura_regimen_fiscal = normalize_invoice_catalog_value(regimen_fiscal)
-    sale.factura_codigo_postal = normalize_optional_text(codigo_postal)
-    sale.factura_notas = normalize_optional_text(notas)
+    sale.factura_cliente_nombre = coalesce_text(
+        cliente_nombre,
+        sale.factura_cliente_nombre,
+        crm_defaults["cliente_nombre"],
+        sale.cliente_nombre,
+    )
+    sale.factura_rfc = normalize_invoice_rfc(coalesce_text(rfc, sale.factura_rfc, crm_defaults["rfc"]))
+    sale.factura_razon_social = coalesce_text(
+        razon_social,
+        sale.factura_razon_social,
+        crm_defaults["razon_social"],
+        crm_defaults["cliente_nombre"],
+    )
+    sale.factura_email = normalize_invoice_email(
+        coalesce_text(email, sale.factura_email, crm_defaults["email"], sale.cliente_email)
+    )
+    sale.factura_crm_cliente_id = sale.crm_cliente_id or sale.factura_crm_cliente_id
+    sale.factura_crm_contacto_id = sale.crm_contacto_id or sale.factura_crm_contacto_id
+    sale.factura_uso_cfdi = normalize_invoice_catalog_value(coalesce_text(uso_cfdi, sale.factura_uso_cfdi))
+    sale.factura_regimen_fiscal = normalize_invoice_catalog_value(
+        coalesce_text(regimen_fiscal, sale.factura_regimen_fiscal)
+    )
+    sale.factura_codigo_postal = coalesce_text(
+        codigo_postal,
+        sale.factura_codigo_postal,
+        crm_defaults["codigo_postal"],
+    )
+    sale.factura_notas = coalesce_text(notas, sale.factura_notas)
     sale.factura_requiere_factura_global = False
 
     if not sale.factura_solicitada_at:
@@ -754,6 +877,76 @@ def upsert_sale_invoice_request(
     db.flush()
     db.refresh(sale)
     return serialize_invoice_request_response(sale)
+
+
+def link_sale_to_crm(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    cliente_id: str,
+    contacto_id: str | None,
+    ip_address: str | None,
+) -> SaleResponse:
+    validate_pos_access(user, empresa)
+    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
+    client, contact = resolve_sale_crm_link(
+        db,
+        empresa_id=empresa.id,
+        cliente_id=cliente_id,
+        contacto_id=contacto_id,
+    )
+    sale.crm_cliente_id = client.id
+    sale.crm_contacto_id = contact.id if contact else None
+    sale.crm_cliente = client
+    sale.crm_contacto = contact
+    db.flush()
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.sale.crm_link",
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={
+            "folio": sale.folio,
+            "crm_cliente_id": sale.crm_cliente_id,
+            "crm_contacto_id": sale.crm_contacto_id,
+        },
+    )
+    db.refresh(sale)
+    return serialize_sale_response(db, sale)
+
+
+def unlink_sale_from_crm(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    ip_address: str | None,
+) -> SaleResponse:
+    validate_pos_access(user, empresa)
+    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
+    sale.crm_cliente_id = None
+    sale.crm_contacto_id = None
+    sale.crm_cliente = None
+    sale.crm_contacto = None
+    db.flush()
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.sale.crm_unlink",
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={"folio": sale.folio},
+    )
+    db.refresh(sale)
+    return serialize_sale_response(db, sale)
 
 
 def list_invoice_requests(

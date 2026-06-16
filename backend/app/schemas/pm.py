@@ -129,6 +129,11 @@ class PMProyectoUpdate(BaseModel):
     activo: bool | None = None
 
 
+class PMProjectCrmLinkRequest(BaseModel):
+    cliente_id: str = Field(min_length=1, max_length=36)
+    contacto_id: str | None = Field(default=None, max_length=36)
+
+
 class PMProyectoOut(BaseModel):
     id: str
     empresa_id: str
@@ -145,6 +150,10 @@ class PMProyectoOut(BaseModel):
     responsable_user_id: str | None = None
     responsable_nombre_snapshot: str | None = None
     cliente_nombre_snapshot: str | None = None
+    crm_cliente_id: str | None = None
+    crm_cliente_nombre: str | None = None
+    crm_contacto_id: str | None = None
+    crm_contacto_nombre: str | None = None
     presupuesto_estimado: Decimal | None = None
     activo: bool
     created_by: str | None = None

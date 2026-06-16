@@ -35,6 +35,11 @@ class SaleCancelRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class SaleCrmLinkRequest(BaseModel):
+    cliente_id: str = Field(min_length=1, max_length=36)
+    contacto_id: str | None = Field(default=None, max_length=36)
+
+
 class SaleDetailItem(BaseModel):
     id: str
     venta_id: str
@@ -72,6 +77,10 @@ class SaleItem(BaseModel):
     vendedor_nombre: str
     cliente_nombre: str | None = None
     cliente_email: str | None = None
+    crm_cliente_id: str | None = None
+    crm_cliente_nombre: str | None = None
+    crm_contacto_id: str | None = None
+    crm_contacto_nombre: str | None = None
     subtotal: Decimal
     descuento_lineas_total: Decimal = Decimal("0")
     descuento_global: Decimal = Decimal("0")
@@ -150,6 +159,10 @@ class PosInvoiceRequestResponse(PosInvoiceRequestItem):
     regimen_fiscal: str | None = None
     codigo_postal: str | None = None
     notas: str | None = None
+    factura_crm_cliente_id: str | None = None
+    factura_crm_cliente_nombre: str | None = None
+    factura_crm_contacto_id: str | None = None
+    factura_crm_contacto_nombre: str | None = None
     factura_requiere_factura_global: bool = False
 
 

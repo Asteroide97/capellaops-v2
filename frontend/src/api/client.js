@@ -837,6 +837,25 @@ export function getPosSaleDetail({ saleId, token, empresaId }) {
 }
 
 
+export function linkPosSaleToCrm({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/crm-link`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function unlinkPosSaleFromCrm({ saleId, token, empresaId }) {
+  return apiRequest(`/pos/sales/${saleId}/crm-link`, {
+    method: "DELETE",
+    token,
+    empresaId,
+  });
+}
+
+
 export function createPosSale({ token, empresaId, payload }) {
   return apiRequest("/pos/sales", {
     method: "POST",
@@ -1115,6 +1134,25 @@ export function createPmProject({ token, empresaId, payload }) {
 
 export function getPmProject({ projectId, token, empresaId }) {
   return apiRequest(`/pm/projects/${projectId}`, { token, empresaId });
+}
+
+
+export function linkPmProjectToCrm({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/crm-link`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function unlinkPmProjectFromCrm({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/crm-link`, {
+    method: "DELETE",
+    token,
+    empresaId,
+  });
 }
 
 
@@ -2576,6 +2614,16 @@ export function createCrmClient({ token, empresaId, payload }) {
 
 export function getCrmClient({ clientId, token, empresaId }) {
   return apiRequest(`/crm/clients/${clientId}`, { token, empresaId });
+}
+
+
+export function getCrmClientTimeline({ clientId, token, empresaId }) {
+  return apiRequest(`/crm/clients/${clientId}/timeline`, { token, empresaId });
+}
+
+
+export function getCrmClientCommercialSummary({ clientId, token, empresaId }) {
+  return apiRequest(`/crm/clients/${clientId}/commercial-summary`, { token, empresaId });
 }
 
 
