@@ -29,6 +29,7 @@ from app.schemas.crm import (
     CRMContactItem,
     CRMClientTimelineItem,
     CRMClientTimelineResponse,
+    CRMCotizacionConversionResponse,
     CRMCotizacionItemCreate,
     CRMCotizacionItemResponse,
     CRMCotizacionResponse,
@@ -39,6 +40,7 @@ from app.schemas.crm import (
 )
 from app.services.access import can_access_module
 from app.services.inventory import apply_text_search, count_rows, normalize_optional_text, normalize_required_text
+from app.services.pm import PMContext, create_project, get_or_create_pm_config
 
 
 ZERO = Decimal("0")
@@ -207,6 +209,22 @@ def resolve_quote_status_datetime(quote: CRMCotizacion) -> datetime:
     return ensure_utc_datetime(quote.updated_at)
 
 
+def resolve_client_display_name(client: CRMCliente | None) -> str | None:
+    if client is None:
+        return None
+    return normalize_optional_text(client.nombre_comercial) or normalize_optional_text(client.razon_social)
+
+
+def ensure_quote_accepted(quote: CRMCotizacion) -> None:
+    if resolve_quote_display_status(quote) != "aceptada":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cotizacion no aceptada.")
+
+
+def ensure_client_active(client: CRMCliente) -> None:
+    if client.estatus != "activo":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El cliente CRM debe estar activo.")
+
+
 def get_client_for_company(db: Session, empresa_id: str, client_id: str) -> CRMCliente:
     client = db.scalar(
         select(CRMCliente).where(
@@ -277,6 +295,8 @@ def get_quote_for_company(db: Session, empresa_id: str, quote_id: str) -> CRMCot
             selectinload(CRMCotizacion.cliente),
             selectinload(CRMCotizacion.contacto),
             selectinload(CRMCotizacion.oportunidad),
+            selectinload(CRMCotizacion.proyecto_pm),
+            selectinload(CRMCotizacion.venta_pos),
             selectinload(CRMCotizacion.items),
         )
         .where(
@@ -432,6 +452,10 @@ def serialize_quote(quote: CRMCotizacion) -> CRMCotizacionResponse:
         notas=quote.notas,
         aceptada_at=quote.aceptada_at,
         rechazada_at=quote.rechazada_at,
+        proyecto_pm_id=quote.proyecto_pm_id,
+        venta_pos_id=quote.venta_pos_id,
+        convertida_a_proyecto_at=quote.convertida_a_proyecto_at,
+        convertida_a_venta_at=quote.convertida_a_venta_at,
         activo=quote.activo,
         items=[serialize_quote_item(item) for item in sorted_items],
         created_at=quote.created_at,
@@ -1786,6 +1810,143 @@ def cancel_crm_quote(
     return serialize_quote(quote)
 
 
+def build_pm_context_for_quote_conversion(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    membership_role: str,
+) -> PMContext:
+    if not can_access_module(user, empresa, "pm"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La empresa no tiene acceso al modulo PM.",
+        )
+    config, _created = get_or_create_pm_config(db, empresa.id)
+    if not config.pm_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="PM esta deshabilitado para la empresa activa.",
+        )
+    return PMContext(
+        user=user,
+        empresa_id=empresa.id,
+        membership_role=membership_role,
+        config=config,
+    )
+
+
+def convert_crm_quote_to_project(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    membership_role: str,
+    quote_id: str,
+    nombre_proyecto: str | None,
+    fecha_inicio: date | None,
+    fecha_fin_estimada: date | None,
+    ip_address: str | None,
+) -> CRMCotizacionConversionResponse:
+    validate_crm_access(user, empresa)
+    quote = get_quote_for_company(db, empresa.id, quote_id)
+    ensure_quote_accepted(quote)
+    if quote.proyecto_pm_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cotizacion ya convertida a proyecto.")
+
+    client = quote.cliente or get_client_for_company(db, empresa.id, quote.cliente_id)
+    ensure_client_active(client)
+
+    project_description_parts = [f"Derivado de cotizacion {quote.folio}."]
+    if quote.descripcion:
+        project_description_parts.append(quote.descripcion)
+    if quote.notas:
+        project_description_parts.append(f"Notas comerciales: {quote.notas}")
+    description = "\n\n".join(part for part in project_description_parts if part)
+
+    pm_context = build_pm_context_for_quote_conversion(
+        db,
+        empresa=empresa,
+        user=user,
+        membership_role=membership_role,
+    )
+    project_out = create_project(
+        db,
+        pm_context,
+        nombre=normalize_optional_text(nombre_proyecto) or quote.titulo,
+        codigo=None,
+        descripcion=description,
+        tipo_proyecto="comercial",
+        estatus="borrador",
+        prioridad="media",
+        fecha_inicio=fecha_inicio,
+        fecha_fin_planificada=fecha_fin_estimada,
+        fecha_fin_real=None,
+        porcentaje_avance=ZERO,
+        responsable_user_id=None,
+        responsable_nombre_snapshot=None,
+        cliente_nombre_snapshot=resolve_client_display_name(client),
+        presupuesto_estimado=Decimal(quote.total or ZERO),
+        activo=True,
+        ip_address=ip_address,
+    )
+
+    project = db.get(PMProyecto, project_out.id)
+    if project is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo crear el proyecto PM desde la cotizacion.",
+        )
+    project.crm_cliente_id = quote.cliente_id
+    project.crm_contacto_id = quote.contacto_id
+    project.updated_by = user.id
+
+    quote.proyecto_pm_id = project.id
+    quote.convertida_a_proyecto_at = datetime.now(timezone.utc)
+    db.flush()
+
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="crm.quote.convert_to_project",
+        entity_name="CRMCotizacion",
+        entity_id=quote.id,
+        ip_address=ip_address,
+        metadata_json={"folio": quote.folio, "project_id": project.id},
+    )
+    return CRMCotizacionConversionResponse(
+        ok=True,
+        project_id=project.id,
+        message="Proyecto creado desde cotizacion.",
+    )
+
+
+def convert_crm_quote_to_sale(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    quote_id: str,
+    caja_id: str | None,
+    notas: str | None,
+    ip_address: str | None,
+) -> CRMCotizacionConversionResponse:
+    validate_crm_access(user, empresa)
+    quote = get_quote_for_company(db, empresa.id, quote_id)
+    ensure_quote_accepted(quote)
+    if quote.venta_pos_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cotizacion ya convertida a venta.")
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "No se pudo crear venta POS porque las partidas de la cotizacion no estan ligadas "
+            "a materiales reales del POS."
+        ),
+    )
+
+
 def build_crm_summary(db: Session, empresa_id: str) -> CRMSummaryResponse:
     now = datetime.now(timezone.utc)
     today = now.date()
@@ -2018,6 +2179,8 @@ def get_client_timeline(
         .options(
             selectinload(CRMCotizacion.contacto),
             selectinload(CRMCotizacion.oportunidad),
+            selectinload(CRMCotizacion.proyecto_pm),
+            selectinload(CRMCotizacion.venta_pos),
             selectinload(CRMCotizacion.items),
         )
         .where(
@@ -2129,6 +2292,32 @@ def get_client_timeline(
                     monto=Decimal(quote.total or ZERO),
                     estatus=current_status,
                     referencia_id=f"{quote.id}:{current_status}",
+                )
+            )
+        if quote.proyecto_pm_id and quote.convertida_a_proyecto_at:
+            project_label = quote.proyecto_pm.nombre if quote.proyecto_pm else quote.proyecto_pm_id
+            items.append(
+                CRMClientTimelineItem(
+                    tipo="cotizacion_crm",
+                    fecha=ensure_utc_datetime(quote.convertida_a_proyecto_at),
+                    titulo=f"Cotizacion convertida a proyecto PM {quote.folio}",
+                    descripcion=project_label,
+                    monto=Decimal(quote.total or ZERO),
+                    estatus="convertida_a_proyecto",
+                    referencia_id=f"{quote.id}:convertida_proyecto",
+                )
+            )
+        if quote.venta_pos_id and quote.convertida_a_venta_at:
+            sale_label = quote.venta_pos.folio if quote.venta_pos else quote.venta_pos_id
+            items.append(
+                CRMClientTimelineItem(
+                    tipo="cotizacion_crm",
+                    fecha=ensure_utc_datetime(quote.convertida_a_venta_at),
+                    titulo=f"Cotizacion convertida a venta POS {quote.folio}",
+                    descripcion=sale_label,
+                    monto=Decimal(quote.total or ZERO),
+                    estatus="convertida_a_venta",
+                    referencia_id=f"{quote.id}:convertida_venta",
                 )
             )
 

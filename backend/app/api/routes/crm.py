@@ -23,6 +23,9 @@ from app.schemas.crm import (
     CRMContactItem,
     CRMContactListResponse,
     CRMContactUpdateRequest,
+    CRMCotizacionConversionResponse,
+    CRMCotizacionConvertToProjectRequest,
+    CRMCotizacionConvertToSaleRequest,
     CRMCotizacionCreate,
     CRMCotizacionListResponse,
     CRMCotizacionResponse,
@@ -43,6 +46,8 @@ from app.services.crm import (
     close_opportunity_lost,
     close_opportunity_won,
     complete_activity,
+    convert_crm_quote_to_project,
+    convert_crm_quote_to_sale,
     create_activity,
     create_client,
     create_contact,
@@ -573,6 +578,54 @@ def crm_cancel_quote(
             empresa=context.empresa,
             user=context.user,
             quote_id=quote_id,
+            notas=payload.notas if payload else None,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/quotes/{quote_id}/convert-to-project", response_model=CRMCotizacionConversionResponse)
+def crm_convert_quote_to_project(
+    quote_id: str,
+    request: Request,
+    payload: CRMCotizacionConvertToProjectRequest | None = None,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionConversionResponse:
+    return run_crm_write(
+        db,
+        "convert_quote_to_project",
+        lambda: convert_crm_quote_to_project(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            membership_role=context.membership.role,
+            quote_id=quote_id,
+            nombre_proyecto=payload.nombre_proyecto if payload else None,
+            fecha_inicio=payload.fecha_inicio if payload else None,
+            fecha_fin_estimada=payload.fecha_fin_estimada if payload else None,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/quotes/{quote_id}/convert-to-sale", response_model=CRMCotizacionConversionResponse)
+def crm_convert_quote_to_sale(
+    quote_id: str,
+    request: Request,
+    payload: CRMCotizacionConvertToSaleRequest | None = None,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionConversionResponse:
+    return run_crm_write(
+        db,
+        "convert_quote_to_sale",
+        lambda: convert_crm_quote_to_sale(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            quote_id=quote_id,
+            caja_id=payload.caja_id if payload else None,
             notas=payload.notas if payload else None,
             ip_address=request.client.host if request.client else None,
         ),

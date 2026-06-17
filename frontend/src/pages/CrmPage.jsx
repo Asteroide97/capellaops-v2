@@ -432,6 +432,8 @@ function timelineStatusTone(item) {
     case "lista_para_facturar":
     case "preparada":
     case "aceptada":
+    case "convertida_a_proyecto":
+    case "convertida_a_venta":
       return "success";
     case "cancelada":
     case "perdida":

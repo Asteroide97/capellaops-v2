@@ -211,12 +211,18 @@ class CRMCotizacion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
     aceptada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     rechazada_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    proyecto_pm_id: Mapped[str | None] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=True, index=True)
+    venta_pos_id: Mapped[str | None] = mapped_column(ForeignKey("ventas.id"), nullable=True, index=True)
+    convertida_a_proyecto_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    convertida_a_venta_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1", index=True)
 
     empresa = relationship("Empresa")
     cliente = relationship("CRMCliente", back_populates="cotizaciones")
     contacto = relationship("CRMContacto", back_populates="cotizaciones")
     oportunidad = relationship("CRMOportunidad", back_populates="cotizaciones")
+    proyecto_pm = relationship("PMProyecto", foreign_keys=[proyecto_pm_id])
+    venta_pos = relationship("Venta", foreign_keys=[venta_pos_id])
     items = relationship("CRMCotizacionItem", back_populates="cotizacion", cascade="all, delete-orphan")
 
 

@@ -164,6 +164,24 @@ class CRMCotizacionStatusUpdate(BaseModel):
     notas: str | None = Field(default=None, max_length=4000)
 
 
+class CRMCotizacionConvertToProjectRequest(BaseModel):
+    nombre_proyecto: str | None = Field(default=None, min_length=1, max_length=180)
+    fecha_inicio: date | None = None
+    fecha_fin_estimada: date | None = None
+
+
+class CRMCotizacionConvertToSaleRequest(BaseModel):
+    caja_id: str | None = Field(default=None, max_length=36)
+    notas: str | None = Field(default=None, max_length=4000)
+
+
+class CRMCotizacionConversionResponse(BaseModel):
+    ok: bool
+    project_id: str | None = None
+    sale_id: str | None = None
+    message: str
+
+
 class CRMCotizacionResponse(BaseModel):
     id: str
     empresa_id: str
@@ -188,6 +206,10 @@ class CRMCotizacionResponse(BaseModel):
     notas: str | None = None
     aceptada_at: datetime | None = None
     rechazada_at: datetime | None = None
+    proyecto_pm_id: str | None = None
+    venta_pos_id: str | None = None
+    convertida_a_proyecto_at: datetime | None = None
+    convertida_a_venta_at: datetime | None = None
     activo: bool
     items: list[CRMCotizacionItemResponse]
     created_at: datetime

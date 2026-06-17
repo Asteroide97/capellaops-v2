@@ -11,6 +11,8 @@ import {
 import {
   acceptCrmQuote,
   cancelCrmQuote,
+  convertCrmQuoteToProject,
+  convertCrmQuoteToSale,
   createCrmQuote,
   downloadCrmQuotePdf,
   getCrmQuote,
@@ -77,6 +79,12 @@ const defaultQuoteForm = {
   items: [createLocalQuoteItem()],
 };
 
+const defaultProjectConversionForm = {
+  nombre_proyecto: "",
+  fecha_inicio: "",
+  fecha_fin_estimada: "",
+};
+
 function normalizeOptionalText(value) {
   const trimmed = String(value ?? "").trim();
   return trimmed ? trimmed : null;
@@ -139,6 +147,14 @@ function validateQuoteForm(form) {
   return "";
 }
 
+function buildProjectConversionPayload(form) {
+  return {
+    nombre_proyecto: normalizeOptionalText(form.nombre_proyecto),
+    fecha_inicio: form.fecha_inicio || null,
+    fecha_fin_estimada: form.fecha_fin_estimada || null,
+  };
+}
+
 function quoteStatusTone(status) {
   switch (status) {
     case "aceptada":
@@ -199,6 +215,31 @@ function translateQuoteEditError(message, isEditing) {
   return message || "No se pudo guardar la cotizacion.";
 }
 
+function translateQuoteProjectConversionError(message) {
+  const normalized = String(message || "");
+  if (/ya convertida a proyecto/i.test(normalized)) {
+    return "Esta cotizacion ya fue convertida a proyecto.";
+  }
+  if (/cotizacion no aceptada/i.test(normalized)) {
+    return "Solo las cotizaciones aceptadas pueden convertirse a operacion.";
+  }
+  return normalized || "No se pudo crear el proyecto PM desde la cotizacion.";
+}
+
+function translateQuoteSaleConversionError(message) {
+  const normalized = String(message || "");
+  if (/partidas.*materiales reales del pos/i.test(normalized)) {
+    return "Para crear una venta POS desde esta cotizacion, primero las partidas deben estar ligadas a materiales reales del POS.";
+  }
+  if (/ya convertida a venta/i.test(normalized)) {
+    return "Esta cotizacion ya fue convertida a venta POS.";
+  }
+  if (/cotizacion no aceptada/i.test(normalized)) {
+    return "Solo las cotizaciones aceptadas pueden convertirse a operacion.";
+  }
+  return normalized || "No se pudo crear la venta POS desde la cotizacion.";
+}
+
 export default function CrmQuotesView({
   token,
   empresaId,
@@ -223,6 +264,8 @@ export default function CrmQuotesView({
 
   const [quoteDetailOpen, setQuoteDetailOpen] = useState(false);
   const [quoteDetail, setQuoteDetail] = useState(null);
+  const [projectConversionOpen, setProjectConversionOpen] = useState(false);
+  const [projectConversionForm, setProjectConversionForm] = useState(defaultProjectConversionForm);
 
   const currentQuoteContacts = useMemo(
     () => contactOptionsByClient[quoteForm.cliente_id] || [],
@@ -384,6 +427,22 @@ export default function CrmQuotesView({
     setQuoteDetail(null);
   }
 
+  function openProjectConversionModal(quote) {
+    setProjectConversionForm({
+      nombre_proyecto: quote?.titulo || "",
+      fecha_inicio: "",
+      fecha_fin_estimada: "",
+    });
+    setProjectConversionOpen(true);
+    setError("");
+    setSuccess("");
+  }
+
+  function closeProjectConversionModal() {
+    setProjectConversionOpen(false);
+    setProjectConversionForm(defaultProjectConversionForm);
+  }
+
   function updateQuoteItem(localId, fieldName, value) {
     setQuoteForm((current) => ({
       ...current,
@@ -499,6 +558,83 @@ export default function CrmQuotesView({
       await downloadCrmQuotePdf({ quoteId, token, empresaId });
     } catch {
       setError("No se pudo generar el PDF de la cotizacion.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleProjectConversionSubmit(event) {
+    event.preventDefault();
+    if (!quoteDetail?.id) {
+      return;
+    }
+    if (quoteDetail.estatus !== "aceptada") {
+      setError("Solo las cotizaciones aceptadas pueden convertirse a operacion.");
+      return;
+    }
+    if (quoteDetail.proyecto_pm_id) {
+      setError("Esta cotizacion ya fue convertida a proyecto.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await convertCrmQuoteToProject({
+        quoteId: quoteDetail.id,
+        token,
+        empresaId,
+        payload: buildProjectConversionPayload(projectConversionForm),
+      });
+      closeProjectConversionModal();
+      await loadQuotesPage(quoteFilters);
+      const refreshedQuote = await loadQuoteDetail(quoteDetail.id);
+      if (typeof onQuotesChanged === "function") {
+        await onQuotesChanged(refreshedQuote?.cliente_id || quoteDetail.cliente_id || "");
+      }
+      setSuccess(response.message || "Proyecto creado desde cotizacion.");
+    } catch (requestError) {
+      setError(translateQuoteProjectConversionError(requestError.message));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleQuoteSaleConversion(quote) {
+    if (!quote?.id) {
+      return;
+    }
+    if (quote.estatus !== "aceptada") {
+      setError("Solo las cotizaciones aceptadas pueden convertirse a operacion.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError("");
+    setSuccess("");
+    try {
+      const response = await convertCrmQuoteToSale({
+        quoteId: quote.id,
+        token,
+        empresaId,
+        payload: {
+          caja_id: null,
+          notas: `Venta generada desde cotizacion ${quote.folio || ""}`.trim(),
+        },
+      });
+      await loadQuotesPage(quoteFilters);
+      if (quoteDetailOpen && quoteDetail?.id === quote.id) {
+        const refreshedQuote = await loadQuoteDetail(quote.id);
+        if (typeof onQuotesChanged === "function") {
+          await onQuotesChanged(refreshedQuote?.cliente_id || quote.cliente_id || "");
+        }
+      } else if (typeof onQuotesChanged === "function") {
+        await onQuotesChanged(quote.cliente_id || "");
+      }
+      setSuccess(response.message || "Venta creada desde cotizacion.");
+    } catch (requestError) {
+      setError(translateQuoteSaleConversionError(requestError.message));
     } finally {
       setSubmitting(false);
     }
@@ -1066,10 +1202,137 @@ export default function CrmQuotesView({
                 </article>
               </div>
             </DataCard>
+
+            <DataCard
+              subtitle="Convierte la cotizacion aceptada a operacion sin perder el vinculo comercial con CRM."
+              title="Conversion operativa"
+            >
+              {quoteDetail.estatus === "aceptada" ? (
+                <div className="inventory-detail-grid">
+                  <p className="inventory-form-span-2">
+                    <strong>Estado de conversion:</strong> Esta cotizacion ya puede convertirse a proyecto PM.
+                  </p>
+                  <div className="inventory-form-span-2 inventory-actions">
+                    {quoteDetail.proyecto_pm_id ? (
+                      <StatusBadge tone="success">Proyecto creado</StatusBadge>
+                    ) : (
+                      <ActionButton
+                        disabled={submitting}
+                        onClick={() => openProjectConversionModal(quoteDetail)}
+                        size="sm"
+                        tone="primary"
+                        type="button"
+                      >
+                        Crear proyecto PM
+                      </ActionButton>
+                    )}
+                    {quoteDetail.venta_pos_id ? (
+                      <StatusBadge tone="success">Venta POS creada</StatusBadge>
+                    ) : (
+                      <ActionButton
+                        disabled={submitting}
+                        onClick={() => handleQuoteSaleConversion(quoteDetail)}
+                        size="sm"
+                        type="button"
+                      >
+                        Crear venta POS
+                      </ActionButton>
+                    )}
+                  </div>
+                  {quoteDetail.proyecto_pm_id ? (
+                    <>
+                      <p><strong>Proyecto PM:</strong> {safeDisplayText(quoteDetail.proyecto_pm_id, "Proyecto registrado")}</p>
+                      <p>
+                        <strong>Fecha conversion proyecto:</strong>{" "}
+                        {safeDisplayText(
+                          quoteDetail.convertida_a_proyecto_at ? formatDate(quoteDetail.convertida_a_proyecto_at) : "No registrada",
+                        )}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="inventory-form-span-2">Aun no se ha creado un proyecto PM desde esta cotizacion.</p>
+                  )}
+                  {quoteDetail.venta_pos_id ? (
+                    <>
+                      <p><strong>Venta POS:</strong> {safeDisplayText(quoteDetail.venta_pos_id, "Venta registrada")}</p>
+                      <p>
+                        <strong>Fecha conversion venta:</strong>{" "}
+                        {safeDisplayText(
+                          quoteDetail.convertida_a_venta_at ? formatDate(quoteDetail.convertida_a_venta_at) : "No registrada",
+                        )}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="inventory-form-span-2">
+                      La conversion a venta POS depende de que las partidas esten ligadas a materiales reales del POS.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="inventory-form-note">
+                  <strong>Conversion operativa</strong>
+                  <p>Solo las cotizaciones aceptadas pueden convertirse a operacion.</p>
+                </div>
+              )}
+            </DataCard>
           </div>
         ) : (
           <EmptyState note="No se encontro informacion de la cotizacion." title="Sin detalle disponible" />
         )}
+      </ModalShell>
+
+      <ModalShell
+        footer={(
+          <div className="inventory-actions">
+            <ActionButton onClick={closeProjectConversionModal} size="sm" type="button">
+              Cancelar
+            </ActionButton>
+            <ActionButton
+              disabled={submitting}
+              form="crm-quote-project-conversion-form"
+              size="sm"
+              tone="primary"
+              type="submit"
+            >
+              {submitting ? "Creando..." : "Crear proyecto PM"}
+            </ActionButton>
+          </div>
+        )}
+        onClose={closeProjectConversionModal}
+        open={projectConversionOpen}
+        size="lg"
+        subtitle="Crea un proyecto PM ligado a la cotizacion aceptada y al cliente CRM."
+        title="Crear proyecto PM"
+      >
+        <form className="inventory-modal-form" id="crm-quote-project-conversion-form" onSubmit={handleProjectConversionSubmit}>
+          <section className="inventory-form-section">
+            <SectionTitle title="Datos del proyecto" />
+            <FormGrid>
+              <Field label="Nombre del proyecto" span={2}>
+                <input
+                  onChange={(event) => setProjectConversionForm((current) => ({ ...current, nombre_proyecto: event.target.value }))}
+                  required
+                  type="text"
+                  value={projectConversionForm.nombre_proyecto}
+                />
+              </Field>
+              <Field label="Fecha inicio">
+                <input
+                  onChange={(event) => setProjectConversionForm((current) => ({ ...current, fecha_inicio: event.target.value }))}
+                  type="date"
+                  value={projectConversionForm.fecha_inicio}
+                />
+              </Field>
+              <Field label="Fecha fin estimada">
+                <input
+                  onChange={(event) => setProjectConversionForm((current) => ({ ...current, fecha_fin_estimada: event.target.value }))}
+                  type="date"
+                  value={projectConversionForm.fecha_fin_estimada}
+                />
+              </Field>
+            </FormGrid>
+          </section>
+        </form>
       </ModalShell>
     </div>
   );

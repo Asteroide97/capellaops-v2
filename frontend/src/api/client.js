@@ -2707,6 +2707,26 @@ export function cancelCrmQuote({ quoteId, token, empresaId }) {
 }
 
 
+export function convertCrmQuoteToProject({ quoteId, token, empresaId, payload }) {
+  return apiRequest(`/crm/quotes/${quoteId}/convert-to-project`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function convertCrmQuoteToSale({ quoteId, token, empresaId, payload }) {
+  return apiRequest(`/crm/quotes/${quoteId}/convert-to-sale`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function listCrmClients({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);
