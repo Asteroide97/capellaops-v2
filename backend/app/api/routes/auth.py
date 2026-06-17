@@ -1,3 +1,4 @@
+import logging
 import math
 import re
 from datetime import datetime, timedelta, timezone
@@ -50,8 +51,10 @@ from app.services.twilio_verify import (
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 PASSWORD_RESET_TOKEN_TTL_MINUTES = 15
 PASSWORD_RESET_START_MESSAGE = "Si los datos coinciden, enviaremos un codigo de verificacion."
+PASSWORD_RESET_VERIFY_ERROR_MESSAGE = "No se pudo validar el codigo. Revisa los datos e intentalo de nuevo."
 
 
 def slugify(value: str) -> str:
@@ -579,32 +582,85 @@ def password_reset_start(
 @router.post("/password-reset/verify", response_model=PasswordResetVerifyResponse)
 def password_reset_verify(
     payload: PasswordResetVerifyRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> PasswordResetVerifyResponse:
     now = datetime.now(timezone.utc)
+    normalized_email = normalize_email(payload.email)
     user, phone_e164 = get_active_user_for_password_reset(db, payload.email, payload.phone)
     if not user or not phone_e164:
+        logger.info(
+            "password_reset.verify.rejected identity_mismatch email=%s phone=%s ip=%s",
+            normalized_email,
+            phone_e164 or "invalid",
+            request.client.host if request.client else None,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No se pudo validar el codigo.",
+            detail=PASSWORD_RESET_VERIFY_ERROR_MESSAGE,
         )
 
     try:
         is_valid_code = check_phone_verification(phone_e164, payload.code)
     except TwilioVerifyInvalidCodeError as exc:
+        logger.info(
+            "password_reset.verify.rejected invalid_code email=%s phone=%s ip=%s",
+            normalized_email,
+            phone_e164,
+            request.client.host if request.client else None,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No se pudo validar el codigo.",
+            detail=PASSWORD_RESET_VERIFY_ERROR_MESSAGE,
         ) from exc
     except TwilioVerifyConfigurationError as exc:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+        logger.warning(
+            "password_reset.verify.provider_error config email=%s phone=%s ip=%s detail=%s",
+            normalized_email,
+            phone_e164,
+            request.client.host if request.client else None,
+            str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=PASSWORD_RESET_VERIFY_ERROR_MESSAGE,
+        ) from exc
     except TwilioVerifyServiceError as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+        logger.warning(
+            "password_reset.verify.provider_error service email=%s phone=%s ip=%s detail=%s",
+            normalized_email,
+            phone_e164,
+            request.client.host if request.client else None,
+            str(exc),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=PASSWORD_RESET_VERIFY_ERROR_MESSAGE,
+        ) from exc
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            logger.warning(
+                "password_reset.verify.unexpected_401 email=%s phone=%s ip=%s",
+                normalized_email,
+                phone_e164,
+                request.client.host if request.client else None,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=PASSWORD_RESET_VERIFY_ERROR_MESSAGE,
+            ) from exc
+        raise
 
     if not is_valid_code:
+        logger.info(
+            "password_reset.verify.rejected not_approved email=%s phone=%s ip=%s",
+            normalized_email,
+            phone_e164,
+            request.client.host if request.client else None,
+        )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="No se pudo validar el codigo.",
+            detail=PASSWORD_RESET_VERIFY_ERROR_MESSAGE,
         )
 
     invalidate_password_reset_tokens(db, user.id, now)
@@ -619,6 +675,13 @@ def password_reset_verify(
         )
     )
     db.commit()
+
+    logger.info(
+        "password_reset.verify.approved email=%s phone=%s ip=%s",
+        normalized_email,
+        phone_e164,
+        request.client.host if request.client else None,
+    )
 
     return PasswordResetVerifyResponse(
         reset_token=reset_token,

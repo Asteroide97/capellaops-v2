@@ -160,7 +160,12 @@ export default function LoginPage() {
           email: resetForm.email.trim(),
           phone: buildMexPhoneE164(cleanPhone),
         });
-        updateResetField("phoneDigits", cleanPhone);
+        setResetToken("");
+        setResetForm((current) => ({
+          ...current,
+          phoneDigits: cleanPhone,
+          code: "",
+        }));
         setResetNotice(response.message || RESET_START_MESSAGE);
         setResetStep(2);
         return;
@@ -426,6 +431,8 @@ export default function LoginPage() {
                   setResetStep(resetStep - 1);
                   setResetError("");
                   setResetNotice("");
+                  setResetToken("");
+                  updateResetField("code", "");
                 }}
                 type="button"
               >
