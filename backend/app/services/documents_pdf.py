@@ -11,6 +11,7 @@ from fastapi import HTTPException, status
 
 from app.models import Empresa
 from app.models.pm import PMProyecto
+from app.schemas.crm import CRMCotizacionResponse
 from app.schemas.pm import PMEstimacionDetailOut
 from app.schemas.procurement import PurchaseOrderResponse
 
@@ -571,6 +572,69 @@ def build_purchase_order_pdf(company: Empresa, order: PurchaseOrderResponse) -> 
     pdf_bytes = _render_pdf(story_builder)
     folio = _sanitize_filename(order.folio, "orden-compra")
     return pdf_bytes, f"orden-compra-{folio}.pdf"
+
+
+def build_crm_quote_pdf(company: Empresa, quote: CRMCotizacionResponse) -> tuple[bytes, str]:
+    subtitle = "Documento comercial. No es comprobante fiscal."
+
+    def story_builder(rl: dict, styles: dict):
+        intro_rows = [
+            ("Folio", _text(quote.folio)),
+            ("Fecha emision", _date_label(quote.fecha_emision)),
+            ("Fecha vencimiento", _date_label(quote.fecha_vencimiento)),
+            ("Estatus", _text(quote.estatus)),
+        ]
+        secondary_rows = [
+            ("Cliente", _text(quote.cliente_nombre_comercial, "Sin cliente")),
+            ("Contacto", _text(quote.contacto_nombre, "Sin contacto")),
+            ("Oportunidad", _text(quote.oportunidad_titulo, "Sin oportunidad")),
+            ("Titulo", _text(quote.titulo, "Sin titulo")),
+            ("Descripcion", _text(quote.descripcion, "Sin descripcion")),
+            ("Moneda", _text(quote.moneda, "MXN")),
+        ]
+        line_rows = [
+            [
+                _text(item.descripcion),
+                _number(item.cantidad),
+                _money(item.precio_unitario),
+                _money(item.descuento),
+                _money(item.impuesto),
+                _money(item.total),
+            ]
+            for item in quote.items
+        ]
+        totals_rows = [
+            ("Subtotal", _money(quote.subtotal)),
+            ("Descuento total", _money(quote.descuento_total)),
+            ("Impuesto total", _money(quote.impuesto_total)),
+            ("Total", _money(quote.total)),
+        ]
+        notes_parts = [
+            f"Condiciones de pago: {_text(quote.condiciones_pago, 'Sin condiciones de pago')}",
+            "",
+            f"Notas: {_text(quote.notas, 'Sin notas')}",
+            "",
+            "Esta cotizacion no es una factura fiscal.",
+        ]
+        return _build_story_shell(
+            rl,
+            styles,
+            company=company,
+            document_title="Cotizacion",
+            subtitle=subtitle,
+            intro_rows=intro_rows,
+            secondary_rows=secondary_rows,
+            line_section_title="Partidas",
+            line_headers=["Descripcion", "Cantidad", "Precio unitario", "Descuento", "Impuesto", "Total"],
+            line_rows=line_rows or [["Sin partidas", "-", _money(0), _money(0), _money(0), _money(0)]],
+            line_col_widths=[72 * rl["mm"], 20 * rl["mm"], 26 * rl["mm"], 22 * rl["mm"], 18 * rl["mm"], 20 * rl["mm"]],
+            totals_rows=totals_rows,
+            notes="\n".join(notes_parts),
+        )
+
+    pdf_bytes = _render_pdf(story_builder)
+    folio = _sanitize_filename(quote.folio, "cotizacion")
+    return pdf_bytes, f"cotizacion-{folio}.pdf"
 
 
 def _string_contains(value: str | None, token: str) -> bool:

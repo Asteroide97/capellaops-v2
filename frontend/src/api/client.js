@@ -2624,6 +2624,89 @@ export function getCrmSummary({ token, empresaId }) {
 }
 
 
+export function listCrmQuotes({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "cliente_id", filters.cliente_id);
+  appendQueryValue(query, "oportunidad_id", filters.oportunidad_id);
+  appendQueryValue(query, "estatus", filters.estatus);
+  appendQueryValue(query, "search", filters.search);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/crm/quotes${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function createCrmQuote({ token, empresaId, payload }) {
+  return apiRequest("/crm/quotes", {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function getCrmQuote({ quoteId, token, empresaId }) {
+  return apiRequest(`/crm/quotes/${quoteId}`, { token, empresaId });
+}
+
+
+export function downloadCrmQuotePdf({ quoteId, token, empresaId }) {
+  return downloadFileRequest(`/crm/quotes/${quoteId}/pdf`, {
+    token,
+    empresaId,
+    filenameFallback: "cotizacion.pdf",
+  });
+}
+
+
+export function updateCrmQuote({ quoteId, token, empresaId, payload }) {
+  return apiRequest(`/crm/quotes/${quoteId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function sendCrmQuote({ quoteId, token, empresaId }) {
+  return apiRequest(`/crm/quotes/${quoteId}/send`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function acceptCrmQuote({ quoteId, token, empresaId }) {
+  return apiRequest(`/crm/quotes/${quoteId}/accept`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function rejectCrmQuote({ quoteId, token, empresaId }) {
+  return apiRequest(`/crm/quotes/${quoteId}/reject`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function cancelCrmQuote({ quoteId, token, empresaId }) {
+  return apiRequest(`/crm/quotes/${quoteId}/cancel`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
 export function listCrmClients({ token, empresaId, filters = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "q", filters.q);

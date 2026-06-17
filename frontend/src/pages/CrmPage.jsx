@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   Clock3,
   Eye,
+  FileText,
   Filter,
   HandCoins,
   KanbanSquare,
@@ -72,13 +73,14 @@ import {
   parseBooleanFilter,
   safeDisplayText,
 } from "./inventory/shared";
+import CrmQuotesView from "./crm/CrmQuotesView";
 
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const RFC_REGEX = /^([A-Z&N]{3,4}\d{6}[A-Z0-9]{3}|XAXX010101000)$/i;
 const POSTAL_CODE_REGEX = /^\d{5}$/;
 const EMPTY_META = { total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 };
-const CRM_VIEWS = ["summary", "clients", "contacts", "opportunities", "activities", "pipeline"];
+const CRM_VIEWS = ["summary", "clients", "contacts", "opportunities", "activities", "pipeline", "quotes"];
 const CLIENT_TYPE_OPTIONS = [
   { value: "prospecto", label: "Prospecto" },
   { value: "cliente", label: "Cliente" },
@@ -118,12 +120,31 @@ const defaultSummary = {
     monto_ganado: 0,
     actividades_pendientes: 0,
     actividades_vencidas: 0,
+    cotizaciones_abiertas: 0,
+    cotizaciones_aceptadas: 0,
+    monto_cotizado_abierto: 0,
+    monto_cotizado_aceptado: 0,
   },
   pipeline_por_etapa: [],
   oportunidades_recientes: [],
   actividades_pendientes: [],
   clientes_recientes: [],
 };
+
+function normalizeCrmSummary(response) {
+  return {
+    ...defaultSummary,
+    ...(response || {}),
+    kpis: {
+      ...defaultSummary.kpis,
+      ...(response?.kpis || {}),
+    },
+    pipeline_por_etapa: response?.pipeline_por_etapa || [],
+    oportunidades_recientes: response?.oportunidades_recientes || [],
+    actividades_pendientes: response?.actividades_pendientes || [],
+    clientes_recientes: response?.clientes_recientes || [],
+  };
+}
 
 const defaultClientFilters = {
   q: "",
@@ -141,10 +162,22 @@ const defaultClientCommercialSummary = {
   proyectos_activos: 0,
   oportunidades_abiertas: 0,
   monto_pipeline: 0,
+  cotizaciones_count: 0,
+  cotizaciones_abiertas: 0,
+  cotizaciones_aceptadas: 0,
+  monto_cotizado: 0,
+  monto_cotizado_aceptado: 0,
   facturas_solicitadas: 0,
   actividades_pendientes: 0,
   ultima_actividad_at: null,
 };
+
+function normalizeClientCommercialSummary(response) {
+  return {
+    ...defaultClientCommercialSummary,
+    ...(response || {}),
+  };
+}
 
 const defaultContactFilters = {
   q: "",
@@ -340,6 +373,8 @@ function timelineTypeLabel(value) {
       return "Venta POS";
     case "proyecto_pm":
       return "Proyecto PM";
+    case "cotizacion_crm":
+      return "Cotizacion";
     case "oportunidad":
       return "Oportunidad";
     case "actividad":
@@ -357,6 +392,8 @@ function timelineTypeTone(value) {
     case "venta_pos":
       return "success";
     case "proyecto_pm":
+      return "info";
+    case "cotizacion_crm":
       return "info";
     case "oportunidad":
       return "warning";
@@ -394,17 +431,23 @@ function timelineStatusTone(item) {
     case "activo":
     case "lista_para_facturar":
     case "preparada":
+    case "aceptada":
       return "success";
     case "cancelada":
     case "perdida":
     case "descartada":
+    case "rechazada":
       return "danger";
     case "pendiente":
     case "pendiente_datos":
     case "suspendida":
     case "solicitada":
     case "en_revision":
+    case "enviada":
+    case "vencida":
       return "warning";
+    case "borrador":
+      return "info";
     default:
       return "neutral";
   }
@@ -736,6 +779,41 @@ export default function CrmPage() {
       tone: "warning",
     },
     {
+      key: "cotizaciones_count",
+      label: "Cotizaciones",
+      meta: "Total de cotizaciones del cliente",
+      value: formatNumber(clientDetailCommercialSummary.cotizaciones_count),
+      tone: "info",
+    },
+    {
+      key: "cotizaciones_abiertas",
+      label: "Cotizaciones abiertas",
+      meta: "Borrador o enviadas",
+      value: formatNumber(clientDetailCommercialSummary.cotizaciones_abiertas),
+      tone: "warning",
+    },
+    {
+      key: "cotizaciones_aceptadas",
+      label: "Cotizaciones aceptadas",
+      meta: "Cotizaciones cerradas a favor",
+      value: formatNumber(clientDetailCommercialSummary.cotizaciones_aceptadas),
+      tone: "success",
+    },
+    {
+      key: "monto_cotizado",
+      label: "Monto cotizado",
+      meta: "Total cotizado al cliente",
+      value: formatMoney(clientDetailCommercialSummary.monto_cotizado),
+      tone: "info",
+    },
+    {
+      key: "monto_cotizado_aceptado",
+      label: "Monto cotizado aceptado",
+      meta: "Valor aceptado en cotizaciones",
+      value: formatMoney(clientDetailCommercialSummary.monto_cotizado_aceptado),
+      tone: "success",
+    },
+    {
       key: "facturas_solicitadas",
       label: "Facturas solicitadas",
       meta: "Solicitudes POS relacionadas",
@@ -762,8 +840,9 @@ export default function CrmPage() {
     setSummaryLoading(true);
     try {
       const response = await getCrmSummary({ token, empresaId });
-      setSummary(response);
-      return response;
+      const normalizedResponse = normalizeCrmSummary(response);
+      setSummary(normalizedResponse);
+      return normalizedResponse;
     } finally {
       setSummaryLoading(false);
     }
@@ -919,7 +998,7 @@ export default function CrmPage() {
       }),
     ]);
     setClientDetail(clientResponse);
-    setClientDetailCommercialSummary(commercialSummaryResponse || defaultClientCommercialSummary);
+    setClientDetailCommercialSummary(normalizeClientCommercialSummary(commercialSummaryResponse));
     setClientDetailTimeline(timelineResponse.items || []);
     setClientDetailContacts(contactsResponse.items || []);
     setClientDetailOpportunities(opportunitiesResponse.items || []);
@@ -964,7 +1043,7 @@ export default function CrmPage() {
           }),
         ]);
 
-        setSummary(summaryResponse);
+        setSummary(normalizeCrmSummary(summaryResponse));
         setClientOptions(optionClients.items || []);
         setOpportunityOptions(optionOpportunities.items || []);
         setClients(clientResponse.items || []);
@@ -1588,6 +1667,21 @@ export default function CrmPage() {
     }
   }
 
+  async function handleQuotesChanged(clientId = "") {
+    setError("");
+    try {
+      await Promise.all([
+        loadSummaryData(),
+        loadOpportunityOptions(),
+      ]);
+      if (clientDetailOpen && clientDetail?.id && clientDetail.id === clientId) {
+        await loadClientDetailBundle(clientId);
+      }
+    } catch (requestError) {
+      setError(requestError.message || "No se pudieron actualizar las cotizaciones del CRM.");
+    }
+  }
+
   if (loading) {
     return <div className="screen-center">Cargando CRM...</div>;
   }
@@ -1616,6 +1710,7 @@ export default function CrmPage() {
           <CrmTabButton active={activeView === "opportunities"} icon={<Target size={16} />} label="Oportunidades" onClick={() => setCrmView("opportunities")} />
           <CrmTabButton active={activeView === "activities"} icon={<CalendarClock size={16} />} label="Actividades" onClick={() => setCrmView("activities")} />
           <CrmTabButton active={activeView === "pipeline"} icon={<KanbanSquare size={16} />} label="Pipeline" onClick={() => setCrmView("pipeline")} />
+          <CrmTabButton active={activeView === "quotes"} icon={<FileText size={16} />} label="Cotizaciones" onClick={() => setCrmView("quotes")} />
         </div>
       </PageHeader>
 
@@ -1642,6 +1737,10 @@ export default function CrmPage() {
         <MetricCard icon={<XCircle size={16} />} label="Perdidas" meta="Cerradas en contra" tone="danger" value={formatNumber(summary.kpis.oportunidades_perdidas)} />
         <MetricCard icon={<Clock3 size={16} />} label="Actividades pendientes" meta="Sin completar" tone="warning" value={formatNumber(summary.kpis.actividades_pendientes)} />
         <MetricCard icon={<AlertTriangle size={16} />} label="Actividades vencidas" meta="Requieren accion" tone="danger" value={formatNumber(summary.kpis.actividades_vencidas)} />
+        <MetricCard icon={<FileText size={16} />} label="Cotizaciones abiertas" meta="Borradores y enviadas" tone="info" value={formatNumber(summary.kpis.cotizaciones_abiertas)} />
+        <MetricCard icon={<CheckCircle2 size={16} />} label="Cotizaciones aceptadas" meta="Cerradas a favor" tone="success" value={formatNumber(summary.kpis.cotizaciones_aceptadas)} />
+        <MetricCard icon={<HandCoins size={16} />} label="Monto cotizado abierto" meta="Valor pendiente por definir" tone="warning" value={formatMoney(summary.kpis.monto_cotizado_abierto)} />
+        <MetricCard icon={<HandCoins size={16} />} label="Monto cotizado aceptado" meta="Valor comercial ganado" tone="success" value={formatMoney(summary.kpis.monto_cotizado_aceptado)} />
       </section>
 
       {activeView === "summary" ? (
@@ -1717,6 +1816,43 @@ export default function CrmPage() {
           </section>
 
           <section className="crm-summary-grid">
+            <DataCard
+              actions={<ActionButton icon={<FileText size={16} />} onClick={() => setCrmView("quotes")} size="sm" type="button">Ver cotizaciones</ActionButton>}
+              subtitle="KPIs globales de cotizaciones comerciales dentro del CRM."
+              title="Cotizaciones"
+            >
+              <div className="crm-stage-summary-grid">
+                <article className="crm-stage-summary-card tone-info">
+                  <div>
+                    <strong>Cotizaciones abiertas</strong>
+                    <span>Borradores y enviadas</span>
+                  </div>
+                  <b>{formatNumber(summary.kpis.cotizaciones_abiertas)}</b>
+                </article>
+                <article className="crm-stage-summary-card tone-success">
+                  <div>
+                    <strong>Cotizaciones aceptadas</strong>
+                    <span>Cotizaciones cerradas a favor</span>
+                  </div>
+                  <b>{formatNumber(summary.kpis.cotizaciones_aceptadas)}</b>
+                </article>
+                <article className="crm-stage-summary-card tone-warning">
+                  <div>
+                    <strong>Monto cotizado abierto</strong>
+                    <span>Valor comercial pendiente</span>
+                  </div>
+                  <b>{formatMoney(summary.kpis.monto_cotizado_abierto)}</b>
+                </article>
+                <article className="crm-stage-summary-card tone-success">
+                  <div>
+                    <strong>Monto cotizado aceptado</strong>
+                    <span>Valor ya aceptado por clientes</span>
+                  </div>
+                  <b>{formatMoney(summary.kpis.monto_cotizado_aceptado)}</b>
+                </article>
+              </div>
+            </DataCard>
+
             <DataCard
               actions={<ActionButton icon={<Plus size={16} />} onClick={() => openActivityCreateModal()} size="sm" tone="primary" type="button">Nueva actividad</ActionButton>}
               subtitle="Actividades activas y sin completar."
@@ -2411,6 +2547,18 @@ export default function CrmPage() {
             )}
           </DataCard>
         </div>
+      ) : null}
+
+      {activeView === "quotes" ? (
+        <CrmQuotesView
+          clientOptions={clientOptions}
+          contactOptionsByClient={contactOptionsByClient}
+          empresaId={empresaId}
+          loadClientContactOptions={loadClientContactOptions}
+          onQuotesChanged={handleQuotesChanged}
+          opportunityOptions={opportunityOptions}
+          token={token}
+        />
       ) : null}
 
       <ModalShell

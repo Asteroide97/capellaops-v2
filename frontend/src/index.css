@@ -5853,6 +5853,39 @@ body.pm-is-dragging {
   margin: 0;
 }
 
+.crm-quote-item-list {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.crm-quote-item-card {
+  display: grid;
+  gap: 0.95rem;
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(248, 250, 252, 0.7);
+}
+
+.crm-quote-item-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.crm-quote-item-card-head strong {
+  color: var(--text-main, #0f172a);
+  font-size: 0.94rem;
+}
+
+.crm-quote-totals-grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
 @media (min-width: 1080px) {
   .crm-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -5882,6 +5915,11 @@ body.pm-is-dragging {
   .crm-pipeline-card-top,
   .crm-pipeline-card-meta {
     align-items: start;
+    flex-direction: column;
+  }
+
+  .crm-quote-item-card-head {
+    align-items: flex-start;
     flex-direction: column;
   }
 }

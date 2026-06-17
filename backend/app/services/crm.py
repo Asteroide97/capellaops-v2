@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
@@ -13,6 +13,8 @@ from app.models import (
     CRMActividad,
     CRMCliente,
     CRMContacto,
+    CRMCotizacion,
+    CRMCotizacionItem,
     CRMOportunidad,
     Empresa,
     EmpresaUsuario,
@@ -27,6 +29,9 @@ from app.schemas.crm import (
     CRMContactItem,
     CRMClientTimelineItem,
     CRMClientTimelineResponse,
+    CRMCotizacionItemCreate,
+    CRMCotizacionItemResponse,
+    CRMCotizacionResponse,
     CRMOpportunityItem,
     CRMSummaryKpis,
     CRMSummaryPipelineStageItem,
@@ -44,6 +49,8 @@ CLIENT_TYPES = {"prospecto", "cliente", "otro"}
 CLIENT_STATUSES = {"activo", "inactivo"}
 OPPORTUNITY_STAGES = {"nueva", "contactado", "propuesta", "negociacion", "ganada", "perdida"}
 ACTIVITY_TYPES = {"llamada", "email", "reunion", "tarea", "nota", "whatsapp", "otro"}
+QUOTE_STATUSES = {"borrador", "enviada", "aceptada", "rechazada", "cancelada", "vencida"}
+QUOTE_OPEN_STATUSES = {"borrador", "enviada"}
 
 
 def validate_crm_access(user: Usuario, empresa: Empresa) -> None:
@@ -163,6 +170,43 @@ def normalize_nonnegative_amount(value: Decimal | int | float | None) -> Decimal
     return amount
 
 
+def quantize_decimal(value: Decimal | int | float | None) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(Decimal("0.0001"))
+
+
+def normalize_quote_status(value: str | None, *, default: str = "borrador") -> str:
+    normalized = (normalize_optional_text(value) or default).lower()
+    if normalized not in QUOTE_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estatus de cotizacion invalido.")
+    return normalized
+
+
+def normalize_quote_currency(value: str | None, *, default: str = "MXN") -> str:
+    normalized = (normalize_optional_text(value) or default).upper()
+    if len(normalized) > 10:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La moneda es invalida.")
+    return normalized
+
+
+def resolve_quote_display_status(quote: CRMCotizacion) -> str:
+    if quote.estatus in {"aceptada", "rechazada", "cancelada"}:
+        return quote.estatus
+    if quote.fecha_vencimiento and quote.fecha_vencimiento < datetime.now(timezone.utc).date():
+        return "vencida"
+    return quote.estatus
+
+
+def resolve_quote_status_datetime(quote: CRMCotizacion) -> datetime:
+    if quote.estatus == "aceptada" and quote.aceptada_at:
+        return ensure_utc_datetime(quote.aceptada_at)
+    if quote.estatus == "rechazada" and quote.rechazada_at:
+        return ensure_utc_datetime(quote.rechazada_at)
+    if quote.estatus == "enviada":
+        emission_date = quote.fecha_emision or quote.created_at.date()
+        return datetime.combine(emission_date, time.min, tzinfo=timezone.utc)
+    return ensure_utc_datetime(quote.updated_at)
+
+
 def get_client_for_company(db: Session, empresa_id: str, client_id: str) -> CRMCliente:
     client = db.scalar(
         select(CRMCliente).where(
@@ -224,6 +268,25 @@ def get_activity_for_company(db: Session, empresa_id: str, activity_id: str) -> 
     if not activity:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Actividad no encontrada.")
     return activity
+
+
+def get_quote_for_company(db: Session, empresa_id: str, quote_id: str) -> CRMCotizacion:
+    quote = db.scalar(
+        select(CRMCotizacion)
+        .options(
+            selectinload(CRMCotizacion.cliente),
+            selectinload(CRMCotizacion.contacto),
+            selectinload(CRMCotizacion.oportunidad),
+            selectinload(CRMCotizacion.items),
+        )
+        .where(
+            CRMCotizacion.id == quote_id,
+            CRMCotizacion.empresa_id == empresa_id,
+        )
+    )
+    if not quote:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cotizacion no encontrada.")
+    return quote
 
 
 def resolve_invoice_request_display_status(sale: Venta) -> str:
@@ -326,6 +389,56 @@ def serialize_activity(activity: CRMActividad) -> CRMActivityItem:
     )
 
 
+def serialize_quote_item(item: CRMCotizacionItem) -> CRMCotizacionItemResponse:
+    return CRMCotizacionItemResponse(
+        id=item.id,
+        empresa_id=item.empresa_id,
+        cotizacion_id=item.cotizacion_id,
+        descripcion=item.descripcion,
+        cantidad=Decimal(item.cantidad or ZERO),
+        precio_unitario=Decimal(item.precio_unitario or ZERO),
+        descuento=Decimal(item.descuento or ZERO),
+        impuesto_tasa=Decimal(item.impuesto_tasa or ZERO),
+        subtotal=Decimal(item.subtotal or ZERO),
+        impuesto=Decimal(item.impuesto or ZERO),
+        total=Decimal(item.total or ZERO),
+        orden=int(item.orden or 0),
+    )
+
+
+def serialize_quote(quote: CRMCotizacion) -> CRMCotizacionResponse:
+    sorted_items = sorted(quote.items, key=lambda item: (int(item.orden or 0), item.id))
+    return CRMCotizacionResponse(
+        id=quote.id,
+        empresa_id=quote.empresa_id,
+        cliente_id=quote.cliente_id,
+        cliente_nombre_comercial=quote.cliente.nombre_comercial if quote.cliente else None,
+        contacto_id=quote.contacto_id,
+        contacto_nombre=quote.contacto.nombre if quote.contacto else None,
+        oportunidad_id=quote.oportunidad_id,
+        oportunidad_titulo=quote.oportunidad.titulo if quote.oportunidad else None,
+        folio=quote.folio,
+        titulo=quote.titulo,
+        descripcion=quote.descripcion,
+        moneda=quote.moneda,
+        subtotal=Decimal(quote.subtotal or ZERO),
+        descuento_total=Decimal(quote.descuento_total or ZERO),
+        impuesto_total=Decimal(quote.impuesto_total or ZERO),
+        total=Decimal(quote.total or ZERO),
+        estatus=resolve_quote_display_status(quote),
+        fecha_emision=quote.fecha_emision,
+        fecha_vencimiento=quote.fecha_vencimiento,
+        condiciones_pago=quote.condiciones_pago,
+        notas=quote.notas,
+        aceptada_at=quote.aceptada_at,
+        rechazada_at=quote.rechazada_at,
+        activo=quote.activo,
+        items=[serialize_quote_item(item) for item in sorted_items],
+        created_at=quote.created_at,
+        updated_at=quote.updated_at,
+    )
+
+
 def ensure_responsible_user_in_company(db: Session, empresa_id: str, user_id: str | None) -> str | None:
     if not user_id:
         return None
@@ -365,6 +478,137 @@ def resolve_activity_relations(
 
     resolved_client = client or (opportunity.cliente if opportunity else None) or (contact.cliente if contact else None)
     return resolved_client, opportunity, contact
+
+
+def resolve_quote_relations(
+    db: Session,
+    empresa_id: str,
+    *,
+    client_id: str,
+    contact_id: str | None,
+    opportunity_id: str | None,
+) -> tuple[CRMCliente, CRMContacto | None, CRMOportunidad | None]:
+    client = get_client_for_company(db, empresa_id, client_id)
+    contact = get_contact_for_company(db, empresa_id, contact_id) if contact_id else None
+    opportunity = get_opportunity_for_company(db, empresa_id, opportunity_id) if opportunity_id else None
+    if contact and contact.cliente_id != client.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El contacto no pertenece al cliente indicado.")
+    if opportunity and opportunity.cliente_id != client.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La oportunidad no pertenece al cliente indicado.")
+    if opportunity and contact and opportunity.cliente_id != contact.cliente_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El contacto no pertenece a la oportunidad indicada.")
+    return client, contact, opportunity
+
+
+def generate_quote_folio(db: Session, empresa_id: str) -> str:
+    existing = db.scalars(
+        select(CRMCotizacion.folio).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.folio.like("COT-%"),
+        )
+    ).all()
+    highest = 0
+    for folio in existing:
+        match = re.fullmatch(r"COT-(\d+)", folio or "")
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return f"COT-{highest + 1:06d}"
+
+
+def ensure_unique_quote_folio(db: Session, empresa_id: str, folio: str, *, exclude_id: str | None = None) -> str:
+    normalized = normalize_required_text(folio, "Folio").upper()
+    query = select(CRMCotizacion.id).where(
+        CRMCotizacion.empresa_id == empresa_id,
+        CRMCotizacion.folio == normalized,
+    )
+    if exclude_id:
+        query = query.where(CRMCotizacion.id != exclude_id)
+    if db.scalar(query):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El folio de la cotizacion ya existe.")
+    return normalized
+
+
+def ensure_quote_editable(quote: CRMCotizacion) -> None:
+    if resolve_quote_display_status(quote) != "borrador":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo puedes editar cotizaciones en borrador.")
+
+
+def quote_item_value(item_payload: CRMCotizacionItemCreate | dict, field_name: str):
+    if isinstance(item_payload, dict):
+        return item_payload.get(field_name)
+    return getattr(item_payload, field_name)
+
+
+def build_quote_item_amounts(item_payload: CRMCotizacionItemCreate | dict, *, order: int) -> dict:
+    cantidad = quantize_decimal(quote_item_value(item_payload, "cantidad"))
+    precio_unitario = quantize_decimal(quote_item_value(item_payload, "precio_unitario"))
+    descuento = quantize_decimal(quote_item_value(item_payload, "descuento"))
+    impuesto_tasa = quantize_decimal(quote_item_value(item_payload, "impuesto_tasa"))
+    if cantidad <= ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad debe ser mayor a cero.")
+    if precio_unitario < ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El precio unitario no puede ser negativo.")
+    if descuento < ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El descuento no puede ser negativo.")
+    if impuesto_tasa < ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tasa de impuesto no puede ser negativa.")
+    bruto = quantize_decimal(cantidad * precio_unitario)
+    if descuento > bruto:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El descuento no puede superar el subtotal de la partida.")
+    subtotal = quantize_decimal(bruto - descuento)
+    impuesto = quantize_decimal(subtotal * impuesto_tasa)
+    total = quantize_decimal(subtotal + impuesto)
+    descripcion = normalize_required_text(quote_item_value(item_payload, "descripcion"), "Descripcion")
+    return {
+        "descripcion": descripcion,
+        "cantidad": cantidad,
+        "precio_unitario": precio_unitario,
+        "descuento": descuento,
+        "impuesto_tasa": impuesto_tasa,
+        "subtotal": subtotal,
+        "impuesto": impuesto,
+        "total": total,
+        "orden": int(
+            quote_item_value(item_payload, "orden")
+            if quote_item_value(item_payload, "orden") is not None
+            else order
+        ),
+    }
+
+
+def recalculate_quote_totals(quote: CRMCotizacion) -> None:
+    quote.subtotal = quantize_decimal(sum(Decimal(item.subtotal or ZERO) for item in quote.items))
+    quote.descuento_total = quantize_decimal(sum(Decimal(item.descuento or ZERO) for item in quote.items))
+    quote.impuesto_total = quantize_decimal(sum(Decimal(item.impuesto or ZERO) for item in quote.items))
+    quote.total = quantize_decimal(Decimal(quote.subtotal or ZERO) + Decimal(quote.impuesto_total or ZERO))
+
+
+def replace_quote_items(
+    db: Session,
+    quote: CRMCotizacion,
+    item_payloads: list[CRMCotizacionItemCreate | dict],
+) -> None:
+    if not item_payloads:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cotizacion debe incluir al menos una partida.")
+    quote.items.clear()
+    db.flush()
+    for index, payload in enumerate(item_payloads, start=1):
+        item_data = build_quote_item_amounts(payload, order=index)
+        quote.items.append(
+            CRMCotizacionItem(
+                empresa_id=quote.empresa_id,
+                descripcion=item_data["descripcion"],
+                cantidad=item_data["cantidad"],
+                precio_unitario=item_data["precio_unitario"],
+                descuento=item_data["descuento"],
+                impuesto_tasa=item_data["impuesto_tasa"],
+                subtotal=item_data["subtotal"],
+                impuesto=item_data["impuesto"],
+                total=item_data["total"],
+                orden=item_data["orden"],
+            )
+        )
+    recalculate_quote_totals(quote)
 
 
 def list_clients(
@@ -1217,8 +1461,334 @@ def deactivate_activity(
     )
 
 
+def list_crm_quotes(
+    db: Session,
+    empresa_id: str,
+    *,
+    client_id: str | None = None,
+    opportunity_id: str | None = None,
+    status_value: str | None = None,
+    search: str | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> tuple[int, list[CRMCotizacionResponse]]:
+    today = datetime.now(timezone.utc).date()
+    query = (
+        select(CRMCotizacion)
+        .options(
+            selectinload(CRMCotizacion.cliente),
+            selectinload(CRMCotizacion.contacto),
+            selectinload(CRMCotizacion.oportunidad),
+            selectinload(CRMCotizacion.items),
+        )
+        .join(CRMCliente, CRMCotizacion.cliente_id == CRMCliente.id)
+        .outerjoin(CRMContacto, CRMCotizacion.contacto_id == CRMContacto.id)
+        .outerjoin(CRMOportunidad, CRMCotizacion.oportunidad_id == CRMOportunidad.id)
+        .where(CRMCotizacion.empresa_id == empresa_id)
+    )
+    query = apply_text_search(
+        query,
+        search,
+        CRMCotizacion.folio,
+        CRMCotizacion.titulo,
+        CRMCotizacion.descripcion,
+        CRMCotizacion.notas,
+        CRMCotizacion.condiciones_pago,
+        CRMCliente.nombre_comercial,
+        CRMCliente.razon_social,
+        CRMContacto.nombre,
+        CRMOportunidad.titulo,
+    )
+    if client_id:
+        query = query.where(CRMCotizacion.cliente_id == client_id)
+    if opportunity_id:
+        query = query.where(CRMCotizacion.oportunidad_id == opportunity_id)
+    if status_value:
+        normalized_status = normalize_quote_status(status_value)
+        if normalized_status == "vencida":
+            query = query.where(
+                CRMCotizacion.estatus.in_(tuple(QUOTE_OPEN_STATUSES)),
+                CRMCotizacion.fecha_vencimiento.is_not(None),
+                CRMCotizacion.fecha_vencimiento < today,
+            )
+        elif normalized_status in QUOTE_OPEN_STATUSES:
+            query = query.where(
+                CRMCotizacion.estatus == normalized_status,
+                or_(CRMCotizacion.fecha_vencimiento.is_(None), CRMCotizacion.fecha_vencimiento >= today),
+            )
+        else:
+            query = query.where(CRMCotizacion.estatus == normalized_status)
+    total = count_rows(db, query)
+    items = db.scalars(query.order_by(desc(CRMCotizacion.updated_at), desc(CRMCotizacion.id)).offset(offset).limit(limit)).all()
+    return total, [serialize_quote(item) for item in items]
+
+
+def create_crm_quote(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    data: dict,
+    ip_address: str | None,
+) -> CRMCotizacionResponse:
+    validate_crm_access(user, empresa)
+    client_id = normalize_required_text(data.get("cliente_id"), "Cliente")
+    contact_id = normalize_optional_text(data.get("contacto_id"))
+    opportunity_id = normalize_optional_text(data.get("oportunidad_id"))
+    client, contact, opportunity = resolve_quote_relations(
+        db,
+        empresa.id,
+        client_id=client_id,
+        contact_id=contact_id,
+        opportunity_id=opportunity_id,
+    )
+    raw_folio = normalize_optional_text(data.get("folio"))
+    folio = ensure_unique_quote_folio(db, empresa.id, raw_folio) if raw_folio else generate_quote_folio(db, empresa.id)
+    quote = CRMCotizacion(
+        empresa_id=empresa.id,
+        cliente_id=client.id,
+        contacto_id=contact.id if contact else None,
+        oportunidad_id=opportunity.id if opportunity else None,
+        folio=folio,
+        titulo=normalize_required_text(data.get("titulo"), "Titulo"),
+        descripcion=normalize_optional_text(data.get("descripcion")),
+        moneda=normalize_quote_currency(data.get("moneda")),
+        estatus="borrador",
+        fecha_emision=data.get("fecha_emision") or datetime.now(timezone.utc).date(),
+        fecha_vencimiento=data.get("fecha_vencimiento"),
+        condiciones_pago=normalize_optional_text(data.get("condiciones_pago")),
+        notas=normalize_optional_text(data.get("notas")),
+        activo=bool(data.get("activo", True)),
+    )
+    db.add(quote)
+    db.flush()
+    replace_quote_items(db, quote, data.get("items") or [])
+    db.flush()
+    quote.cliente = client
+    quote.contacto = contact
+    quote.oportunidad = opportunity
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="crm.quote.create",
+        entity_name="CRMCotizacion",
+        entity_id=quote.id,
+        ip_address=ip_address,
+        metadata_json={"cliente_id": quote.cliente_id, "folio": quote.folio, "estatus": quote.estatus},
+    )
+    return serialize_quote(quote)
+
+
+def get_crm_quote(
+    db: Session,
+    empresa_id: str,
+    quote_id: str,
+) -> CRMCotizacionResponse:
+    return serialize_quote(get_quote_for_company(db, empresa_id, quote_id))
+
+
+def update_crm_quote(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    quote_id: str,
+    data: dict,
+    ip_address: str | None,
+) -> CRMCotizacionResponse:
+    validate_crm_access(user, empresa)
+    quote = get_quote_for_company(db, empresa.id, quote_id)
+    ensure_quote_editable(quote)
+
+    resolved_client_id = normalize_optional_text(data.get("cliente_id")) or quote.cliente_id
+    resolved_contact_id = quote.contacto_id
+    resolved_opportunity_id = quote.oportunidad_id
+
+    if "contacto_id" in data:
+        resolved_contact_id = normalize_optional_text(data.get("contacto_id"))
+    if "oportunidad_id" in data:
+        resolved_opportunity_id = normalize_optional_text(data.get("oportunidad_id"))
+
+    if any(key in data for key in ("cliente_id", "contacto_id", "oportunidad_id")):
+        client, contact, opportunity = resolve_quote_relations(
+            db,
+            empresa.id,
+            client_id=resolved_client_id,
+            contact_id=resolved_contact_id,
+            opportunity_id=resolved_opportunity_id,
+        )
+        quote.cliente_id = client.id
+        quote.contacto_id = contact.id if contact else None
+        quote.oportunidad_id = opportunity.id if opportunity else None
+        quote.cliente = client
+        quote.contacto = contact
+        quote.oportunidad = opportunity
+
+    if "folio" in data:
+        raw_folio = normalize_optional_text(data.get("folio"))
+        quote.folio = ensure_unique_quote_folio(db, empresa.id, raw_folio, exclude_id=quote.id) if raw_folio else generate_quote_folio(db, empresa.id)
+    if "titulo" in data:
+        quote.titulo = normalize_required_text(data.get("titulo"), "Titulo")
+    if "descripcion" in data:
+        quote.descripcion = normalize_optional_text(data.get("descripcion"))
+    if "moneda" in data:
+        quote.moneda = normalize_quote_currency(data.get("moneda"))
+    if "fecha_emision" in data:
+        quote.fecha_emision = data.get("fecha_emision") or quote.fecha_emision
+    if "fecha_vencimiento" in data:
+        quote.fecha_vencimiento = data.get("fecha_vencimiento")
+    if "condiciones_pago" in data:
+        quote.condiciones_pago = normalize_optional_text(data.get("condiciones_pago"))
+    if "notas" in data:
+        quote.notas = normalize_optional_text(data.get("notas"))
+    if "activo" in data and data.get("activo") is not None:
+        quote.activo = bool(data.get("activo"))
+    if "items" in data:
+        replace_quote_items(db, quote, data.get("items") or [])
+    else:
+        recalculate_quote_totals(quote)
+    db.flush()
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="crm.quote.update",
+        entity_name="CRMCotizacion",
+        entity_id=quote.id,
+        ip_address=ip_address,
+        metadata_json={"folio": quote.folio, "estatus": quote.estatus},
+    )
+    return serialize_quote(quote)
+
+
+def mark_crm_quote_sent(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    quote_id: str,
+    notas: str | None,
+    ip_address: str | None,
+) -> CRMCotizacionResponse:
+    validate_crm_access(user, empresa)
+    quote = get_quote_for_company(db, empresa.id, quote_id)
+    if resolve_quote_display_status(quote) != "borrador":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo puedes enviar cotizaciones en borrador.")
+    quote.estatus = "enviada"
+    quote.fecha_emision = quote.fecha_emision or datetime.now(timezone.utc).date()
+    if notas is not None:
+        quote.notas = normalize_optional_text(notas)
+    db.flush()
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="crm.quote.send",
+        entity_name="CRMCotizacion",
+        entity_id=quote.id,
+        ip_address=ip_address,
+        metadata_json={"folio": quote.folio, "estatus": quote.estatus},
+    )
+    return serialize_quote(quote)
+
+
+def accept_crm_quote(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    quote_id: str,
+    notas: str | None,
+    ip_address: str | None,
+) -> CRMCotizacionResponse:
+    validate_crm_access(user, empresa)
+    quote = get_quote_for_company(db, empresa.id, quote_id)
+    if resolve_quote_display_status(quote) != "enviada":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo puedes aceptar cotizaciones enviadas.")
+    quote.estatus = "aceptada"
+    quote.aceptada_at = datetime.now(timezone.utc)
+    quote.rechazada_at = None
+    if notas is not None:
+        quote.notas = normalize_optional_text(notas)
+    db.flush()
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="crm.quote.accept",
+        entity_name="CRMCotizacion",
+        entity_id=quote.id,
+        ip_address=ip_address,
+        metadata_json={"folio": quote.folio, "estatus": quote.estatus},
+    )
+    return serialize_quote(quote)
+
+
+def reject_crm_quote(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    quote_id: str,
+    notas: str | None,
+    ip_address: str | None,
+) -> CRMCotizacionResponse:
+    validate_crm_access(user, empresa)
+    quote = get_quote_for_company(db, empresa.id, quote_id)
+    if resolve_quote_display_status(quote) != "enviada":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Solo puedes rechazar cotizaciones enviadas.")
+    quote.estatus = "rechazada"
+    quote.rechazada_at = datetime.now(timezone.utc)
+    if notas is not None:
+        quote.notas = normalize_optional_text(notas)
+    db.flush()
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="crm.quote.reject",
+        entity_name="CRMCotizacion",
+        entity_id=quote.id,
+        ip_address=ip_address,
+        metadata_json={"folio": quote.folio, "estatus": quote.estatus},
+    )
+    return serialize_quote(quote)
+
+
+def cancel_crm_quote(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    quote_id: str,
+    notas: str | None,
+    ip_address: str | None,
+) -> CRMCotizacionResponse:
+    validate_crm_access(user, empresa)
+    quote = get_quote_for_company(db, empresa.id, quote_id)
+    if resolve_quote_display_status(quote) not in {"borrador", "enviada", "vencida"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cotizacion ya no permite cancelacion.")
+    quote.estatus = "cancelada"
+    if notas is not None:
+        quote.notas = normalize_optional_text(notas)
+    db.flush()
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="crm.quote.cancel",
+        entity_name="CRMCotizacion",
+        entity_id=quote.id,
+        ip_address=ip_address,
+        metadata_json={"folio": quote.folio, "estatus": quote.estatus},
+    )
+    return serialize_quote(quote)
+
+
 def build_crm_summary(db: Session, empresa_id: str) -> CRMSummaryResponse:
     now = datetime.now(timezone.utc)
+    today = now.date()
     clientes_activos = db.scalar(
         select(func.count(CRMCliente.id)).where(
             CRMCliente.empresa_id == empresa_id,
@@ -1260,6 +1830,32 @@ def build_crm_summary(db: Session, empresa_id: str) -> CRMSummaryResponse:
         select(func.coalesce(func.sum(CRMOportunidad.monto_estimado), 0)).where(
             CRMOportunidad.empresa_id == empresa_id,
             CRMOportunidad.etapa == "ganada",
+        )
+    ) or ZERO
+    cotizaciones_abiertas = db.scalar(
+        select(func.count(CRMCotizacion.id)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.estatus.in_(tuple(QUOTE_OPEN_STATUSES)),
+            or_(CRMCotizacion.fecha_vencimiento.is_(None), CRMCotizacion.fecha_vencimiento >= today),
+        )
+    ) or 0
+    cotizaciones_aceptadas = db.scalar(
+        select(func.count(CRMCotizacion.id)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.estatus == "aceptada",
+        )
+    ) or 0
+    monto_cotizado_abierto = db.scalar(
+        select(func.coalesce(func.sum(CRMCotizacion.total), 0)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.estatus.in_(tuple(QUOTE_OPEN_STATUSES)),
+            or_(CRMCotizacion.fecha_vencimiento.is_(None), CRMCotizacion.fecha_vencimiento >= today),
+        )
+    ) or ZERO
+    monto_cotizado_aceptado = db.scalar(
+        select(func.coalesce(func.sum(CRMCotizacion.total), 0)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.estatus == "aceptada",
         )
     ) or ZERO
     actividades_pendientes_count = db.scalar(
@@ -1346,6 +1942,10 @@ def build_crm_summary(db: Session, empresa_id: str) -> CRMSummaryResponse:
             oportunidades_perdidas=int(oportunidades_perdidas),
             monto_pipeline=monto_pipeline,
             monto_ganado=monto_ganado,
+            cotizaciones_abiertas=int(cotizaciones_abiertas),
+            cotizaciones_aceptadas=int(cotizaciones_aceptadas),
+            monto_cotizado_abierto=Decimal(monto_cotizado_abierto or ZERO),
+            monto_cotizado_aceptado=Decimal(monto_cotizado_aceptado or ZERO),
             actividades_pendientes=int(actividades_pendientes_count),
             actividades_vencidas=int(actividades_vencidas),
         ),
@@ -1413,6 +2013,19 @@ def get_client_timeline(
         )
         .order_by(desc(func.coalesce(Venta.factura_solicitada_at, Venta.paid_at, Venta.created_at)), desc(Venta.id))
     ).all()
+    quotes = db.scalars(
+        select(CRMCotizacion)
+        .options(
+            selectinload(CRMCotizacion.contacto),
+            selectinload(CRMCotizacion.oportunidad),
+            selectinload(CRMCotizacion.items),
+        )
+        .where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.cliente_id == client_id,
+        )
+        .order_by(desc(CRMCotizacion.updated_at), desc(CRMCotizacion.id))
+    ).all()
 
     items: list[CRMClientTimelineItem] = []
 
@@ -1420,7 +2033,7 @@ def get_client_timeline(
         items.append(
             CRMClientTimelineItem(
                 tipo="venta_pos",
-                fecha=sale.paid_at or sale.created_at,
+                fecha=ensure_utc_datetime(sale.paid_at or sale.created_at),
                 titulo=f"Venta POS {sale.folio}",
                 descripcion=sale.notas or sale.cliente_nombre,
                 monto=Decimal(sale.total or ZERO),
@@ -1433,7 +2046,7 @@ def get_client_timeline(
         items.append(
             CRMClientTimelineItem(
                 tipo="proyecto_pm",
-                fecha=project.updated_at,
+                fecha=ensure_utc_datetime(project.updated_at),
                 titulo=f"Proyecto PM {project.nombre}",
                 descripcion=project.codigo or project.descripcion,
                 monto=Decimal(project.presupuesto_estimado or ZERO),
@@ -1446,7 +2059,7 @@ def get_client_timeline(
         items.append(
             CRMClientTimelineItem(
                 tipo="oportunidad",
-                fecha=opportunity.updated_at,
+                fecha=ensure_utc_datetime(opportunity.updated_at),
                 titulo=opportunity.titulo,
                 descripcion=opportunity.descripcion or (opportunity.contacto.nombre if opportunity.contacto else None),
                 monto=Decimal(opportunity.monto_estimado or ZERO),
@@ -1459,7 +2072,7 @@ def get_client_timeline(
         items.append(
             CRMClientTimelineItem(
                 tipo="actividad",
-                fecha=activity.fecha_actividad,
+                fecha=ensure_utc_datetime(activity.fecha_actividad),
                 titulo=activity.titulo,
                 descripcion=activity.descripcion or activity.tipo,
                 monto=None,
@@ -1472,7 +2085,7 @@ def get_client_timeline(
         items.append(
             CRMClientTimelineItem(
                 tipo="solicitud_factura_pos",
-                fecha=sale.factura_solicitada_at or sale.paid_at or sale.created_at,
+                fecha=ensure_utc_datetime(sale.factura_solicitada_at or sale.paid_at or sale.created_at),
                 titulo=f"Solicitud de factura {sale.folio}",
                 descripcion=sale.factura_razon_social or sale.factura_rfc or sale.factura_email,
                 monto=Decimal(sale.total or ZERO),
@@ -1480,6 +2093,44 @@ def get_client_timeline(
                 referencia_id=sale.id,
             )
         )
+
+    for quote in quotes:
+        items.append(
+            CRMClientTimelineItem(
+                tipo="cotizacion_crm",
+                fecha=ensure_utc_datetime(quote.created_at),
+                titulo=f"Cotizacion creada {quote.folio}",
+                descripcion=quote.titulo,
+                monto=Decimal(quote.total or ZERO),
+                estatus="borrador",
+                referencia_id=f"{quote.id}:created",
+            )
+        )
+        current_status = resolve_quote_display_status(quote)
+        if current_status in {"enviada", "aceptada", "rechazada", "cancelada", "vencida"}:
+            items.append(
+                CRMClientTimelineItem(
+                    tipo="cotizacion_crm",
+                    fecha=datetime.combine(quote.fecha_emision or quote.created_at.date(), time.min, tzinfo=timezone.utc),
+                    titulo=f"Cotizacion enviada {quote.folio}",
+                    descripcion=quote.titulo,
+                    monto=Decimal(quote.total or ZERO),
+                    estatus="enviada",
+                    referencia_id=f"{quote.id}:enviada",
+                )
+            )
+        if current_status in {"aceptada", "rechazada", "cancelada", "vencida"}:
+            items.append(
+                CRMClientTimelineItem(
+                    tipo="cotizacion_crm",
+                    fecha=resolve_quote_status_datetime(quote),
+                    titulo=f"Cotizacion {current_status} {quote.folio}",
+                    descripcion=quote.titulo,
+                    monto=Decimal(quote.total or ZERO),
+                    estatus=current_status,
+                    referencia_id=f"{quote.id}:{current_status}",
+                )
+            )
 
     items.sort(key=lambda item: (item.fecha, item.referencia_id), reverse=True)
     return CRMClientTimelineResponse(items=items)
@@ -1491,6 +2142,7 @@ def get_client_commercial_summary(
     client_id: str,
 ) -> CRMClientCommercialSummaryResponse:
     get_client_for_company(db, empresa_id, client_id)
+    today = datetime.now(timezone.utc).date()
 
     total_ventas_pos = db.scalar(
         select(func.coalesce(func.sum(Venta.total), 0)).where(
@@ -1534,6 +2186,42 @@ def get_client_commercial_summary(
             CRMOportunidad.activa == True,
         )
     ) or ZERO
+    cotizaciones_count = db.scalar(
+        select(func.count(CRMCotizacion.id)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.cliente_id == client_id,
+            CRMCotizacion.activo == True,
+        )
+    ) or 0
+    cotizaciones_abiertas = db.scalar(
+        select(func.count(CRMCotizacion.id)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.cliente_id == client_id,
+            CRMCotizacion.estatus.in_(tuple(QUOTE_OPEN_STATUSES)),
+            or_(CRMCotizacion.fecha_vencimiento.is_(None), CRMCotizacion.fecha_vencimiento >= today),
+        )
+    ) or 0
+    cotizaciones_aceptadas = db.scalar(
+        select(func.count(CRMCotizacion.id)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.cliente_id == client_id,
+            CRMCotizacion.estatus == "aceptada",
+        )
+    ) or 0
+    monto_cotizado = db.scalar(
+        select(func.coalesce(func.sum(CRMCotizacion.total), 0)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.cliente_id == client_id,
+            CRMCotizacion.estatus.not_in(["cancelada", "rechazada"]),
+        )
+    ) or ZERO
+    monto_cotizado_aceptado = db.scalar(
+        select(func.coalesce(func.sum(CRMCotizacion.total), 0)).where(
+            CRMCotizacion.empresa_id == empresa_id,
+            CRMCotizacion.cliente_id == client_id,
+            CRMCotizacion.estatus == "aceptada",
+        )
+    ) or ZERO
     facturas_solicitadas = db.scalar(
         select(func.count(Venta.id)).where(
             Venta.empresa_id == empresa_id,
@@ -1568,6 +2256,11 @@ def get_client_commercial_summary(
         proyectos_activos=int(proyectos_activos),
         oportunidades_abiertas=int(oportunidades_abiertas),
         monto_pipeline=Decimal(monto_pipeline or ZERO),
+        cotizaciones_count=int(cotizaciones_count),
+        cotizaciones_abiertas=int(cotizaciones_abiertas),
+        cotizaciones_aceptadas=int(cotizaciones_aceptadas),
+        monto_cotizado=Decimal(monto_cotizado or ZERO),
+        monto_cotizado_aceptado=Decimal(monto_cotizado_aceptado or ZERO),
         facturas_solicitadas=int(facturas_solicitadas),
         actividades_pendientes=int(actividades_pendientes),
         ultima_actividad_at=ultima_actividad_at,

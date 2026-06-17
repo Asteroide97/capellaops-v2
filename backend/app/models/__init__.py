@@ -1,7 +1,7 @@
 from app.models.audit import AuditLog
 from app.models.base import Base
 from app.models.company import Empresa, EmpresaModulo, Plan
-from app.models.crm import CRMActividad, CRMCliente, CRMContacto, CRMOportunidad
+from app.models.crm import CRMActividad, CRMCliente, CRMContacto, CRMCotizacion, CRMCotizacionItem, CRMOportunidad
 from app.models.inventory import (
     Almacen,
     ConteoInventario,
@@ -63,6 +63,8 @@ __all__ = [
     "CRMActividad",
     "CRMCliente",
     "CRMContacto",
+    "CRMCotizacion",
+    "CRMCotizacionItem",
     "CRMOportunidad",
     "ConteoInventario",
     "ConteoInventarioDetalle",

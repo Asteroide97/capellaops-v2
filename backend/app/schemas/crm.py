@@ -95,9 +95,110 @@ class CRMClientCommercialSummaryResponse(BaseModel):
     proyectos_activos: int = 0
     oportunidades_abiertas: int = 0
     monto_pipeline: Decimal = Decimal("0")
+    cotizaciones_count: int = 0
+    cotizaciones_abiertas: int = 0
+    cotizaciones_aceptadas: int = 0
+    monto_cotizado: Decimal = Decimal("0")
+    monto_cotizado_aceptado: Decimal = Decimal("0")
     facturas_solicitadas: int = 0
     actividades_pendientes: int = 0
     ultima_actividad_at: datetime | None = None
+
+
+class CRMCotizacionItemCreate(BaseModel):
+    descripcion: str = Field(min_length=1, max_length=4000)
+    cantidad: Decimal = Field(gt=0)
+    precio_unitario: Decimal = Field(ge=0)
+    descuento: Decimal = Field(default=Decimal("0"), ge=0)
+    impuesto_tasa: Decimal = Field(default=Decimal("0"), ge=0)
+    orden: int | None = Field(default=None, ge=0)
+
+
+class CRMCotizacionItemResponse(BaseModel):
+    id: str
+    empresa_id: str
+    cotizacion_id: str
+    descripcion: str
+    cantidad: Decimal
+    precio_unitario: Decimal
+    descuento: Decimal
+    impuesto_tasa: Decimal
+    subtotal: Decimal
+    impuesto: Decimal
+    total: Decimal
+    orden: int
+
+
+class CRMCotizacionCreate(BaseModel):
+    cliente_id: str = Field(min_length=1, max_length=36)
+    contacto_id: str | None = Field(default=None, max_length=36)
+    oportunidad_id: str | None = Field(default=None, max_length=36)
+    folio: str | None = Field(default=None, max_length=40)
+    titulo: str = Field(min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=4000)
+    moneda: str = Field(default="MXN", min_length=1, max_length=10)
+    fecha_emision: date | None = None
+    fecha_vencimiento: date | None = None
+    condiciones_pago: str | None = Field(default=None, max_length=4000)
+    notas: str | None = Field(default=None, max_length=4000)
+    items: list[CRMCotizacionItemCreate]
+
+
+class CRMCotizacionUpdate(BaseModel):
+    cliente_id: str | None = Field(default=None, max_length=36)
+    contacto_id: str | None = Field(default=None, max_length=36)
+    oportunidad_id: str | None = Field(default=None, max_length=36)
+    folio: str | None = Field(default=None, max_length=40)
+    titulo: str | None = Field(default=None, min_length=1, max_length=180)
+    descripcion: str | None = Field(default=None, max_length=4000)
+    moneda: str | None = Field(default=None, min_length=1, max_length=10)
+    fecha_emision: date | None = None
+    fecha_vencimiento: date | None = None
+    condiciones_pago: str | None = Field(default=None, max_length=4000)
+    notas: str | None = Field(default=None, max_length=4000)
+    items: list[CRMCotizacionItemCreate] | None = None
+    activo: bool | None = None
+
+
+class CRMCotizacionStatusUpdate(BaseModel):
+    notas: str | None = Field(default=None, max_length=4000)
+
+
+class CRMCotizacionResponse(BaseModel):
+    id: str
+    empresa_id: str
+    cliente_id: str
+    cliente_nombre_comercial: str | None = None
+    contacto_id: str | None = None
+    contacto_nombre: str | None = None
+    oportunidad_id: str | None = None
+    oportunidad_titulo: str | None = None
+    folio: str
+    titulo: str
+    descripcion: str | None = None
+    moneda: str
+    subtotal: Decimal
+    descuento_total: Decimal
+    impuesto_total: Decimal
+    total: Decimal
+    estatus: str
+    fecha_emision: date
+    fecha_vencimiento: date | None = None
+    condiciones_pago: str | None = None
+    notas: str | None = None
+    aceptada_at: datetime | None = None
+    rechazada_at: datetime | None = None
+    activo: bool
+    items: list[CRMCotizacionItemResponse]
+    created_at: datetime
+    updated_at: datetime
+
+
+class CRMCotizacionListResponse(BaseModel):
+    items: list[CRMCotizacionResponse]
+    total: int
+    limit: int
+    offset: int
 
 
 class CRMContactCreateRequest(BaseModel):
@@ -284,6 +385,10 @@ class CRMSummaryKpis(BaseModel):
     oportunidades_perdidas: int
     monto_pipeline: Decimal
     monto_ganado: Decimal
+    cotizaciones_abiertas: int = 0
+    cotizaciones_aceptadas: int = 0
+    monto_cotizado_abierto: Decimal = Decimal("0")
+    monto_cotizado_aceptado: Decimal = Decimal("0")
     actividades_pendientes: int
     actividades_vencidas: int
 

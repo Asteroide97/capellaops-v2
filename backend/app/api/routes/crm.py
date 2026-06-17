@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from typing import Callable, Literal, TypeVar
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,11 @@ from app.schemas.crm import (
     CRMContactItem,
     CRMContactListResponse,
     CRMContactUpdateRequest,
+    CRMCotizacionCreate,
+    CRMCotizacionListResponse,
+    CRMCotizacionResponse,
+    CRMCotizacionStatusUpdate,
+    CRMCotizacionUpdate,
     CRMOpportunityCloseLostRequest,
     CRMOpportunityCloseWonRequest,
     CRMOpportunityCreateRequest,
@@ -31,29 +36,38 @@ from app.schemas.crm import (
     CRMOpportunityUpdateRequest,
     CRMSummaryResponse,
 )
+from app.services.documents_pdf import build_crm_quote_pdf
 from app.services.crm import (
     build_crm_summary,
+    cancel_crm_quote,
     close_opportunity_lost,
     close_opportunity_won,
     complete_activity,
     create_activity,
     create_client,
     create_contact,
+    create_crm_quote,
     create_opportunity,
     deactivate_activity,
     deactivate_contact,
+    get_crm_quote,
     get_client_commercial_summary,
     get_client_timeline,
     get_client_for_company,
     get_opportunity_for_company,
+    list_crm_quotes,
     list_activities,
     list_client_contacts,
     list_clients,
     list_opportunities,
+    mark_crm_quote_sent,
+    accept_crm_quote,
+    reject_crm_quote,
     serialize_activity,
     serialize_client,
     serialize_contact,
     serialize_opportunity,
+    update_crm_quote,
     update_activity,
     update_client,
     update_contact,
@@ -379,6 +393,187 @@ def crm_deactivate_contact(
             empresa=context.empresa,
             user=context.user,
             contact_id=contact_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/quotes", response_model=CRMCotizacionListResponse)
+def crm_quotes(
+    cliente_id: str | None = None,
+    oportunidad_id: str | None = None,
+    estatus: Literal["borrador", "enviada", "aceptada", "rechazada", "cancelada", "vencida"] | None = None,
+    search: str | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionListResponse:
+    def operation() -> CRMCotizacionListResponse:
+        total, items = list_crm_quotes(
+            db,
+            context.empresa.id,
+            client_id=cliente_id,
+            opportunity_id=oportunidad_id,
+            status_value=estatus,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+        return CRMCotizacionListResponse(items=items, total=total, limit=limit, offset=offset)
+
+    return run_crm_read("quotes", operation)
+
+
+@router.post("/quotes", response_model=CRMCotizacionResponse, status_code=status.HTTP_201_CREATED)
+def crm_create_quote(
+    payload: CRMCotizacionCreate,
+    request: Request,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionResponse:
+    return run_crm_write(
+        db,
+        "create_quote",
+        lambda: create_crm_quote(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            data=payload.model_dump(),
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/quotes/{quote_id}", response_model=CRMCotizacionResponse)
+def crm_quote_detail(
+    quote_id: str,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionResponse:
+    return run_crm_read("quote_detail", lambda: get_crm_quote(db, context.empresa.id, quote_id))
+
+
+@router.get("/quotes/{quote_id}/pdf")
+def crm_quote_pdf(
+    quote_id: str,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> Response:
+    quote = run_crm_read("quote_pdf", lambda: get_crm_quote(db, context.empresa.id, quote_id))
+    pdf_bytes, filename = build_crm_quote_pdf(context.empresa, quote)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.put("/quotes/{quote_id}", response_model=CRMCotizacionResponse)
+def crm_update_quote(
+    quote_id: str,
+    payload: CRMCotizacionUpdate,
+    request: Request,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionResponse:
+    return run_crm_write(
+        db,
+        "update_quote",
+        lambda: update_crm_quote(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            quote_id=quote_id,
+            data=payload.model_dump(exclude_unset=True),
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/quotes/{quote_id}/send", response_model=CRMCotizacionResponse)
+def crm_send_quote(
+    quote_id: str,
+    request: Request,
+    payload: CRMCotizacionStatusUpdate | None = None,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionResponse:
+    return run_crm_write(
+        db,
+        "send_quote",
+        lambda: mark_crm_quote_sent(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            quote_id=quote_id,
+            notas=payload.notas if payload else None,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/quotes/{quote_id}/accept", response_model=CRMCotizacionResponse)
+def crm_accept_quote(
+    quote_id: str,
+    request: Request,
+    payload: CRMCotizacionStatusUpdate | None = None,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionResponse:
+    return run_crm_write(
+        db,
+        "accept_quote",
+        lambda: accept_crm_quote(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            quote_id=quote_id,
+            notas=payload.notas if payload else None,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/quotes/{quote_id}/reject", response_model=CRMCotizacionResponse)
+def crm_reject_quote(
+    quote_id: str,
+    request: Request,
+    payload: CRMCotizacionStatusUpdate | None = None,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionResponse:
+    return run_crm_write(
+        db,
+        "reject_quote",
+        lambda: reject_crm_quote(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            quote_id=quote_id,
+            notas=payload.notas if payload else None,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/quotes/{quote_id}/cancel", response_model=CRMCotizacionResponse)
+def crm_cancel_quote(
+    quote_id: str,
+    request: Request,
+    payload: CRMCotizacionStatusUpdate | None = None,
+    context: TenantContext = Depends(get_crm_context),
+    db: Session = Depends(get_db),
+) -> CRMCotizacionResponse:
+    return run_crm_write(
+        db,
+        "cancel_quote",
+        lambda: cancel_crm_quote(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            quote_id=quote_id,
+            notas=payload.notas if payload else None,
             ip_address=request.client.host if request.client else None,
         ),
     )
