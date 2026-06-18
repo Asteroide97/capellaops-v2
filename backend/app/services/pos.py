@@ -67,6 +67,8 @@ from app.services.inventory import (
 
 PAYMENT_METHODS = {"efectivo", "tarjeta", "transferencia", "otro"}
 LEGACY_MIXED_PAYMENT_METHODS = {"mixto"}
+SALE_LINE_TYPES = {"material", "manual", "servicio"}
+NON_INVENTORY_LINE_TYPES = {"manual", "servicio"}
 INVOICE_READY_REQUIRED_FIELDS = (
     "factura_rfc",
     "factura_razon_social",
@@ -198,6 +200,37 @@ def get_sale_report_timestamp(sale: Venta) -> datetime:
     return normalize_utc_datetime(base_value)
 
 
+def normalize_sale_line_type(value: str | None) -> str:
+    normalized = (normalize_optional_text(value) or "material").lower()
+    if normalized not in SALE_LINE_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Selecciona un tipo de linea valido.",
+        )
+    return normalized
+
+
+def resolve_sale_line_description(*, detail: VentaDetalle | None = None, line: dict | None = None) -> str:
+    if detail is not None:
+        return (
+            normalize_optional_text(detail.descripcion_manual)
+            or normalize_optional_text(detail.nombre_snapshot)
+            or "Concepto manual"
+        )
+    if line is not None:
+        return (
+            normalize_optional_text(line.get("descripcion_manual"))
+            or normalize_optional_text(line.get("nombre_snapshot"))
+            or "Concepto manual"
+        )
+    return "Concepto manual"
+
+
+def resolve_sale_line_sku(*, detail: VentaDetalle | None = None, line_type: str | None = None) -> str:
+    resolved_type = line_type or (detail.tipo_linea if detail is not None else "manual")
+    return "SERVICIO" if resolved_type == "servicio" else "MANUAL"
+
+
 def format_report_bucket(value: datetime, grouping: str) -> str:
     normalized = normalize_utc_datetime(value)
     if grouping == "month":
@@ -212,6 +245,8 @@ def resolve_sale_detail_estimated_cost(detail: VentaDetalle) -> Decimal:
     movement = detail.movimiento_inventario
     material = detail.material
 
+    if detail.costo_unitario_manual is not None and Decimal(detail.costo_unitario_manual) > ZERO:
+        return Decimal(detail.costo_unitario_manual)
     if movement and movement.costo_unitario_snapshot is not None and Decimal(movement.costo_unitario_snapshot) > ZERO:
         return Decimal(movement.costo_unitario_snapshot)
     if movement and movement.costo_promedio_snapshot is not None and Decimal(movement.costo_promedio_snapshot) > ZERO:
@@ -457,13 +492,22 @@ def serialize_sale_detail(detail: VentaDetalle, *, stock_actual: Decimal | None 
     return SaleDetailItem(
         id=detail.id,
         venta_id=detail.venta_id,
+        tipo_linea=detail.tipo_linea,
         material_id=detail.material_id,
+        material_nombre=detail.material.nombre if detail.material else None,
+        descripcion=resolve_sale_line_description(detail=detail),
+        descripcion_manual=detail.descripcion_manual,
+        es_inventariable=bool(detail.es_inventariable),
         sku_snapshot=detail.sku_snapshot,
         nombre_snapshot=detail.nombre_snapshot,
         unidad=detail.material.unidad if detail.material else None,
         cantidad=detail.cantidad,
         precio_unitario=detail.precio_unitario,
         descuento_unitario=detail.descuento_unitario,
+        descuento=Decimal(detail.descuento_unitario or ZERO) * Decimal(detail.cantidad or ZERO),
+        impuesto_tasa=detail.impuesto_tasa,
+        impuesto=detail.impuesto_linea,
+        impuesto_linea=detail.impuesto_linea,
         subtotal_linea=detail.subtotal_linea,
         total_linea=detail.total_linea,
         movimiento_inventario_id=detail.movimiento_inventario_id,
@@ -582,7 +626,7 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
         db,
         empresa_id=sale.empresa_id,
         almacen_id=sale.almacen_id,
-        material_ids=[detail.material_id for detail in details],
+        material_ids=[detail.material_id for detail in details if detail.material_id],
     )
     summary = build_sale_item(
         sale,
@@ -595,7 +639,10 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
         **summary.model_dump(),
         payments=payments,
         details=[
-            serialize_sale_detail(detail, stock_actual=stock_map.get(detail.material_id, ZERO))
+            serialize_sale_detail(
+                detail,
+                stock_actual=stock_map.get(detail.material_id, ZERO) if detail.material_id else None,
+            )
             for detail in details
         ],
     )
@@ -658,11 +705,16 @@ def get_sale_ticket(db: Session, sale: Venta) -> PosTicketResponse:
         cliente_email=sale.cliente_email,
         productos=[
             TicketLineItem(
+                tipo_linea=detail.tipo_linea,
                 sku=detail.sku_snapshot,
-                nombre=detail.nombre_snapshot,
+                nombre=resolve_sale_line_description(detail=detail),
                 cantidad=detail.cantidad,
                 precio_unitario=detail.precio_unitario,
                 descuento_unitario=detail.descuento_unitario,
+                descuento=Decimal(detail.descuento_unitario or ZERO) * Decimal(detail.cantidad or ZERO),
+                impuesto_tasa=detail.impuesto_tasa,
+                impuesto=detail.impuesto_linea,
+                impuesto_linea=detail.impuesto_linea,
                 subtotal_linea=detail.subtotal_linea,
                 total_linea=detail.total_linea,
             )
@@ -1142,6 +1194,9 @@ def get_pos_report_summary(
                 signed_total = Decimal(detail.total_linea or ZERO) * sale_sign
                 signed_cost = unit_cost * quantity * sale_sign
                 utilidad_estimada += signed_total - signed_cost
+
+                if not detail.material_id:
+                    continue
 
                 product_entry = product_totals.get(detail.material_id)
                 if not product_entry:
@@ -1724,15 +1779,16 @@ def resolve_sale_lines(
     warehouse_id: str,
     items: list,
     validate_stock: bool,
-) -> tuple[Almacen, list[dict], Decimal, Decimal]:
+) -> tuple[Almacen, list[dict], Decimal, Decimal, Decimal]:
     warehouse = get_active_sale_warehouse(db, empresa_id, warehouse_id)
     resolved_lines: list[dict] = []
     required_stock: dict[str, Decimal] = {}
     subtotal_bruto = ZERO
     descuento_lineas_total = ZERO
+    impuesto_total = ZERO
 
     for item in items:
-        material = get_active_sale_material(db, empresa_id, item.material_id)
+        line_type = normalize_sale_line_type(getattr(item, "tipo_linea", None))
         quantity = Decimal(item.cantidad)
         if quantity <= ZERO:
             raise HTTPException(
@@ -1740,34 +1796,82 @@ def resolve_sale_lines(
                 detail="La cantidad debe ser mayor a cero.",
             )
 
-        price_override = getattr(item, "precio_unitario", None)
-        price = Decimal(price_override) if price_override is not None else Decimal(material.precio_venta or ZERO)
+        material = None
+        descripcion_manual = None
+        nombre_snapshot = None
+        sku_snapshot = None
+        es_inventariable = line_type == "material"
+        costo_unitario_manual = None
+
+        if line_type == "material":
+            material_id = getattr(item, "material_id", None)
+            if not material_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selecciona un material valido.",
+                )
+            material = get_active_sale_material(db, empresa_id, material_id)
+            price_override = getattr(item, "precio_unitario", None)
+            price = Decimal(price_override) if price_override is not None else Decimal(material.precio_venta or ZERO)
+            nombre_snapshot = material.nombre
+            sku_snapshot = material.sku
+        else:
+            descripcion_manual = normalize_optional_text(getattr(item, "descripcion", None))
+            if descripcion_manual is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Ingresa una descripcion para la linea manual.",
+                )
+            price_override = getattr(item, "precio_unitario", None)
+            price = Decimal(price_override or ZERO)
+            nombre_snapshot = descripcion_manual
+            sku_snapshot = resolve_sale_line_sku(line_type=line_type)
+
         if price < ZERO:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="El precio unitario no puede ser negativo.",
             )
 
-        discount = Decimal(item.descuento_unitario or ZERO)
-        if discount > price:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="El descuento unitario no puede exceder el precio unitario.",
-            )
-
+        discount = Decimal(getattr(item, "descuento_unitario", ZERO) or ZERO)
         line_subtotal = price * quantity
         line_discount_total = discount * quantity
-        line_total = line_subtotal - line_discount_total
+        if line_discount_total > line_subtotal:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El descuento no puede superar el subtotal.",
+            )
+
+        tax_rate = Decimal(getattr(item, "impuesto_tasa", ZERO) or ZERO)
+        if tax_rate < ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El impuesto no puede ser negativo.",
+            )
+
+        line_subtotal_neto = line_subtotal - line_discount_total
+        line_tax_total = line_subtotal_neto * tax_rate
+        line_total = line_subtotal_neto + line_tax_total
 
         subtotal_bruto += line_subtotal
         descuento_lineas_total += line_discount_total
-        required_stock[material.id] = required_stock.get(material.id, ZERO) + quantity
+        impuesto_total += line_tax_total
+        if material is not None:
+            required_stock[material.id] = required_stock.get(material.id, ZERO) + quantity
         resolved_lines.append(
             {
+                "tipo_linea": line_type,
                 "material": material,
+                "descripcion_manual": descripcion_manual,
+                "nombre_snapshot": nombre_snapshot,
+                "sku_snapshot": sku_snapshot,
+                "es_inventariable": es_inventariable,
+                "costo_unitario_manual": costo_unitario_manual,
                 "cantidad": quantity,
                 "precio_unitario": price,
                 "descuento_unitario": discount,
+                "impuesto_tasa": tax_rate,
+                "impuesto_linea": line_tax_total,
                 "subtotal_linea": line_subtotal,
                 "total_linea": line_total,
             }
@@ -1789,13 +1893,14 @@ def resolve_sale_lines(
             detail="El total de la venta no puede ser negativo.",
         )
 
-    return warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total
+    return warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total, impuesto_total
 
 
 def resolve_sale_totals(
     *,
     subtotal_bruto: Decimal,
     descuento_lineas_total: Decimal,
+    impuesto_total: Decimal,
     descuento_global: Decimal | None,
 ) -> tuple[Decimal, Decimal, Decimal, Decimal]:
     normalized_global_discount = Decimal(descuento_global or ZERO)
@@ -1813,7 +1918,14 @@ def resolve_sale_totals(
         )
 
     descuento_total = descuento_lineas_total + normalized_global_discount
-    total = subtotal_despues_descuentos_linea - normalized_global_discount
+    normalized_tax_total = Decimal(impuesto_total or ZERO)
+    if normalized_tax_total < ZERO:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El impuesto no puede ser negativo.",
+        )
+
+    total = subtotal_despues_descuentos_linea - normalized_global_discount + normalized_tax_total
     if total < ZERO:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2071,19 +2183,25 @@ def replace_sale_details(
         material = line["material"]
         detail = VentaDetalle(
             venta_id=sale.id,
-            material_id=material.id,
-            sku_snapshot=material.sku,
-            nombre_snapshot=material.nombre,
+            material_id=material.id if material else None,
+            tipo_linea=line["tipo_linea"],
+            descripcion_manual=line["descripcion_manual"],
+            es_inventariable=bool(line["es_inventariable"]),
+            costo_unitario_manual=line["costo_unitario_manual"],
+            sku_snapshot=material.sku if material else line["sku_snapshot"],
+            nombre_snapshot=material.nombre if material else line["nombre_snapshot"],
             cantidad=line["cantidad"],
             precio_unitario=line["precio_unitario"],
             descuento_unitario=line["descuento_unitario"],
+            impuesto_tasa=line["impuesto_tasa"],
+            impuesto_linea=line["impuesto_linea"],
             subtotal_linea=line["subtotal_linea"],
             total_linea=line["total_linea"],
         )
         db.add(detail)
         db.flush()
 
-        if create_inventory_movements:
+        if create_inventory_movements and material is not None and bool(line["es_inventariable"]):
             movement = apply_inventory_movement(
                 db,
                 user=user,
@@ -2118,7 +2236,7 @@ def create_sale(
     ip_address: str | None,
 ) -> SaleResponse:
     validate_pos_access(user, empresa)
-    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total = resolve_sale_lines(
+    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total, impuesto_total = resolve_sale_lines(
         db,
         empresa_id=empresa.id,
         warehouse_id=almacen_id,
@@ -2128,6 +2246,7 @@ def create_sale(
     subtotal_neto_lineas, normalized_global_discount, descuento_total, total = resolve_sale_totals(
         subtotal_bruto=subtotal_bruto,
         descuento_lineas_total=descuento_lineas_total,
+        impuesto_total=impuesto_total,
         descuento_global=descuento_global,
     )
     shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
@@ -2160,7 +2279,7 @@ def create_sale(
         descuento_lineas_total=descuento_lineas_total,
         descuento_global=normalized_global_discount,
         descuento_total=descuento_total,
-        impuesto_total=ZERO,
+        impuesto_total=impuesto_total,
         total=total,
         metodo_pago=resolved_payment_method,
         monto_recibido=received_amount,
@@ -2237,7 +2356,7 @@ def create_suspended_sale(
     ip_address: str | None,
 ) -> SaleResponse:
     validate_pos_access(user, empresa)
-    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total = resolve_sale_lines(
+    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total, impuesto_total = resolve_sale_lines(
         db,
         empresa_id=empresa.id,
         warehouse_id=almacen_id,
@@ -2247,6 +2366,7 @@ def create_suspended_sale(
     _, normalized_global_discount, descuento_total, total = resolve_sale_totals(
         subtotal_bruto=subtotal_bruto,
         descuento_lineas_total=descuento_lineas_total,
+        impuesto_total=impuesto_total,
         descuento_global=descuento_global,
     )
     suspended_payment_method = "efectivo"
@@ -2271,7 +2391,7 @@ def create_suspended_sale(
         descuento_lineas_total=descuento_lineas_total,
         descuento_global=normalized_global_discount,
         descuento_total=descuento_total,
-        impuesto_total=ZERO,
+        impuesto_total=impuesto_total,
         total=total,
         metodo_pago=suspended_payment_method,
         monto_recibido=None,
@@ -2362,7 +2482,7 @@ def pay_suspended_sale(
             detail="Solo se pueden cobrar ventas suspendidas.",
         )
 
-    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total = resolve_sale_lines(
+    warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total, impuesto_total = resolve_sale_lines(
         db,
         empresa_id=empresa.id,
         warehouse_id=almacen_id,
@@ -2372,6 +2492,7 @@ def pay_suspended_sale(
     _, normalized_global_discount, descuento_total, total = resolve_sale_totals(
         subtotal_bruto=subtotal_bruto,
         descuento_lineas_total=descuento_lineas_total,
+        impuesto_total=impuesto_total,
         descuento_global=descuento_global,
     )
     shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
@@ -2398,7 +2519,7 @@ def pay_suspended_sale(
     sale.descuento_lineas_total = descuento_lineas_total
     sale.descuento_global = normalized_global_discount
     sale.descuento_total = descuento_total
-    sale.impuesto_total = ZERO
+    sale.impuesto_total = impuesto_total
     sale.total = total
     sale.metodo_pago = resolved_payment_method
     sale.monto_recibido = received_amount
@@ -2498,6 +2619,8 @@ def cancel_sale(
             refresh_closed_shift_difference(shift)
 
         for detail in detail_rows:
+            if not detail.material_id or not bool(detail.es_inventariable):
+                continue
             apply_inventory_movement(
                 db,
                 user=user,

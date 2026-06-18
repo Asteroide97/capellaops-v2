@@ -2,14 +2,21 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class SaleCreateLineRequest(BaseModel):
-    material_id: str = Field(min_length=1, max_length=64)
+    tipo_linea: Literal["material", "manual", "servicio"] = "material"
+    material_id: str | None = Field(default=None, min_length=1, max_length=64)
+    descripcion: str | None = Field(default=None, min_length=1, max_length=4000)
     cantidad: Decimal = Field(gt=0)
     precio_unitario: Decimal | None = Field(default=None, ge=0)
-    descuento_unitario: Decimal = Field(default=Decimal("0"), ge=0)
+    descuento_unitario: Decimal = Field(
+        default=Decimal("0"),
+        ge=0,
+        validation_alias=AliasChoices("descuento_unitario", "descuento"),
+    )
+    impuesto_tasa: Decimal = Field(default=Decimal("0"), ge=0)
 
 
 class SalePaymentRequest(BaseModel):
@@ -43,13 +50,22 @@ class SaleCrmLinkRequest(BaseModel):
 class SaleDetailItem(BaseModel):
     id: str
     venta_id: str
-    material_id: str
+    tipo_linea: str
+    material_id: str | None = None
+    material_nombre: str | None = None
+    descripcion: str
+    descripcion_manual: str | None = None
+    es_inventariable: bool = True
     sku_snapshot: str
     nombre_snapshot: str
     unidad: str | None = None
     cantidad: Decimal
     precio_unitario: Decimal
     descuento_unitario: Decimal
+    descuento: Decimal = Decimal("0")
+    impuesto_tasa: Decimal = Decimal("0")
+    impuesto: Decimal = Decimal("0")
+    impuesto_linea: Decimal = Decimal("0")
     subtotal_linea: Decimal
     total_linea: Decimal
     movimiento_inventario_id: str | None = None
@@ -192,11 +208,16 @@ class PosCatalogResponse(BaseModel):
 
 
 class TicketLineItem(BaseModel):
+    tipo_linea: str = "material"
     sku: str
     nombre: str
     cantidad: Decimal
     precio_unitario: Decimal
     descuento_unitario: Decimal
+    descuento: Decimal = Decimal("0")
+    impuesto_tasa: Decimal = Decimal("0")
+    impuesto: Decimal = Decimal("0")
+    impuesto_linea: Decimal = Decimal("0")
     subtotal_linea: Decimal
     total_linea: Decimal
 

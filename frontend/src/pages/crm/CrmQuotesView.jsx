@@ -609,6 +609,10 @@ export default function CrmQuotesView({
       setError("Solo las cotizaciones aceptadas pueden convertirse a operacion.");
       return;
     }
+    if (quote.venta_pos_id) {
+      setError("Esta cotizacion ya fue convertida a venta POS.");
+      return;
+    }
 
     setSubmitting(true);
     setError("");
@@ -632,7 +636,7 @@ export default function CrmQuotesView({
       } else if (typeof onQuotesChanged === "function") {
         await onQuotesChanged(quote.cliente_id || "");
       }
-      setSuccess(response.message || "Venta creada desde cotizacion.");
+      setSuccess(response.message || "Venta POS creada desde cotizacion.");
     } catch (requestError) {
       setError(translateQuoteSaleConversionError(requestError.message));
     } finally {
@@ -1263,9 +1267,7 @@ export default function CrmQuotesView({
                       </p>
                     </>
                   ) : (
-                    <p className="inventory-form-span-2">
-                      La conversion a venta POS depende de que las partidas esten ligadas a materiales reales del POS.
-                    </p>
+                    <p className="inventory-form-span-2">Aun no se ha creado una venta POS desde esta cotizacion.</p>
                   )}
                 </div>
               ) : (

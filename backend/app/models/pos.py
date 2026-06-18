@@ -280,20 +280,61 @@ class Venta(UUIDPrimaryKeyMixin, Base):
 class VentaDetalle(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "ventas_detalles"
     __table_args__ = (
+        CheckConstraint(
+            "tipo_linea IN ('material', 'manual', 'servicio')",
+            name="ck_venta_detalle_tipo_linea",
+        ),
         CheckConstraint("cantidad > 0", name="ck_venta_detalle_cantidad_positive"),
         CheckConstraint("precio_unitario >= 0", name="ck_venta_detalle_precio_nonnegative"),
         CheckConstraint("descuento_unitario >= 0", name="ck_venta_detalle_descuento_nonnegative"),
+        CheckConstraint("impuesto_tasa >= 0", name="ck_venta_detalle_impuesto_tasa_nonnegative"),
+        CheckConstraint("impuesto_linea >= 0", name="ck_venta_detalle_impuesto_linea_nonnegative"),
         CheckConstraint("subtotal_linea >= 0", name="ck_venta_detalle_subtotal_nonnegative"),
         CheckConstraint("total_linea >= 0", name="ck_venta_detalle_total_nonnegative"),
+        CheckConstraint(
+            "("
+            "tipo_linea = 'material' AND material_id IS NOT NULL"
+            ") OR ("
+            "tipo_linea IN ('manual', 'servicio') AND descripcion_manual IS NOT NULL"
+            ")",
+            name="ck_venta_detalle_linea_requerida",
+        ),
     )
 
     venta_id: Mapped[str] = mapped_column(ForeignKey("ventas.id"), nullable=False, index=True)
-    material_id: Mapped[str] = mapped_column(ForeignKey("materiales.id"), nullable=False, index=True)
+    material_id: Mapped[str | None] = mapped_column(ForeignKey("materiales.id"), nullable=True, index=True)
+    tipo_linea: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="material",
+        server_default=text("'material'"),
+        index=True,
+    )
+    descripcion_manual: Mapped[str | None] = mapped_column(Text, nullable=True)
+    es_inventariable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="1",
+    )
+    costo_unitario_manual: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     sku_snapshot: Mapped[str] = mapped_column(String(80), nullable=False)
     nombre_snapshot: Mapped[str] = mapped_column(String(180), nullable=False)
     cantidad: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     precio_unitario: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False)
     descuento_unitario: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    impuesto_tasa: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4),
+        nullable=False,
+        default=Decimal("0"),
+        server_default="0",
+    )
+    impuesto_linea: Mapped[Decimal] = mapped_column(
         Numeric(18, 4),
         nullable=False,
         default=Decimal("0"),

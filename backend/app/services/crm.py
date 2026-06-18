@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 from fastapi import HTTPException, status
 from sqlalchemy import and_, case, desc, func, or_, select
@@ -18,6 +19,7 @@ from app.models import (
     CRMOportunidad,
     Empresa,
     EmpresaUsuario,
+    PosTurnoCaja,
     PMProyecto,
     Usuario,
     Venta,
@@ -41,6 +43,7 @@ from app.schemas.crm import (
 from app.services.access import can_access_module
 from app.services.inventory import apply_text_search, count_rows, normalize_optional_text, normalize_required_text
 from app.services.pm import PMContext, create_project, get_or_create_pm_config
+from app.services.pos import create_sale
 
 
 ZERO = Decimal("0")
@@ -218,6 +221,65 @@ def resolve_client_display_name(client: CRMCliente | None) -> str | None:
 def ensure_quote_accepted(quote: CRMCotizacion) -> None:
     if resolve_quote_display_status(quote) != "aceptada":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cotizacion no aceptada.")
+
+
+def resolve_quote_conversion_shift(
+    db: Session,
+    *,
+    empresa_id: str,
+    caja_id: str | None,
+) -> PosTurnoCaja:
+    query = select(PosTurnoCaja).where(
+        PosTurnoCaja.empresa_id == empresa_id,
+        PosTurnoCaja.estatus == "abierta",
+    )
+    if caja_id:
+        query = query.where(
+            or_(
+                PosTurnoCaja.id == caja_id,
+                PosTurnoCaja.almacen_id == caja_id,
+            )
+        )
+    shift = db.scalar(query.order_by(desc(PosTurnoCaja.opened_at), desc(PosTurnoCaja.id)))
+    if not shift:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se pudo crear venta POS por caja requerida.",
+        )
+    return shift
+
+
+def build_quote_sale_notes(quote: CRMCotizacion, notas: str | None) -> str:
+    note_parts = [normalize_optional_text(notas), f"Venta generada desde cotizacion {quote.folio}"]
+    return " | ".join(part for part in note_parts if part)
+
+
+def build_quote_sale_items(quote: CRMCotizacion) -> list[SimpleNamespace]:
+    items: list[SimpleNamespace] = []
+    for quote_item in sorted(quote.items, key=lambda current: (current.orden, current.id)):
+        quantity = Decimal(quote_item.cantidad or ZERO)
+        if quantity <= ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La cotizacion contiene una partida con cantidad invalida.",
+            )
+        unit_discount = (Decimal(quote_item.descuento or ZERO) / quantity).quantize(Decimal("0.0001"))
+        items.append(
+            SimpleNamespace(
+                tipo_linea="servicio",
+                descripcion=normalize_required_text(quote_item.descripcion, "Descripcion"),
+                cantidad=quantity,
+                precio_unitario=Decimal(quote_item.precio_unitario or ZERO),
+                descuento_unitario=unit_discount,
+                impuesto_tasa=Decimal(quote_item.impuesto_tasa or ZERO),
+            )
+        )
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La cotizacion no tiene partidas para convertir.",
+        )
+    return items
 
 
 def ensure_client_active(client: CRMCliente) -> None:
@@ -1937,13 +1999,75 @@ def convert_crm_quote_to_sale(
     ensure_quote_accepted(quote)
     if quote.venta_pos_id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cotizacion ya convertida a venta.")
+    if quote.cliente.estatus != "activo":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El cliente CRM no esta activo.")
 
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=(
-            "No se pudo crear venta POS porque las partidas de la cotizacion no estan ligadas "
-            "a materiales reales del POS."
-        ),
+    shift = resolve_quote_conversion_shift(db, empresa_id=empresa.id, caja_id=caja_id)
+    sale_items = build_quote_sale_items(quote)
+    sale_total = Decimal(quote.total or ZERO)
+    if sale_total <= ZERO:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La cotizacion debe tener total mayor a cero para crear una venta POS.",
+        )
+    sale_note = build_quote_sale_notes(quote, notas)
+    payment_reference = f"Cotizacion {quote.folio}"
+
+    sale_response = create_sale(
+        db,
+        empresa=empresa,
+        user=user,
+        almacen_id=shift.almacen_id,
+        cliente_nombre=resolve_client_display_name(quote.cliente),
+        cliente_email=(quote.contacto.email if quote.contacto else None) or quote.cliente.email,
+        metodo_pago="otro",
+        monto_recibido=sale_total,
+        descuento_global=ZERO,
+        notas=sale_note,
+        items=sale_items,
+        payments=[
+            SimpleNamespace(
+                metodo="otro",
+                monto=sale_total,
+                referencia=payment_reference,
+                notas=sale_note,
+            )
+        ],
+        ip_address=ip_address,
+    )
+
+    sale = db.scalar(
+        select(Venta).where(
+            Venta.id == sale_response.id,
+            Venta.empresa_id == empresa.id,
+        )
+    )
+    if sale is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="No se pudo crear la venta POS desde la cotizacion.",
+        )
+
+    sale.crm_cliente_id = quote.cliente_id
+    sale.crm_contacto_id = quote.contacto_id
+    quote.venta_pos_id = sale.id
+    quote.convertida_a_venta_at = datetime.now(timezone.utc)
+    db.flush()
+
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="crm.quote.convert_to_sale",
+        entity_name="CRMCotizacion",
+        entity_id=quote.id,
+        ip_address=ip_address,
+        metadata_json={"folio": quote.folio, "sale_id": sale.id},
+    )
+    return CRMCotizacionConversionResponse(
+        ok=True,
+        sale_id=sale.id,
+        message="Venta creada desde cotizacion.",
     )
 
 

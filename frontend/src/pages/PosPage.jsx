@@ -173,6 +173,15 @@ const defaultCrmLinkForm = {
   contacto_id: "",
 };
 
+const defaultManualLineForm = {
+  tipo_linea: "servicio",
+  descripcion: "",
+  cantidad: "1",
+  precio_unitario: "",
+  descuento_unitario: "0",
+  impuesto_tasa: "0",
+};
+
 const invoiceUsageOptions = [
   { value: "G03", label: "G03 - Gastos en general" },
   { value: "G01", label: "G01 - Adquisición de mercancías" },
@@ -333,6 +342,74 @@ function DocumentCompanyHeader({ company, compact = false, fallbackName = "Empre
 
 function normalizeDecimalInput(value) {
   return String(value ?? "").replace(",", ".").replace(/[^\d.]/g, "");
+}
+
+function createCartLineId() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getSaleLineTypeLabel(value) {
+  const normalized = String(value || "material").toLowerCase();
+  if (normalized === "servicio") {
+    return "Servicio";
+  }
+  if (normalized === "manual") {
+    return "Manual";
+  }
+  return "Material";
+}
+
+function getSaleLineTypeTone(value) {
+  const normalized = String(value || "material").toLowerCase();
+  if (normalized === "servicio") {
+    return "info";
+  }
+  if (normalized === "manual") {
+    return "neutral";
+  }
+  return "success";
+}
+
+function isInventoryTrackedLine(line) {
+  return String(line?.tipo_linea || "material").toLowerCase() === "material" && line?.es_inventariable !== false;
+}
+
+function getSaleLineDisplayName(line) {
+  return (
+    line?.descripcion ||
+    line?.descripcion_manual ||
+    line?.material_nombre ||
+    line?.nombre ||
+    line?.nombre_snapshot ||
+    "Concepto manual"
+  );
+}
+
+function getSaleLineSecondaryLabel(line) {
+  if (isInventoryTrackedLine(line)) {
+    return safeText(line?.sku || line?.sku_snapshot, "Sin SKU");
+  }
+  return "Esta linea no afecta inventario.";
+}
+
+function getSaleLineGrossSubtotal(line) {
+  return Number(line?.precio_unitario || 0) * Number(line?.cantidad || 0);
+}
+
+function getSaleLineDiscountTotal(line) {
+  return Number(line?.descuento_unitario || 0) * Number(line?.cantidad || 0);
+}
+
+function getSaleLineNetSubtotal(line) {
+  return Math.max(0, getSaleLineGrossSubtotal(line) - getSaleLineDiscountTotal(line));
+}
+
+function getSaleLineTaxTotal(line) {
+  return getSaleLineNetSubtotal(line) * Number(line?.impuesto_tasa || 0);
+}
+
+function getSaleLineTotal(line) {
+  return getSaleLineNetSubtotal(line) + getSaleLineTaxTotal(line);
 }
 
 
@@ -855,6 +932,8 @@ export default function PosPage() {
   const [invoiceSubmitting, setInvoiceSubmitting] = useState(false);
 
   const [cart, setCart] = useState([]);
+  const [manualLineModalOpen, setManualLineModalOpen] = useState(false);
+  const [manualLineForm, setManualLineForm] = useState(defaultManualLineForm);
   const [saleForm, setSaleForm] = useState(defaultSaleForm);
   const [openShiftForm, setOpenShiftForm] = useState(defaultOpenShiftForm);
   const [shiftMovementForm, setShiftMovementForm] = useState(defaultShiftMovementForm);
@@ -931,24 +1010,17 @@ export default function PosPage() {
 
   const hasActiveShift = Boolean(activeShift?.id);
   const cartSubtotal = useMemo(
-    () =>
-      cart.reduce(
-        (total, item) => total + Number(item.precio_unitario || 0) * Number(item.cantidad || 0),
-        0,
-      ),
+    () => cart.reduce((total, item) => total + getSaleLineGrossSubtotal(item), 0),
     [cart],
   );
   const cartDiscountTotal = useMemo(
-    () =>
-      cart.reduce(
-        (total, item) => total + Number(item.descuento_unitario || 0) * Number(item.cantidad || 0),
-        0,
-      ),
+    () => cart.reduce((total, item) => total + getSaleLineDiscountTotal(item), 0),
     [cart],
   );
+  const cartTaxTotal = useMemo(() => cart.reduce((total, item) => total + getSaleLineTaxTotal(item), 0), [cart]);
   const netSubtotalAfterLineDiscounts = Math.max(0, cartSubtotal - cartDiscountTotal);
   const globalDiscount = Number(saleForm.descuento_global || 0);
-  const cartTotal = Math.max(0, netSubtotalAfterLineDiscounts - globalDiscount);
+  const cartTotal = Math.max(0, netSubtotalAfterLineDiscounts - globalDiscount + cartTaxTotal);
   const usesMixedPayments = saleForm.payment_mode === "mixed";
   const paymentRows = useMemo(
     () => (Array.isArray(saleForm.payments) ? saleForm.payments : []),
@@ -993,7 +1065,10 @@ export default function PosPage() {
   const hasCartItems = cart.length > 0;
   const cartHasInvalidQuantity = cart.some((item) => {
     const quantity = Number(item.cantidad || 0);
-    return quantity <= 0 || Number.isNaN(quantity) || quantity > Number(item.existencia || 0);
+    if (quantity <= 0 || Number.isNaN(quantity)) {
+      return true;
+    }
+    return isInventoryTrackedLine(item) && quantity > Number(item.existencia || 0);
   });
   const cartHasInvalidLineDiscount = cart.some(
     (item) => Number(item.descuento_unitario || 0) > Number(item.precio_unitario || 0),
@@ -1001,7 +1076,14 @@ export default function PosPage() {
   const cartHasInvalidGlobalDiscount =
     globalDiscount < 0 || Number.isNaN(globalDiscount) || globalDiscount > netSubtotalAfterLineDiscounts;
   const cartHasInvalidDiscount = cartHasInvalidLineDiscount || cartHasInvalidGlobalDiscount;
-  const cartHasMissingPrice = cart.some((item) => Number(item.precio_unitario || 0) <= 0);
+  const cartHasMissingPrice = cart.some((item) =>
+    isInventoryTrackedLine(item)
+      ? Number(item.precio_unitario || 0) <= 0
+      : Number(item.precio_unitario || 0) < 0,
+  );
+  const cartHasMissingManualDescription = cart.some(
+    (item) => !isInventoryTrackedLine(item) && !String(item.descripcion || "").trim(),
+  );
   const nonCashOverageWithoutCash =
     usesMixedPayments && paymentOverage > 0 && paymentOverage > mixedPaymentsSummary.cashPaid;
   const hasMixedPaymentRows = paymentRows.length > 0;
@@ -1019,6 +1101,7 @@ export default function PosPage() {
     !cartHasInvalidQuantity &&
     !cartHasInvalidDiscount &&
     !cartHasMissingPrice &&
+    !cartHasMissingManualDescription &&
     !cartHasInvalidPayments &&
     paidPreview >= cartTotal &&
     (!usesMixedPayments || !nonCashOverageWithoutCash) &&
@@ -1088,6 +1171,8 @@ export default function PosPage() {
   function clearCart() {
     setCart([]);
     setSaleForm(defaultSaleForm);
+    setManualLineForm(defaultManualLineForm);
+    setManualLineModalOpen(false);
     setResumedSaleId("");
   }
 
@@ -1427,7 +1512,12 @@ export default function PosPage() {
         const nextQuantity = Math.min(Number(existing.cantidad || 0) + 1, Number(item.existencia || 0));
         return current.map((line) =>
           line.material_id === item.material_id
-            ? { ...line, cantidad: String(nextQuantity), existencia: item.existencia }
+            ? {
+                ...line,
+                cantidad: String(nextQuantity),
+                existencia: item.existencia,
+                precio_unitario: String(item.precio ?? 0),
+              }
             : line,
         );
       }
@@ -1435,24 +1525,92 @@ export default function PosPage() {
       return [
         ...current,
         {
+          cart_id: createCartLineId(),
+          tipo_linea: "material",
           material_id: item.material_id,
           sku: item.sku,
           nombre: item.nombre,
+          descripcion: item.nombre,
           unidad: item.unidad,
           precio_unitario: String(item.precio ?? 0),
           descuento_unitario: "0",
+          impuesto_tasa: "0",
           cantidad: "1",
           existencia: item.existencia,
           stock_bajo: item.stock_bajo,
+          es_inventariable: true,
         },
       ];
     });
   }
 
-  function updateCartLine(materialId, field, value) {
+  function openManualLineModal() {
+    clearFeedback();
+    setManualLineForm(defaultManualLineForm);
+    setManualLineModalOpen(true);
+  }
+
+  function closeManualLineModal() {
+    setManualLineModalOpen(false);
+    setManualLineForm(defaultManualLineForm);
+  }
+
+  function handleManualLineSubmit(event) {
+    event.preventDefault();
+    const description = String(manualLineForm.descripcion || "").trim();
+    const quantity = Number(manualLineForm.cantidad || 0);
+    const price = Number(manualLineForm.precio_unitario || 0);
+    const discount = Number(manualLineForm.descuento_unitario || 0);
+    const taxRate = Number(manualLineForm.impuesto_tasa || 0);
+
+    if (!description) {
+      setError("Ingresa una descripcion para la linea manual.");
+      return;
+    }
+    if (quantity <= 0 || Number.isNaN(quantity)) {
+      setError("La cantidad debe ser mayor a cero.");
+      return;
+    }
+    if (price < 0 || Number.isNaN(price)) {
+      setError("Captura un precio valido para continuar.");
+      return;
+    }
+    if (discount < 0 || Number.isNaN(discount) || discount > price) {
+      setError("El descuento no puede superar el subtotal.");
+      return;
+    }
+    if (taxRate < 0 || Number.isNaN(taxRate)) {
+      setError("Captura un impuesto valido para continuar.");
+      return;
+    }
+
+    clearFeedback();
+    setCart((current) => [
+      ...current,
+      {
+        cart_id: createCartLineId(),
+        tipo_linea: manualLineForm.tipo_linea,
+        material_id: null,
+        sku: "",
+        nombre: description,
+        descripcion: description,
+        unidad: "",
+        precio_unitario: manualLineForm.precio_unitario === "" ? "0" : manualLineForm.precio_unitario,
+        descuento_unitario: manualLineForm.descuento_unitario || "0",
+        impuesto_tasa: manualLineForm.impuesto_tasa || "0",
+        cantidad: manualLineForm.cantidad || "1",
+        existencia: null,
+        stock_bajo: false,
+        es_inventariable: false,
+      },
+    ]);
+    closeManualLineModal();
+  }
+
+  function updateCartLine(cartId, field, value) {
     setCart((current) =>
       current.map((line) => {
-        if (line.material_id !== materialId) {
+        if (line.cart_id !== cartId) {
           return line;
         }
 
@@ -1468,13 +1626,17 @@ export default function PosPage() {
           return { ...line, descuento_unitario: normalizeDecimalInput(value) };
         }
 
+        if (field === "impuesto_tasa") {
+          return { ...line, impuesto_tasa: normalizeDecimalInput(value) };
+        }
+
         return line;
       }),
     );
   }
 
-  function removeCartLine(materialId) {
-    setCart((current) => current.filter((line) => line.material_id !== materialId));
+  function removeCartLine(cartId) {
+    setCart((current) => current.filter((line) => line.cart_id !== cartId));
   }
 
   function applyExactAmount() {
@@ -1581,6 +1743,10 @@ export default function PosPage() {
       setError("El descuento no puede superar el subtotal.");
       return;
     }
+    if (cartHasMissingManualDescription) {
+      setError("Ingresa una descripcion para la linea manual.");
+      return;
+    }
 
     setSubmitting(true);
     clearFeedback();
@@ -1593,10 +1759,13 @@ export default function PosPage() {
       descuento_global: saleForm.descuento_global === "" ? "0" : saleForm.descuento_global,
       notas: saleForm.notas || null,
       items: cart.map((item) => ({
-        material_id: item.material_id,
+        tipo_linea: item.tipo_linea || "material",
+        material_id: isInventoryTrackedLine(item) ? item.material_id : undefined,
+        descripcion: !isInventoryTrackedLine(item) ? getSaleLineDisplayName(item) : undefined,
         cantidad: item.cantidad,
         precio_unitario: item.precio_unitario === "" ? "0" : item.precio_unitario,
         descuento_unitario: item.descuento_unitario || "0",
+        impuesto_tasa: item.impuesto_tasa || "0",
       })),
       payments: usesMixedPayments
         ? paymentRows
@@ -1630,19 +1799,27 @@ export default function PosPage() {
     try {
       const sale = await resumePosSale({ saleId, token, empresaId });
       const stockChanged = (sale.details ?? []).some(
-        (detail) => Number(detail.stock_actual ?? 0) < Number(detail.cantidad ?? 0),
+        (detail) =>
+          detail.es_inventariable !== false &&
+          String(detail.tipo_linea || "material").toLowerCase() === "material" &&
+          Number(detail.stock_actual ?? 0) < Number(detail.cantidad ?? 0),
       );
       setSelectedWarehouseId(sale.almacen_id);
       setCart(
         (sale.details ?? []).map((detail) => ({
+          cart_id: detail.id || createCartLineId(),
+          tipo_linea: detail.tipo_linea || "material",
           material_id: detail.material_id,
           sku: detail.sku_snapshot,
-          nombre: detail.nombre_snapshot,
+          nombre: detail.material_nombre || detail.nombre_snapshot,
+          descripcion: detail.descripcion || detail.descripcion_manual || detail.nombre_snapshot,
           unidad: detail.unidad ?? "",
           precio_unitario: String(detail.precio_unitario ?? 0),
           descuento_unitario: String(detail.descuento_unitario ?? 0),
+          impuesto_tasa: String(detail.impuesto_tasa ?? 0),
           cantidad: String(detail.cantidad ?? 0),
-          existencia: Number(detail.stock_actual ?? 0),
+          existencia: detail.stock_actual != null ? Number(detail.stock_actual) : null,
+          es_inventariable: detail.es_inventariable !== false,
         })),
       );
       setSaleForm({
@@ -1712,6 +1889,10 @@ export default function PosPage() {
       setError("El descuento no puede superar el subtotal.");
       return;
     }
+    if (cartHasMissingManualDescription) {
+      setError("Ingresa una descripcion para la linea manual.");
+      return;
+    }
     if (cartHasMissingPrice) {
       setError("Captura precio de venta para continuar.");
       return;
@@ -1744,10 +1925,13 @@ export default function PosPage() {
       descuento_global: saleForm.descuento_global === "" ? "0" : saleForm.descuento_global,
       notas: saleForm.notas || null,
       items: cart.map((item) => ({
-        material_id: item.material_id,
+        tipo_linea: item.tipo_linea || "material",
+        material_id: isInventoryTrackedLine(item) ? item.material_id : undefined,
+        descripcion: !isInventoryTrackedLine(item) ? getSaleLineDisplayName(item) : undefined,
         cantidad: item.cantidad,
         precio_unitario: item.precio_unitario === "" ? "0" : item.precio_unitario,
         descuento_unitario: item.descuento_unitario || "0",
+        impuesto_tasa: item.impuesto_tasa || "0",
       })),
       payments: usesMixedPayments
         ? paymentRows.map((payment) => ({
@@ -2661,29 +2845,48 @@ export default function PosPage() {
               <div className="pos-section-header">
                 <div>
                   <p className="eyebrow">Carrito</p>
-                  <h2>Carrito ({cart.length} productos)</h2>
+                  <h2>Carrito ({cart.length} lineas)</h2>
                 </div>
-                <div className="pos-cart-total-chip">
-                  <span>Total del carrito</span>
-                  <strong>{formatMoney(cartTotal)}</strong>
+                <div className="pos-cart-header-actions">
+                  <button className="ghost-button" onClick={openManualLineModal} type="button">
+                    <Plus size={16} />
+                    <span>Agregar servicio/manual</span>
+                  </button>
+                  <div className="pos-cart-total-chip">
+                    <span>Total del carrito</span>
+                    <strong>{formatMoney(cartTotal)}</strong>
+                  </div>
                 </div>
               </div>
 
               {!hasCartItems ? (
-                <EmptyState note="Agrega productos desde el buscador" title="El carrito está vacío" />
+                <EmptyState
+                  note="Agrega productos desde el buscador o captura un servicio/manual."
+                  title="El carrito esta vacio"
+                />
               ) : (
                 <div className="pos-cart-list">
                   {cart.map((item) => {
-                    const lineHasStockIssue = Number(item.cantidad || 0) > Number(item.existencia || 0);
-                    const lineHasMissingPrice = Number(item.precio_unitario || 0) <= 0;
+                    const isMaterialLine = isInventoryTrackedLine(item);
+                    const lineHasStockIssue =
+                      isMaterialLine && Number(item.cantidad || 0) > Number(item.existencia || 0);
+                    const lineHasMissingPrice = isMaterialLine
+                      ? Number(item.precio_unitario || 0) <= 0
+                      : Number(item.precio_unitario || 0) < 0;
                     return (
-                      <article className="pos-cart-item pos-cart-row" key={item.material_id}>
+                      <article className="pos-cart-item pos-cart-row" key={item.cart_id || item.material_id}>
                         <div className="pos-cart-main">
-                          <div>
-                            <strong>{item.nombre}</strong>
-                            <p className="table-note">{item.sku}</p>
+                          <div className="pos-cart-main-copy">
+                            <strong>{getSaleLineDisplayName(item)}</strong>
+                            <div className="pos-cart-badges">
+                              <StatusBadge
+                                label={getSaleLineTypeLabel(item.tipo_linea)}
+                                tone={getSaleLineTypeTone(item.tipo_linea)}
+                              />
+                              <p className="table-note">{getSaleLineSecondaryLabel(item)}</p>
+                            </div>
                           </div>
-                          <button className="link-button" onClick={() => removeCartLine(item.material_id)} type="button">
+                          <button className="link-button" onClick={() => removeCartLine(item.cart_id)} type="button">
                             Quitar
                           </button>
                         </div>
@@ -2694,7 +2897,7 @@ export default function PosPage() {
                             <input
                               className="pos-input"
                               min="0.0001"
-                              onChange={(event) => updateCartLine(item.material_id, "cantidad", event.target.value)}
+                              onChange={(event) => updateCartLine(item.cart_id, "cantidad", event.target.value)}
                               step="0.0001"
                               type="number"
                               value={item.cantidad}
@@ -2705,9 +2908,7 @@ export default function PosPage() {
                             <input
                               className={`pos-input ${lineHasMissingPrice ? "is-warning" : ""}`}
                               min="0"
-                              onChange={(event) =>
-                                updateCartLine(item.material_id, "precio_unitario", event.target.value)
-                              }
+                              onChange={(event) => updateCartLine(item.cart_id, "precio_unitario", event.target.value)}
                               placeholder="0.00"
                               step="0.01"
                               type="number"
@@ -2719,17 +2920,34 @@ export default function PosPage() {
                             <input
                               className="pos-input"
                               min="0"
-                              onChange={(event) =>
-                                updateCartLine(item.material_id, "descuento_unitario", event.target.value)
-                              }
+                              onChange={(event) => updateCartLine(item.cart_id, "descuento_unitario", event.target.value)}
                               step="0.01"
                               type="number"
                               value={item.descuento_unitario}
                             />
                           </label>
+                          <label>
+                            Impuesto tasa
+                            <input
+                              className="pos-input"
+                              min="0"
+                              onChange={(event) => updateCartLine(item.cart_id, "impuesto_tasa", event.target.value)}
+                              placeholder="0.16"
+                              step="0.01"
+                              type="number"
+                              value={item.impuesto_tasa || "0"}
+                            />
+                          </label>
                           <div className="pos-cart-inline-meta">
+                            {isMaterialLine ? (
+                              <span className="table-note">
+                                Disponible: {formatNumber(item.existencia)} {item.unidad}
+                              </span>
+                            ) : (
+                              <span className="table-note">Esta linea no afecta inventario.</span>
+                            )}
                             <span className="table-note">
-                              Disponible: {formatNumber(item.existencia)} {item.unidad}
+                              Impuesto: {formatMoney(getSaleLineTaxTotal(item))}
                             </span>
                             {lineHasMissingPrice ? (
                               <span className="table-note inventory-value-negative">Captura precio de venta.</span>
@@ -2740,15 +2958,7 @@ export default function PosPage() {
                           </div>
                         </div>
 
-                        <div className="pos-cart-total">
-                          {formatMoney(
-                            Number(item.cantidad || 0) *
-                              Math.max(
-                                0,
-                                Number(item.precio_unitario || 0) - Number(item.descuento_unitario || 0),
-                              ),
-                          )}
-                        </div>
+                        <div className="pos-cart-total">{formatMoney(getSaleLineTotal(item))}</div>
                       </article>
                     );
                   })}
@@ -2792,6 +3002,10 @@ export default function PosPage() {
                 <div>
                   <span>Descuentos de línea</span>
                   <strong>{formatMoney(cartDiscountTotal)}</strong>
+                </div>
+                <div>
+                  <span>Impuesto</span>
+                  <strong>{formatMoney(cartTaxTotal)}</strong>
                 </div>
                 <label className="pos-payment-inline-field">
                   <span>Descuento global</span>
@@ -4126,6 +4340,104 @@ export default function PosPage() {
       ) : null}
 
       <PosModal
+        footer={
+          <div className="inventory-actions">
+            <button className="ghost-button" onClick={closeManualLineModal} type="button">
+              Cancelar
+            </button>
+            <button className="primary-button" form="pos-manual-line-form" type="submit">
+              Agregar linea
+            </button>
+          </div>
+        }
+        onClose={closeManualLineModal}
+        open={manualLineModalOpen}
+        size="wide"
+        subtitle="Captura conceptos manuales o servicios sin afectar inventario."
+        title="Agregar servicio/manual"
+      >
+        <form className="pos-payment-form" id="pos-manual-line-form" onSubmit={handleManualLineSubmit}>
+          <label>
+            Tipo de linea
+            <select
+              className="pos-input"
+              onChange={(event) => setManualLineForm((current) => ({ ...current, tipo_linea: event.target.value }))}
+              value={manualLineForm.tipo_linea}
+            >
+              <option value="servicio">Servicio</option>
+              <option value="manual">Manual</option>
+            </select>
+          </label>
+          <label>
+            Descripcion
+            <input
+              className="pos-input"
+              maxLength={4000}
+              onChange={(event) => setManualLineForm((current) => ({ ...current, descripcion: event.target.value }))}
+              placeholder="Servicio de instalacion"
+              type="text"
+              value={manualLineForm.descripcion}
+            />
+          </label>
+          <div className="pos-cart-grid">
+            <label>
+              Cantidad
+              <input
+                className="pos-input"
+                min="0.0001"
+                onChange={(event) => setManualLineForm((current) => ({ ...current, cantidad: normalizeDecimalInput(event.target.value) }))}
+                step="0.0001"
+                type="number"
+                value={manualLineForm.cantidad}
+              />
+            </label>
+            <label>
+              Precio unitario
+              <input
+                className="pos-input"
+                min="0"
+                onChange={(event) =>
+                  setManualLineForm((current) => ({ ...current, precio_unitario: normalizeDecimalInput(event.target.value) }))
+                }
+                placeholder="0.00"
+                step="0.01"
+                type="number"
+                value={manualLineForm.precio_unitario}
+              />
+            </label>
+            <label>
+              Descuento
+              <input
+                className="pos-input"
+                min="0"
+                onChange={(event) =>
+                  setManualLineForm((current) => ({ ...current, descuento_unitario: normalizeDecimalInput(event.target.value) }))
+                }
+                step="0.01"
+                type="number"
+                value={manualLineForm.descuento_unitario}
+              />
+            </label>
+            <label>
+              Impuesto tasa
+              <input
+                className="pos-input"
+                min="0"
+                onChange={(event) =>
+                  setManualLineForm((current) => ({ ...current, impuesto_tasa: normalizeDecimalInput(event.target.value) }))
+                }
+                placeholder="0.16"
+                step="0.01"
+                type="number"
+                value={manualLineForm.impuesto_tasa}
+              />
+            </label>
+          </div>
+          <p className="table-note">Esta linea no afecta inventario.</p>
+        </form>
+      </PosModal>
+
+      <PosModal
         footer={historyDetailFooter}
         onClose={() => setDetailModalOpen(false)}
         open={detailModalOpen}
@@ -4161,22 +4473,34 @@ export default function PosPage() {
               <table className="inventory-table">
                 <thead>
                   <tr>
-                    <th>SKU</th>
-                    <th>Producto</th>
+                    <th>Tipo</th>
+                    <th>Concepto</th>
                     <th>Cantidad</th>
                     <th>Precio</th>
                     <th>Descuento</th>
+                    <th>Impuesto</th>
                     <th>Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {selectedSale.details.map((item) => (
                     <tr key={item.id}>
-                      <td>{item.sku_snapshot}</td>
-                      <td>{item.nombre_snapshot}</td>
+                      <td>
+                        <StatusBadge
+                          label={getSaleLineTypeLabel(item.tipo_linea)}
+                          tone={getSaleLineTypeTone(item.tipo_linea)}
+                        />
+                      </td>
+                      <td>
+                        <div className="pos-ticket-product-cell">
+                          <strong>{getSaleLineDisplayName(item)}</strong>
+                          <span>{getSaleLineSecondaryLabel(item)}</span>
+                        </div>
+                      </td>
                       <td>{formatNumber(item.cantidad)}</td>
                       <td>{formatMoney(item.precio_unitario)}</td>
                       <td>{formatMoney(item.descuento_unitario)}</td>
+                      <td>{formatMoney(item.impuesto_linea ?? item.impuesto ?? 0)}</td>
                       <td>{formatMoney(item.total_linea)}</td>
                     </tr>
                   ))}
@@ -4200,6 +4524,10 @@ export default function PosPage() {
               <article className="mini-card">
                 <span className="eyebrow">Descuento total</span>
                 <strong>{formatMoney(selectedSale.descuento_total)}</strong>
+              </article>
+              <article className="mini-card">
+                <span className="eyebrow">Impuesto</span>
+                <strong>{formatMoney(selectedSale.impuesto_total)}</strong>
               </article>
               <article className="mini-card">
                 <span className="eyebrow">Total</span>
@@ -4698,9 +5026,10 @@ export default function PosPage() {
                     <thead>
                       <tr>
                         <th>Cant.</th>
-                        <th>Producto</th>
+                        <th>Producto / concepto</th>
                         <th>Precio</th>
                         <th>Desc.</th>
+                        <th>Imp.</th>
                         <th>Total</th>
                       </tr>
                     </thead>
@@ -4711,11 +5040,17 @@ export default function PosPage() {
                           <td>
                             <div className="pos-ticket-product-cell">
                               <strong>{item.nombre}</strong>
-                              <span>{item.sku}</span>
+                              <span>
+                                {getSaleLineTypeLabel(item.tipo_linea)}
+                                {String(item.tipo_linea || "material").toLowerCase() === "material" && item.sku
+                                  ? ` • ${item.sku}`
+                                  : ""}
+                              </span>
                             </div>
                           </td>
                           <td>{formatMoney(item.precio_unitario)}</td>
                           <td>{formatMoney(item.descuento_unitario)}</td>
+                          <td>{formatMoney(item.impuesto_linea ?? item.impuesto ?? 0)}</td>
                           <td>{formatMoney(item.total_linea)}</td>
                         </tr>
                       ))}
@@ -4726,6 +5061,7 @@ export default function PosPage() {
                 <div className="pos-ticket-totals">
                   <div><span>Subtotal bruto</span><strong>{formatMoney(selectedTicket.subtotal)}</strong></div>
                   <div><span>Descuentos de línea</span><strong>-{formatMoney(selectedTicket.descuento_lineas_total)}</strong></div>
+                  <div><span>Impuesto</span><strong>{formatMoney(selectedTicket.impuesto_total)}</strong></div>
                   <div><span>Descuento global</span><strong>-{formatMoney(selectedTicket.descuento_global)}</strong></div>
                   <div><span>Total</span><strong>{formatMoney(selectedTicket.total)}</strong></div>
                   <div><span>Pagado</span><strong>{formatMoney(selectedTicket.monto_pagado)}</strong></div>
