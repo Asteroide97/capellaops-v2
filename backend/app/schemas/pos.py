@@ -42,6 +42,39 @@ class SaleCancelRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class SaleLineAddRequest(SaleCreateLineRequest):
+    motivo: str | None = Field(default=None, max_length=2000)
+    costo_unitario_manual: Decimal | None = Field(default=None, ge=0)
+
+
+class SaleLineUpdateRequest(BaseModel):
+    cantidad: Decimal | None = Field(default=None, gt=0)
+    precio_unitario: Decimal | None = Field(default=None, ge=0)
+    descuento_unitario: Decimal | None = Field(
+        default=None,
+        ge=0,
+        validation_alias=AliasChoices("descuento_unitario", "descuento"),
+    )
+    impuesto_tasa: Decimal | None = Field(default=None, ge=0)
+    descripcion_manual: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=4000,
+        validation_alias=AliasChoices("descripcion_manual", "descripcion"),
+    )
+    costo_unitario_manual: Decimal | None = Field(default=None, ge=0)
+    motivo: str | None = Field(default=None, max_length=2000)
+
+
+class SaleLineDeleteRequest(BaseModel):
+    motivo: str | None = Field(default=None, max_length=2000)
+
+
+class SaleRecalculateRequest(BaseModel):
+    descuento_global: Decimal | None = Field(default=None, ge=0)
+    motivo: str | None = Field(default=None, max_length=2000)
+
+
 class SaleCrmLinkRequest(BaseModel):
     cliente_id: str = Field(min_length=1, max_length=36)
     contacto_id: str | None = Field(default=None, max_length=36)
@@ -70,6 +103,32 @@ class SaleDetailItem(BaseModel):
     total_linea: Decimal
     movimiento_inventario_id: str | None = None
     stock_actual: Decimal | None = None
+
+
+class SaleEditableLineItem(SaleDetailItem):
+    subtotal_bruto: Decimal = Decimal("0")
+    descuento_total: Decimal = Decimal("0")
+    descuento_global_asignado: Decimal = Decimal("0")
+    subtotal_neto: Decimal = Decimal("0")
+    costo_unitario_estimado: Decimal | None = None
+    costo_total_estimado: Decimal | None = None
+    margen_estimado: Decimal | None = None
+    margen_porcentaje: Decimal | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class SaleEditableTotals(BaseModel):
+    subtotal_bruto: Decimal = Decimal("0")
+    descuento_lineas_total: Decimal = Decimal("0")
+    descuento_global: Decimal = Decimal("0")
+    descuento_total: Decimal = Decimal("0")
+    subtotal_neto: Decimal = Decimal("0")
+    impuesto_total: Decimal = Decimal("0")
+    total: Decimal = Decimal("0")
+    costo_total_estimado: Decimal | None = None
+    margen_estimado: Decimal | None = None
+    margen_completo: bool = False
+    warnings: list[str] = Field(default_factory=list)
 
 
 class SalePaymentItem(BaseModel):
@@ -138,6 +197,14 @@ class SaleListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class SaleEditableSummaryResponse(BaseModel):
+    sale: SaleItem
+    lines: list[SaleEditableLineItem] = Field(default_factory=list)
+    editable: bool
+    reason: str | None = None
+    totals: SaleEditableTotals
 
 
 class PosInvoiceRequestUpsertRequest(BaseModel):

@@ -871,6 +871,51 @@ export function getPosSaleDetail({ saleId, token, empresaId }) {
 }
 
 
+export function getPosSaleEditableSummary({ saleId, token, empresaId }) {
+  return apiRequest(`/pos/sales/${saleId}/editable-summary`, { token, empresaId });
+}
+
+
+export function addPosSaleLine({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/lines`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function updatePosSaleLine({ saleId, lineId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/lines/${lineId}`, {
+    method: "PUT",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deletePosSaleLine({ saleId, lineId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/lines/${lineId}`, {
+    method: "DELETE",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function recalculatePosSale({ saleId, token, empresaId, payload = {} }) {
+  return apiRequest(`/pos/sales/${saleId}/recalculate`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
 export function linkPosSaleToCrm({ saleId, token, empresaId, payload }) {
   return apiRequest(`/pos/sales/${saleId}/crm-link`, {
     method: "PUT",

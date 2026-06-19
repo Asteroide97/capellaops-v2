@@ -15,6 +15,7 @@ from app.models import (
     CRMCliente,
     CRMContacto,
     Empresa,
+    PosSaleAdjustment,
     PosTurnoCaja,
     PosTurnoCajaMovimiento,
     Usuario,
@@ -44,6 +45,9 @@ from app.schemas.pos import (
     PosShiftResponse,
     PosShiftSaleReportItem,
     PosTicketResponse,
+    SaleEditableLineItem,
+    SaleEditableSummaryResponse,
+    SaleEditableTotals,
     SaleDetailItem,
     SaleItem,
     SalePaymentItem,
@@ -69,6 +73,8 @@ PAYMENT_METHODS = {"efectivo", "tarjeta", "transferencia", "otro"}
 LEGACY_MIXED_PAYMENT_METHODS = {"mixto"}
 SALE_LINE_TYPES = {"material", "manual", "servicio"}
 NON_INVENTORY_LINE_TYPES = {"manual", "servicio"}
+NON_EDITABLE_SALE_STATUSES = {"pagada", "cancelada"}
+BLOCKING_INVOICE_EDIT_STATUSES = {"lista_para_facturar", "facturada", "preparada"}
 INVOICE_READY_REQUIRED_FIELDS = (
     "factura_rfc",
     "factura_razon_social",
@@ -210,6 +216,10 @@ def normalize_sale_line_type(value: str | None) -> str:
     return normalized
 
 
+def quantize_decimal(value: Decimal | int | float | None) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(Decimal("0.0001"))
+
+
 def resolve_sale_line_description(*, detail: VentaDetalle | None = None, line: dict | None = None) -> str:
     if detail is not None:
         return (
@@ -256,6 +266,109 @@ def resolve_sale_detail_estimated_cost(detail: VentaDetalle) -> Decimal:
     if material and material.costo_unitario is not None and Decimal(material.costo_unitario) > ZERO:
         return Decimal(material.costo_unitario)
     return ZERO
+
+
+def get_sale_editable_reason(sale: Venta) -> str | None:
+    if sale.estatus in NON_EDITABLE_SALE_STATUSES:
+        if sale.estatus == "pagada":
+            return "No se puede editar una venta pagada."
+        if sale.estatus == "cancelada":
+            return "No se puede editar una venta cancelada."
+    invoice_status = resolve_invoice_display_status(sale)
+    if invoice_status in BLOCKING_INVOICE_EDIT_STATUSES:
+        return "No se puede editar una venta con solicitud de factura lista o facturada."
+    if sale.estatus != "suspendida":
+        return "La venta no permite edición en su estatus actual."
+    return None
+
+
+def ensure_sale_editable(sale: Venta) -> None:
+    reason = get_sale_editable_reason(sale)
+    if reason:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=reason)
+
+
+def serialize_sale_line_adjustment_snapshot(detail: VentaDetalle | dict | None) -> dict | None:
+    if detail is None:
+        return None
+    if isinstance(detail, dict):
+        line_type = normalize_sale_line_type(detail.get("tipo_linea"))
+        material = detail.get("material")
+        return {
+            "line_id": detail.get("id"),
+            "tipo_linea": line_type,
+            "material_id": material.id if material is not None else detail.get("material_id"),
+            "descripcion_manual": detail.get("descripcion_manual"),
+            "sku": material.sku if material is not None else detail.get("sku_snapshot"),
+            "nombre": material.nombre if material is not None else detail.get("nombre_snapshot"),
+            "cantidad": str(detail.get("cantidad") or ZERO),
+            "precio_unitario": str(detail.get("precio_unitario") or ZERO),
+            "descuento_unitario": str(detail.get("descuento_unitario") or ZERO),
+            "impuesto_tasa": str(detail.get("impuesto_tasa") or ZERO),
+            "impuesto_linea": str(detail.get("impuesto_linea") or ZERO),
+            "subtotal_linea": str(detail.get("subtotal_linea") or ZERO),
+            "total_linea": str(detail.get("total_linea") or ZERO),
+            "es_inventariable": bool(detail.get("es_inventariable", line_type == "material")),
+            "costo_unitario_manual": (
+                str(detail.get("costo_unitario_manual")) if detail.get("costo_unitario_manual") is not None else None
+            ),
+        }
+    return {
+        "line_id": detail.id,
+        "tipo_linea": detail.tipo_linea,
+        "material_id": detail.material_id,
+        "descripcion_manual": detail.descripcion_manual,
+        "sku": detail.sku_snapshot,
+        "nombre": detail.nombre_snapshot,
+        "cantidad": str(detail.cantidad or ZERO),
+        "precio_unitario": str(detail.precio_unitario or ZERO),
+        "descuento_unitario": str(detail.descuento_unitario or ZERO),
+        "impuesto_tasa": str(detail.impuesto_tasa or ZERO),
+        "impuesto_linea": str(detail.impuesto_linea or ZERO),
+        "subtotal_linea": str(detail.subtotal_linea or ZERO),
+        "total_linea": str(detail.total_linea or ZERO),
+        "es_inventariable": bool(detail.es_inventariable),
+        "costo_unitario_manual": str(detail.costo_unitario_manual) if detail.costo_unitario_manual is not None else None,
+    }
+
+
+def create_sale_adjustment(
+    db: Session,
+    *,
+    empresa_id: str,
+    sale_id: str,
+    line_id: str | None,
+    usuario_id: str,
+    adjustment_type: str,
+    before_json: dict | None,
+    after_json: dict | None,
+    motivo: str | None,
+) -> None:
+    db.add(
+        PosSaleAdjustment(
+            empresa_id=empresa_id,
+            sale_id=sale_id,
+            line_id=line_id,
+            usuario_id=usuario_id,
+            tipo=adjustment_type,
+            before_json=before_json,
+            after_json=after_json,
+            motivo=normalize_optional_text(motivo),
+        )
+    )
+
+
+def serialize_sale_totals_adjustment_snapshot(sale: Venta) -> dict:
+    return {
+        "sale_id": sale.id,
+        "estatus": sale.estatus,
+        "subtotal": str(sale.subtotal or ZERO),
+        "descuento_lineas_total": str(sale.descuento_lineas_total or ZERO),
+        "descuento_global": str(sale.descuento_global or ZERO),
+        "descuento_total": str(sale.descuento_total or ZERO),
+        "impuesto_total": str(sale.impuesto_total or ZERO),
+        "total": str(sale.total or ZERO),
+    }
 
 
 def calculate_sale_paid_amount(sale: Venta) -> Decimal | None:
@@ -646,6 +759,665 @@ def serialize_sale_response(db: Session, sale: Venta) -> SaleResponse:
             for detail in details
         ],
     )
+
+
+def load_sale_details(
+    db: Session,
+    *,
+    sale_id: str,
+    for_update: bool = False,
+) -> list[VentaDetalle]:
+    query = (
+        select(VentaDetalle)
+        .options(
+            selectinload(VentaDetalle.material),
+            selectinload(VentaDetalle.movimiento_inventario),
+        )
+        .where(VentaDetalle.venta_id == sale_id)
+        .order_by(VentaDetalle.id.asc())
+    )
+    if for_update:
+        query = query.with_for_update()
+    return db.scalars(query).all()
+
+
+def get_sale_detail_for_company(
+    db: Session,
+    *,
+    empresa_id: str,
+    sale_id: str,
+    line_id: str,
+    for_update: bool = False,
+) -> VentaDetalle:
+    query = (
+        select(VentaDetalle)
+        .options(
+            selectinload(VentaDetalle.material),
+            selectinload(VentaDetalle.movimiento_inventario),
+            selectinload(VentaDetalle.venta),
+        )
+        .join(Venta, Venta.id == VentaDetalle.venta_id)
+        .where(
+            VentaDetalle.id == line_id,
+            VentaDetalle.venta_id == sale_id,
+            Venta.empresa_id == empresa_id,
+        )
+    )
+    if for_update:
+        query = query.with_for_update()
+    detail = db.scalar(query)
+    if not detail:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Linea de venta no encontrada.")
+    return detail
+
+
+def recalculate_sale_detail_models(
+    db: Session,
+    *,
+    empresa_id: str,
+    warehouse_id: str,
+    details: list[VentaDetalle],
+    validate_stock: bool,
+) -> tuple[Almacen, list[dict], Decimal, Decimal, Decimal]:
+    warehouse = get_active_sale_warehouse(db, empresa_id, warehouse_id)
+    if not details:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La venta debe conservar al menos una linea.",
+        )
+
+    resolved_lines: list[dict] = []
+    required_stock: dict[str, Decimal] = {}
+    subtotal_bruto = ZERO
+    descuento_lineas_total = ZERO
+    impuesto_total = ZERO
+
+    for detail in details:
+        line_type = normalize_sale_line_type(detail.tipo_linea)
+        quantity = quantize_decimal(detail.cantidad)
+        if quantity <= ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La cantidad debe ser mayor a cero.",
+            )
+
+        material = None
+        descripcion_manual = None
+        nombre_snapshot = None
+        sku_snapshot = None
+        es_inventariable = line_type == "material"
+        costo_unitario_manual = quantize_decimal(detail.costo_unitario_manual) if detail.costo_unitario_manual is not None else None
+
+        if line_type == "material":
+            if not detail.material_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Selecciona un material valido.",
+                )
+            material = get_active_sale_material(db, empresa_id, detail.material_id)
+            nombre_snapshot = material.nombre
+            sku_snapshot = material.sku
+            descripcion_manual = None
+            es_inventariable = True
+            costo_unitario_manual = None
+        else:
+            descripcion_manual = normalize_optional_text(detail.descripcion_manual or detail.nombre_snapshot)
+            if descripcion_manual is None:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Ingresa una descripcion para la linea manual.",
+                )
+            nombre_snapshot = descripcion_manual
+            sku_snapshot = resolve_sale_line_sku(line_type=line_type)
+            material = None
+            detail.material_id = None
+            es_inventariable = False
+
+        price = quantize_decimal(detail.precio_unitario)
+        if price < ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El precio unitario no puede ser negativo.",
+            )
+
+        discount = quantize_decimal(detail.descuento_unitario)
+        line_subtotal = quantize_decimal(price * quantity)
+        line_discount_total = quantize_decimal(discount * quantity)
+        if line_discount_total > line_subtotal:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El descuento no puede superar el subtotal.",
+            )
+
+        tax_rate = quantize_decimal(detail.impuesto_tasa)
+        if tax_rate < ZERO:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El impuesto no puede ser negativo.",
+            )
+
+        line_subtotal_neto = quantize_decimal(line_subtotal - line_discount_total)
+        line_tax_total = quantize_decimal(line_subtotal_neto * tax_rate)
+        line_total = quantize_decimal(line_subtotal_neto + line_tax_total)
+
+        detail.tipo_linea = line_type
+        detail.descripcion_manual = descripcion_manual
+        detail.es_inventariable = es_inventariable
+        detail.costo_unitario_manual = costo_unitario_manual
+        detail.sku_snapshot = sku_snapshot
+        detail.nombre_snapshot = nombre_snapshot
+        detail.cantidad = quantity
+        detail.precio_unitario = price
+        detail.descuento_unitario = discount
+        detail.impuesto_tasa = tax_rate
+        detail.impuesto_linea = line_tax_total
+        detail.subtotal_linea = line_subtotal
+        detail.total_linea = line_total
+
+        subtotal_bruto = quantize_decimal(subtotal_bruto + line_subtotal)
+        descuento_lineas_total = quantize_decimal(descuento_lineas_total + line_discount_total)
+        impuesto_total = quantize_decimal(impuesto_total + line_tax_total)
+        if material is not None:
+            required_stock[material.id] = quantize_decimal(required_stock.get(material.id, ZERO) + quantity)
+
+        resolved_lines.append(
+            {
+                "id": detail.id,
+                "tipo_linea": line_type,
+                "material": material,
+                "material_id": material.id if material is not None else None,
+                "descripcion_manual": descripcion_manual,
+                "nombre_snapshot": nombre_snapshot,
+                "sku_snapshot": sku_snapshot,
+                "es_inventariable": es_inventariable,
+                "costo_unitario_manual": costo_unitario_manual,
+                "cantidad": quantity,
+                "precio_unitario": price,
+                "descuento_unitario": discount,
+                "impuesto_tasa": tax_rate,
+                "impuesto_linea": line_tax_total,
+                "subtotal_linea": line_subtotal,
+                "total_linea": line_total,
+            }
+        )
+
+    if validate_stock:
+        for material_id, quantity in required_stock.items():
+            stock = get_or_create_stock(db, empresa_id, warehouse.id, material_id)
+            if quantize_decimal(stock.cantidad) < quantity:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="No hay stock suficiente.",
+                )
+
+    return warehouse, resolved_lines, subtotal_bruto, descuento_lineas_total, impuesto_total
+
+
+def apply_sale_totals(
+    sale: Venta,
+    *,
+    subtotal_bruto: Decimal,
+    descuento_lineas_total: Decimal,
+    impuesto_total: Decimal,
+    descuento_global: Decimal | None = None,
+) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    subtotal_neto_lineas, normalized_global_discount, descuento_total, total = resolve_sale_totals(
+        subtotal_bruto=subtotal_bruto,
+        descuento_lineas_total=descuento_lineas_total,
+        impuesto_total=impuesto_total,
+        descuento_global=sale.descuento_global if descuento_global is None else descuento_global,
+    )
+    sale.subtotal = quantize_decimal(subtotal_bruto)
+    sale.descuento_lineas_total = quantize_decimal(descuento_lineas_total)
+    sale.descuento_global = quantize_decimal(normalized_global_discount)
+    sale.descuento_total = quantize_decimal(descuento_total)
+    sale.impuesto_total = quantize_decimal(impuesto_total)
+    sale.total = quantize_decimal(total)
+    return subtotal_neto_lineas, normalized_global_discount, descuento_total, total
+
+
+def recalculate_editable_sale_models(
+    db: Session,
+    *,
+    sale: Venta,
+    validate_stock: bool = True,
+    descuento_global: Decimal | None = None,
+) -> tuple[list[VentaDetalle], list[dict], Decimal, Decimal, Decimal]:
+    details = load_sale_details(db, sale_id=sale.id, for_update=False)
+    _, resolved_lines, subtotal_bruto, descuento_lineas_total, impuesto_total = recalculate_sale_detail_models(
+        db,
+        empresa_id=sale.empresa_id,
+        warehouse_id=sale.almacen_id,
+        details=details,
+        validate_stock=validate_stock,
+    )
+    apply_sale_totals(
+        sale,
+        subtotal_bruto=subtotal_bruto,
+        descuento_lineas_total=descuento_lineas_total,
+        impuesto_total=impuesto_total,
+        descuento_global=descuento_global,
+    )
+    db.flush()
+    return details, resolved_lines, subtotal_bruto, descuento_lineas_total, impuesto_total
+
+
+def build_sale_editable_summary_response(
+    db: Session,
+    sale: Venta,
+    *,
+    details: list[VentaDetalle] | None = None,
+) -> SaleEditableSummaryResponse:
+    sale_details = details if details is not None else load_sale_details(db, sale_id=sale.id, for_update=False)
+    stock_map = build_sale_stock_map(
+        db,
+        empresa_id=sale.empresa_id,
+        almacen_id=sale.almacen_id,
+        material_ids=[detail.material_id for detail in sale_details if detail.material_id],
+    )
+    summary = build_sale_item(
+        sale,
+        sale.almacen.nombre,
+        sale.usuario.full_name,
+        len(sale_details),
+        turno_folio=sale.turno.folio if sale.turno else None,
+    )
+    editable_reason = get_sale_editable_reason(sale)
+    editable = editable_reason is None
+    line_discount_base_total = quantize_decimal(
+        sum(
+            (
+                quantize_decimal(Decimal(detail.subtotal_linea or ZERO) - (Decimal(detail.descuento_unitario or ZERO) * Decimal(detail.cantidad or ZERO)))
+                for detail in sale_details
+            ),
+            ZERO,
+        )
+    )
+    remaining_global_discount = quantize_decimal(sale.descuento_global or ZERO)
+    net_sale_before_tax = quantize_decimal(Decimal(sale.subtotal or ZERO) - Decimal(sale.descuento_total or ZERO))
+    line_items: list[SaleEditableLineItem] = []
+    total_cost = ZERO
+    margin_complete = True
+    collected_warnings: list[str] = []
+
+    for index, detail in enumerate(sale_details):
+        line_discount_total = quantize_decimal(Decimal(detail.descuento_unitario or ZERO) * Decimal(detail.cantidad or ZERO))
+        line_subtotal_bruto = quantize_decimal(detail.subtotal_linea)
+        line_subtotal_before_global = quantize_decimal(line_subtotal_bruto - line_discount_total)
+        if remaining_global_discount > ZERO and line_discount_base_total > ZERO:
+            if index == len(sale_details) - 1:
+                allocated_global_discount = remaining_global_discount
+            else:
+                allocated_global_discount = quantize_decimal(
+                    (Decimal(sale.descuento_global or ZERO) * line_subtotal_before_global) / line_discount_base_total
+                )
+                if allocated_global_discount > remaining_global_discount:
+                    allocated_global_discount = remaining_global_discount
+            remaining_global_discount = quantize_decimal(remaining_global_discount - allocated_global_discount)
+        else:
+            allocated_global_discount = ZERO
+        line_subtotal_neto = quantize_decimal(line_subtotal_before_global - allocated_global_discount)
+
+        warnings: list[str] = []
+        estimated_unit_cost: Decimal | None = None
+        if detail.material_id and bool(detail.es_inventariable):
+            resolved_cost = quantize_decimal(resolve_sale_detail_estimated_cost(detail))
+            if resolved_cost > ZERO:
+                estimated_unit_cost = resolved_cost
+            else:
+                warnings.append("Material sin costo.")
+        else:
+            if detail.costo_unitario_manual is not None and quantize_decimal(detail.costo_unitario_manual) > ZERO:
+                estimated_unit_cost = quantize_decimal(detail.costo_unitario_manual)
+            else:
+                warnings.append("Linea manual sin costo estimado.")
+
+        cost_total: Decimal | None = None
+        margin: Decimal | None = None
+        margin_percentage: Decimal | None = None
+        if estimated_unit_cost is not None:
+            cost_total = quantize_decimal(estimated_unit_cost * Decimal(detail.cantidad or ZERO))
+            margin = quantize_decimal(line_subtotal_neto - cost_total)
+            if line_subtotal_neto > ZERO:
+                margin_percentage = quantize_decimal((margin / line_subtotal_neto) * Decimal("100"))
+            if quantize_decimal(detail.precio_unitario) < estimated_unit_cost:
+                warnings.append("Precio debajo de costo.")
+            if margin < ZERO:
+                warnings.append("Margen negativo.")
+            total_cost = quantize_decimal(total_cost + cost_total)
+        else:
+            margin_complete = False
+
+        description = resolve_sale_line_description(detail=detail)
+        for warning in warnings:
+            collected_warnings.append(f"{description}: {warning}")
+
+        line_items.append(
+            SaleEditableLineItem(
+                **serialize_sale_detail(
+                    detail,
+                    stock_actual=stock_map.get(detail.material_id, ZERO) if detail.material_id else None,
+                ).model_dump(),
+                subtotal_bruto=line_subtotal_bruto,
+                descuento_total=line_discount_total,
+                descuento_global_asignado=allocated_global_discount,
+                subtotal_neto=line_subtotal_neto,
+                costo_unitario_estimado=estimated_unit_cost,
+                costo_total_estimado=cost_total,
+                margen_estimado=margin,
+                margen_porcentaje=margin_percentage,
+                warnings=warnings,
+            )
+        )
+
+    totals = SaleEditableTotals(
+        subtotal_bruto=quantize_decimal(sale.subtotal),
+        descuento_lineas_total=quantize_decimal(sale.descuento_lineas_total),
+        descuento_global=quantize_decimal(sale.descuento_global),
+        descuento_total=quantize_decimal(sale.descuento_total),
+        subtotal_neto=net_sale_before_tax,
+        impuesto_total=quantize_decimal(sale.impuesto_total),
+        total=quantize_decimal(sale.total),
+        costo_total_estimado=total_cost if margin_complete else None,
+        margen_estimado=quantize_decimal(net_sale_before_tax - total_cost) if margin_complete else None,
+        margen_completo=margin_complete,
+        warnings=collected_warnings,
+    )
+    return SaleEditableSummaryResponse(
+        sale=summary,
+        lines=line_items,
+        editable=editable,
+        reason=editable_reason,
+        totals=totals,
+    )
+
+
+def get_sale_editable_summary(
+    db: Session,
+    *,
+    empresa_id: str,
+    sale_id: str,
+) -> SaleEditableSummaryResponse:
+    sale = get_sale_for_company(db, empresa_id, sale_id)
+    return build_sale_editable_summary_response(db, sale)
+
+
+def add_sale_line(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    item,
+    ip_address: str | None,
+) -> SaleEditableSummaryResponse:
+    validate_pos_access(user, empresa)
+    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
+    ensure_sale_editable(sale)
+
+    line_type = normalize_sale_line_type(getattr(item, "tipo_linea", None))
+    quantity = quantize_decimal(getattr(item, "cantidad", ZERO))
+    if quantity <= ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad debe ser mayor a cero.")
+
+    material = None
+    description_manual = None
+    sku_snapshot = None
+    nombre_snapshot = None
+    price_override = getattr(item, "precio_unitario", None)
+    price = quantize_decimal(price_override) if price_override is not None else ZERO
+    discount = quantize_decimal(getattr(item, "descuento_unitario", ZERO) or ZERO)
+    tax_rate = quantize_decimal(getattr(item, "impuesto_tasa", ZERO) or ZERO)
+    manual_cost = getattr(item, "costo_unitario_manual", None)
+    costo_unitario_manual = quantize_decimal(manual_cost) if manual_cost is not None else None
+
+    if line_type == "material":
+        material_id = getattr(item, "material_id", None)
+        if not material_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Selecciona un material valido.")
+        material = get_active_sale_material(db, empresa.id, material_id)
+        if price_override is None:
+            price = quantize_decimal(material.precio_venta or ZERO)
+        nombre_snapshot = material.nombre
+        sku_snapshot = material.sku
+        description_manual = None
+        costo_unitario_manual = None
+    else:
+        description_manual = normalize_optional_text(getattr(item, "descripcion", None))
+        if description_manual is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Ingresa una descripcion para la linea manual.",
+            )
+        nombre_snapshot = description_manual
+        sku_snapshot = resolve_sale_line_sku(line_type=line_type)
+
+    if price < ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El precio unitario no puede ser negativo.")
+    if discount < ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El descuento no puede ser negativo.")
+    if tax_rate < ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El impuesto no puede ser negativo.")
+
+    new_detail = VentaDetalle(
+        venta_id=sale.id,
+        material_id=material.id if material is not None else None,
+        tipo_linea=line_type,
+        descripcion_manual=description_manual,
+        es_inventariable=line_type == "material",
+        costo_unitario_manual=costo_unitario_manual if line_type in NON_INVENTORY_LINE_TYPES else None,
+        sku_snapshot=sku_snapshot,
+        nombre_snapshot=nombre_snapshot,
+        cantidad=quantity,
+        precio_unitario=price,
+        descuento_unitario=discount,
+        impuesto_tasa=tax_rate,
+        impuesto_linea=ZERO,
+        subtotal_linea=ZERO,
+        total_linea=ZERO,
+    )
+    db.add(new_detail)
+    db.flush()
+
+    details, _, _, _, _ = recalculate_editable_sale_models(db, sale=sale, validate_stock=True)
+    create_sale_adjustment(
+        db,
+        empresa_id=empresa.id,
+        sale_id=sale.id,
+        line_id=new_detail.id,
+        usuario_id=user.id,
+        adjustment_type="add_line",
+        before_json=None,
+        after_json=serialize_sale_line_adjustment_snapshot(new_detail),
+        motivo=getattr(item, "motivo", None),
+    )
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.sale.line.add",
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={"folio": sale.folio, "line_id": new_detail.id, "tipo_linea": line_type},
+    )
+    db.flush()
+    db.refresh(sale)
+    return build_sale_editable_summary_response(db, sale, details=details)
+
+
+def update_sale_line(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    line_id: str,
+    payload,
+    ip_address: str | None,
+) -> SaleEditableSummaryResponse:
+    validate_pos_access(user, empresa)
+    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
+    ensure_sale_editable(sale)
+    detail = get_sale_detail_for_company(db, empresa_id=empresa.id, sale_id=sale_id, line_id=line_id, for_update=True)
+    before_snapshot = serialize_sale_line_adjustment_snapshot(detail)
+
+    provided_fields = set(getattr(payload, "model_fields_set", set())) - {"motivo"}
+    if not provided_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No hay cambios para actualizar en la linea.",
+        )
+
+    if "cantidad" in provided_fields:
+        detail.cantidad = quantize_decimal(payload.cantidad)
+    if "precio_unitario" in provided_fields:
+        detail.precio_unitario = quantize_decimal(payload.precio_unitario)
+    if "descuento_unitario" in provided_fields:
+        detail.descuento_unitario = quantize_decimal(payload.descuento_unitario)
+    if "impuesto_tasa" in provided_fields:
+        detail.impuesto_tasa = quantize_decimal(payload.impuesto_tasa)
+    if "descripcion_manual" in provided_fields:
+        if detail.tipo_linea not in NON_INVENTORY_LINE_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La descripcion manual solo aplica a lineas manuales o de servicio.",
+            )
+        detail.descripcion_manual = normalize_required_text(payload.descripcion_manual, "Descripcion")
+    if "costo_unitario_manual" in provided_fields:
+        if detail.tipo_linea not in NON_INVENTORY_LINE_TYPES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El costo manual solo aplica a lineas manuales o de servicio.",
+            )
+        detail.costo_unitario_manual = quantize_decimal(payload.costo_unitario_manual) if payload.costo_unitario_manual is not None else None
+
+    details, _, _, _, _ = recalculate_editable_sale_models(db, sale=sale, validate_stock=True)
+    create_sale_adjustment(
+        db,
+        empresa_id=empresa.id,
+        sale_id=sale.id,
+        line_id=detail.id,
+        usuario_id=user.id,
+        adjustment_type="update_line",
+        before_json=before_snapshot,
+        after_json=serialize_sale_line_adjustment_snapshot(detail),
+        motivo=getattr(payload, "motivo", None),
+    )
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.sale.line.update",
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={"folio": sale.folio, "line_id": detail.id},
+    )
+    db.flush()
+    db.refresh(sale)
+    return build_sale_editable_summary_response(db, sale, details=details)
+
+
+def delete_sale_line(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    line_id: str,
+    motivo: str | None,
+    ip_address: str | None,
+) -> SaleEditableSummaryResponse:
+    validate_pos_access(user, empresa)
+    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
+    ensure_sale_editable(sale)
+    details = load_sale_details(db, sale_id=sale.id, for_update=True)
+    if len(details) <= 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La venta debe conservar al menos una linea.",
+        )
+    detail = next((item for item in details if item.id == line_id), None)
+    if not detail:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Linea de venta no encontrada.")
+
+    before_snapshot = serialize_sale_line_adjustment_snapshot(detail)
+    db.delete(detail)
+    db.flush()
+
+    remaining_details, _, _, _, _ = recalculate_editable_sale_models(db, sale=sale, validate_stock=True)
+    create_sale_adjustment(
+        db,
+        empresa_id=empresa.id,
+        sale_id=sale.id,
+        line_id=line_id,
+        usuario_id=user.id,
+        adjustment_type="delete_line",
+        before_json=before_snapshot,
+        after_json=None,
+        motivo=motivo,
+    )
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.sale.line.delete",
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={"folio": sale.folio, "line_id": line_id},
+    )
+    db.flush()
+    db.refresh(sale)
+    return build_sale_editable_summary_response(db, sale, details=remaining_details)
+
+
+def recalculate_sale_adjustments(
+    db: Session,
+    *,
+    empresa: Empresa,
+    user: Usuario,
+    sale_id: str,
+    descuento_global: Decimal | None,
+    motivo: str | None,
+    ip_address: str | None,
+) -> SaleEditableSummaryResponse:
+    validate_pos_access(user, empresa)
+    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
+    ensure_sale_editable(sale)
+    before_snapshot = serialize_sale_totals_adjustment_snapshot(sale)
+    details, _, _, _, _ = recalculate_editable_sale_models(
+        db,
+        sale=sale,
+        validate_stock=True,
+        descuento_global=descuento_global,
+    )
+    after_snapshot = serialize_sale_totals_adjustment_snapshot(sale)
+    create_sale_adjustment(
+        db,
+        empresa_id=empresa.id,
+        sale_id=sale.id,
+        line_id=None,
+        usuario_id=user.id,
+        adjustment_type="recalculate",
+        before_json=before_snapshot,
+        after_json=after_snapshot,
+        motivo=motivo,
+    )
+    create_audit_log(
+        db,
+        empresa_id=empresa.id,
+        usuario_id=user.id,
+        action="pos.sale.recalculate",
+        entity_name="venta",
+        entity_id=sale.id,
+        ip_address=ip_address,
+        metadata_json={"folio": sale.folio},
+    )
+    db.flush()
+    db.refresh(sale)
+    return build_sale_editable_summary_response(db, sale, details=details)
 
 
 def serialize_invoice_request_item(sale: Venta) -> PosInvoiceRequestItem:

@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    JSON,
     Numeric,
     String,
     Text,
@@ -275,6 +276,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     factura_crm_contacto = relationship("CRMContacto", foreign_keys=[factura_crm_contacto_id])
     detalles = relationship("VentaDetalle", back_populates="venta", cascade="all, delete-orphan")
     pagos = relationship("VentaPago", back_populates="venta", cascade="all, delete-orphan")
+    ajustes = relationship("PosSaleAdjustment", back_populates="venta")
 
 
 class VentaDetalle(UUIDPrimaryKeyMixin, Base):
@@ -380,3 +382,32 @@ class VentaPago(UUIDPrimaryKeyMixin, Base):
     empresa = relationship("Empresa")
     venta = relationship("Venta", back_populates="pagos")
     turno = relationship("PosTurnoCaja")
+
+
+class PosSaleAdjustment(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "pos_sale_adjustments"
+    __table_args__ = (
+        CheckConstraint(
+            "tipo IN ('add_line', 'update_line', 'delete_line', 'recalculate')",
+            name="ck_pos_sale_adjustment_tipo",
+        ),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    sale_id: Mapped[str] = mapped_column(ForeignKey("ventas.id"), nullable=False, index=True)
+    line_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    usuario_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
+    tipo: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    before_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    after_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    motivo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+
+    empresa = relationship("Empresa")
+    venta = relationship("Venta", back_populates="ajustes")
+    usuario = relationship("Usuario")

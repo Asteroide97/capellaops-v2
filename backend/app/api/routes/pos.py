@@ -15,6 +15,8 @@ from app.schemas.pos import (
     PosInvoiceRequestResponse,
     PosInvoiceRequestUpsertRequest,
     PosReportSummaryResponse,
+    SaleEditableSummaryResponse,
+    SaleLineAddRequest,
     PosShiftCloseRequest,
     PosShiftListResponse,
     PosShiftManualMovementRequest,
@@ -25,7 +27,10 @@ from app.schemas.pos import (
     SaleCancelRequest,
     SaleCreateRequest,
     SaleCrmLinkRequest,
+    SaleLineDeleteRequest,
     SaleListResponse,
+    SaleLineUpdateRequest,
+    SaleRecalculateRequest,
     SaleResponse,
 )
 from app.services.inventory import get_warehouse_for_company
@@ -35,9 +40,11 @@ from app.services.pos import (
     close_shift,
     create_suspended_sale,
     create_sale,
+    delete_sale_line,
     get_active_shift_response,
     get_pos_catalog,
     get_pos_report_summary,
+    get_sale_editable_summary,
     get_sale_for_company,
     get_sale_invoice_request,
     get_sale_ticket,
@@ -49,9 +56,12 @@ from app.services.pos import (
     link_sale_to_crm,
     open_shift,
     pay_suspended_sale,
+    recalculate_sale_adjustments,
     resume_suspended_sale,
     serialize_sale_response,
+    add_sale_line,
     unlink_sale_from_crm,
+    update_sale_line,
     upsert_sale_invoice_request,
     validate_pos_access,
 )
@@ -333,6 +343,108 @@ def sale_detail(
 ) -> SaleResponse:
     sale = get_sale_for_company(db, context.empresa.id, sale_id)
     return serialize_sale_response(db, sale)
+
+
+@router.get("/sales/{sale_id}/editable-summary", response_model=SaleEditableSummaryResponse)
+def sale_editable_summary(
+    sale_id: str,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleEditableSummaryResponse:
+    return get_sale_editable_summary(db, empresa_id=context.empresa.id, sale_id=sale_id)
+
+
+@router.post("/sales/{sale_id}/lines", response_model=SaleEditableSummaryResponse, status_code=status.HTTP_201_CREATED)
+def add_sale_line_endpoint(
+    sale_id: str,
+    payload: SaleLineAddRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleEditableSummaryResponse:
+    return run_pos_write(
+        db,
+        "add_sale_line",
+        lambda: add_sale_line(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
+            item=payload,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.put("/sales/{sale_id}/lines/{line_id}", response_model=SaleEditableSummaryResponse)
+def update_sale_line_endpoint(
+    sale_id: str,
+    line_id: str,
+    payload: SaleLineUpdateRequest,
+    request: Request,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleEditableSummaryResponse:
+    return run_pos_write(
+        db,
+        "update_sale_line",
+        lambda: update_sale_line(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
+            line_id=line_id,
+            payload=payload,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.delete("/sales/{sale_id}/lines/{line_id}", response_model=SaleEditableSummaryResponse)
+def delete_sale_line_endpoint(
+    sale_id: str,
+    line_id: str,
+    request: Request,
+    payload: SaleLineDeleteRequest | None = None,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleEditableSummaryResponse:
+    return run_pos_write(
+        db,
+        "delete_sale_line",
+        lambda: delete_sale_line(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
+            line_id=line_id,
+            motivo=payload.motivo if payload else None,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.post("/sales/{sale_id}/recalculate", response_model=SaleEditableSummaryResponse)
+def recalculate_sale_endpoint(
+    sale_id: str,
+    request: Request,
+    payload: SaleRecalculateRequest | None = None,
+    context: TenantContext = Depends(get_pos_context),
+    db: Session = Depends(get_db),
+) -> SaleEditableSummaryResponse:
+    return run_pos_write(
+        db,
+        "recalculate_sale",
+        lambda: recalculate_sale_adjustments(
+            db,
+            empresa=context.empresa,
+            user=context.user,
+            sale_id=sale_id,
+            descuento_global=payload.descuento_global if payload else None,
+            motivo=payload.motivo if payload else None,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.put("/sales/{sale_id}/crm-link", response_model=SaleResponse)

@@ -25,6 +25,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import BarcodeScannerModal from "../components/BarcodeScannerModal";
 import {
+  addPosSaleLine,
   cancelPosSale,
   closePosShift,
   createPosSale,
@@ -36,6 +37,7 @@ import {
   getPosInvoiceRequests,
   getPosReportSummary,
   getPosSaleDetail,
+  getPosSaleEditableSummary,
   getPosSaleInvoiceRequest,
   getPosSales,
   getPosShiftReport,
@@ -47,10 +49,13 @@ import {
   listCrmClients,
   openPosShift,
   paySuspendedPosSale,
+  recalculatePosSale,
   requestPosSaleInvoice,
   resumePosSale,
   suspendPosSale,
+  deletePosSaleLine,
   unlinkPosSaleFromCrm,
+  updatePosSaleLine,
   updatePosSaleInvoiceRequest,
 } from "../api/client";
 
@@ -180,6 +185,18 @@ const defaultManualLineForm = {
   precio_unitario: "",
   descuento_unitario: "0",
   impuesto_tasa: "0",
+};
+
+const defaultEditableSaleLineForm = {
+  line_id: "",
+  tipo_linea: "material",
+  material_id: "",
+  descripcion: "",
+  cantidad: "1",
+  precio_unitario: "",
+  descuento_unitario: "0",
+  impuesto_tasa: "0",
+  costo_unitario_manual: "",
 };
 
 const invoiceUsageOptions = [
@@ -410,6 +427,50 @@ function getSaleLineTaxTotal(line) {
 
 function getSaleLineTotal(line) {
   return getSaleLineNetSubtotal(line) + getSaleLineTaxTotal(line);
+}
+
+
+function buildCartLineFromSaleDetail(detail) {
+  return {
+    cart_id: detail.id || createCartLineId(),
+    sale_line_id: detail.id || "",
+    tipo_linea: detail.tipo_linea || "material",
+    material_id: detail.material_id ?? null,
+    sku: detail.sku || detail.sku_snapshot || "",
+    nombre: detail.material_nombre || detail.nombre || detail.nombre_snapshot || getSaleLineDisplayName(detail),
+    descripcion: detail.descripcion || detail.descripcion_manual || detail.material_nombre || detail.nombre_snapshot || "",
+    unidad: detail.unidad ?? "",
+    precio_unitario: String(detail.precio_unitario ?? 0),
+    descuento_unitario: String(detail.descuento_unitario ?? detail.descuento ?? 0),
+    impuesto_tasa: String(detail.impuesto_tasa ?? 0),
+    cantidad: String(detail.cantidad ?? 0),
+    existencia:
+      detail.stock_actual !== null && detail.stock_actual !== undefined
+        ? Number(detail.stock_actual)
+        : detail.existencia !== null && detail.existencia !== undefined
+          ? Number(detail.existencia)
+          : null,
+    es_inventariable: detail.es_inventariable !== false,
+    costo_unitario_manual:
+      detail.costo_unitario_manual !== null && detail.costo_unitario_manual !== undefined
+        ? String(detail.costo_unitario_manual)
+        : "",
+    margen_estimado: detail.margen_estimado ?? null,
+    margen_porcentaje: detail.margen_porcentaje ?? null,
+    warnings: Array.isArray(detail.warnings) ? detail.warnings : [],
+  };
+}
+
+
+function formatMarginPercentage(value) {
+  if (value === null || value === undefined || value === "") {
+    return "Margen no disponible.";
+  }
+  const numericValue = Number(value);
+  if (Number.isNaN(numericValue)) {
+    return "Margen no disponible.";
+  }
+  return `${formatNumber(numericValue)}%`;
 }
 
 
@@ -934,6 +995,14 @@ export default function PosPage() {
   const [cart, setCart] = useState([]);
   const [manualLineModalOpen, setManualLineModalOpen] = useState(false);
   const [manualLineForm, setManualLineForm] = useState(defaultManualLineForm);
+  const [editableSaleSummary, setEditableSaleSummary] = useState(null);
+  const [editableSaleLoading, setEditableSaleLoading] = useState(false);
+  const [editableSaleSubmitting, setEditableSaleSubmitting] = useState(false);
+  const [editableSaleRecalculating, setEditableSaleRecalculating] = useState(false);
+  const [editableSaleLineModalOpen, setEditableSaleLineModalOpen] = useState(false);
+  const [editableSaleLineMode, setEditableSaleLineMode] = useState("add");
+  const [editableSaleLineForm, setEditableSaleLineForm] = useState(defaultEditableSaleLineForm);
+  const [editableDiscountGlobalInput, setEditableDiscountGlobalInput] = useState("");
   const [saleForm, setSaleForm] = useState(defaultSaleForm);
   const [openShiftForm, setOpenShiftForm] = useState(defaultOpenShiftForm);
   const [shiftMovementForm, setShiftMovementForm] = useState(defaultShiftMovementForm);
@@ -1061,6 +1130,10 @@ export default function PosPage() {
   const expectedCash = Number(activeShift?.efectivo_esperado || 0);
   const countedCash = Number(closeShiftForm.efectivo_contado || 0);
   const closeShiftDifference = countedCash - expectedCash;
+  const editableSaleId = editableSaleSummary?.sale?.id ?? "";
+  const isEditingSuspendedSale = Boolean(resumedSaleId) && editableSaleId === resumedSaleId;
+  const editableSaleIsEditable = Boolean(editableSaleSummary?.editable);
+  const editableSaleWarnings = editableSaleSummary?.totals?.warnings ?? [];
 
   const hasCartItems = cart.length > 0;
   const cartHasInvalidQuantity = cart.some((item) => {
@@ -1173,6 +1246,14 @@ export default function PosPage() {
     setSaleForm(defaultSaleForm);
     setManualLineForm(defaultManualLineForm);
     setManualLineModalOpen(false);
+    setEditableSaleSummary(null);
+    setEditableSaleLoading(false);
+    setEditableSaleSubmitting(false);
+    setEditableSaleRecalculating(false);
+    setEditableSaleLineModalOpen(false);
+    setEditableSaleLineMode("add");
+    setEditableSaleLineForm(defaultEditableSaleLineForm);
+    setEditableDiscountGlobalInput("");
     setResumedSaleId("");
   }
 
@@ -1343,6 +1424,305 @@ export default function PosPage() {
     setSelectedTicket(ticket);
     setCancelReason("");
     return { saleDetail, ticket };
+  }
+
+  function syncSaleFormFromSale(sale) {
+    setSelectedWarehouseId(sale.almacen_id);
+    setSaleForm({
+      cliente_nombre: sale.cliente_nombre ?? "",
+      cliente_email: sale.cliente_email ?? "",
+      metodo_pago:
+        sale.metodo_pago && sale.metodo_pago !== "mixto"
+          ? sale.metodo_pago
+          : sale.payments?.[0]?.metodo || "efectivo",
+      payment_mode: sale.payments?.length > 1 || sale.metodo_pago === "mixto" ? "mixed" : "simple",
+      payments:
+        sale.payments?.length > 0
+          ? sale.payments.map((payment) =>
+              createPaymentDraft(
+                payment.metodo,
+                payment.monto != null ? String(payment.monto) : "",
+                payment.referencia ?? "",
+              ),
+            )
+          : sale.metodo_pago === "mixto"
+            ? [createPaymentDraft("efectivo", "", "")]
+            : [],
+      monto_recibido:
+        sale.payments?.length === 1 && sale.payments[0].metodo === "efectivo"
+          ? String(sale.payments[0].monto ?? "")
+          : "",
+      descuento_global:
+        sale.descuento_global != null && Number(sale.descuento_global) > 0
+          ? String(sale.descuento_global)
+          : "",
+      notas: sale.notas ?? "",
+    });
+  }
+
+  function applyEditableSaleSummary(summary, { baseSale = null } = {}) {
+    const summarySale = summary?.sale ?? null;
+    if (!summarySale) {
+      return;
+    }
+
+    const sourceSale = baseSale ?? summarySale;
+    const nextDiscountValue = summary?.totals?.descuento_global ?? summarySale.descuento_global ?? 0;
+    const nextDiscountInput = Number(nextDiscountValue || 0) > 0 ? String(nextDiscountValue) : "";
+
+    setEditableSaleSummary(summary);
+    setEditableDiscountGlobalInput(nextDiscountInput);
+    setResumedSaleId(summarySale.id);
+    setSelectedWarehouseId(summarySale.almacen_id);
+    setCart((summary.lines ?? []).map((detail) => buildCartLineFromSaleDetail(detail)));
+    setSaleForm((current) => ({
+      ...current,
+      cliente_nombre: sourceSale.cliente_nombre ?? current.cliente_nombre,
+      cliente_email: sourceSale.cliente_email ?? current.cliente_email,
+      descuento_global: nextDiscountInput,
+      notas: sourceSale.notas ?? current.notas,
+    }));
+    setSelectedSale((current) =>
+      current?.id === summarySale.id
+        ? {
+            ...current,
+            ...summarySale,
+            details: summary.lines ?? [],
+            payments: current.payments ?? [],
+          }
+        : current,
+    );
+  }
+
+  async function fetchEditableSaleSummary(saleId, { baseSale = null } = {}) {
+    setEditableSaleLoading(true);
+    try {
+      const summary = await getPosSaleEditableSummary({ saleId, token, empresaId });
+      applyEditableSaleSummary(summary, { baseSale });
+      await loadSales(saleFilters);
+      return summary;
+    } finally {
+      setEditableSaleLoading(false);
+    }
+  }
+
+  function openEditableSaleLineModal(mode, line = null) {
+    clearFeedback();
+    if (mode === "edit" && line) {
+      setEditableSaleLineMode("edit");
+      setEditableSaleLineForm({
+        line_id: line.id || line.sale_line_id || line.cart_id || "",
+        tipo_linea: line.tipo_linea || "material",
+        material_id: line.material_id || "",
+        descripcion: getSaleLineDisplayName(line),
+        cantidad: String(line.cantidad ?? 1),
+        precio_unitario: String(line.precio_unitario ?? 0),
+        descuento_unitario: String(line.descuento_unitario ?? line.descuento ?? 0),
+        impuesto_tasa: String(line.impuesto_tasa ?? 0),
+        costo_unitario_manual:
+          line.costo_unitario_manual !== null && line.costo_unitario_manual !== undefined
+            ? String(line.costo_unitario_manual)
+            : "",
+      });
+      setEditableSaleLineModalOpen(true);
+      return;
+    }
+
+    setEditableSaleLineMode("add");
+    setEditableSaleLineForm(defaultEditableSaleLineForm);
+    setEditableSaleLineModalOpen(true);
+  }
+
+  function closeEditableSaleLineModal() {
+    setEditableSaleLineModalOpen(false);
+    setEditableSaleLineMode("add");
+    setEditableSaleLineForm(defaultEditableSaleLineForm);
+  }
+
+  function openEditableMaterialLineModal(item) {
+    clearFeedback();
+    setEditableSaleLineMode("add");
+    setEditableSaleLineForm({
+      ...defaultEditableSaleLineForm,
+      tipo_linea: "material",
+      material_id: item.material_id,
+      descripcion: item.nombre ?? "",
+      precio_unitario: String(item.precio ?? ""),
+    });
+    setEditableSaleLineModalOpen(true);
+  }
+
+  async function syncEditableSaleResult(summary) {
+    applyEditableSaleSummary(summary);
+    await loadSales(saleFilters);
+  }
+
+  function handleEditableLineMaterialChange(materialId) {
+    const selectedMaterial = catalogItems.find((item) => item.material_id === materialId);
+    setEditableSaleLineForm((current) => ({
+      ...current,
+      material_id: materialId,
+      descripcion: selectedMaterial?.nombre ?? current.descripcion,
+      precio_unitario:
+        current.precio_unitario !== "" ? current.precio_unitario : String(selectedMaterial?.precio ?? ""),
+    }));
+  }
+
+  async function handleEditableSaleLineSubmit(event) {
+    event.preventDefault();
+    const saleId = editableSaleSummary?.sale?.id || resumedSaleId;
+    const lineType = String(editableSaleLineForm.tipo_linea || "material").toLowerCase();
+    const isMaterialLine = lineType === "material";
+    const description = String(editableSaleLineForm.descripcion || "").trim();
+    const quantity = Number(editableSaleLineForm.cantidad || 0);
+    const price = Number(editableSaleLineForm.precio_unitario || 0);
+    const discount = Number(editableSaleLineForm.descuento_unitario || 0);
+    const taxRate = Number(editableSaleLineForm.impuesto_tasa || 0);
+    const manualCost =
+      editableSaleLineForm.costo_unitario_manual === ""
+        ? null
+        : Number(editableSaleLineForm.costo_unitario_manual || 0);
+
+    if (!saleId) {
+      setError("Selecciona una venta suspendida para editar.");
+      return;
+    }
+    if (isMaterialLine && !editableSaleLineForm.material_id) {
+      setError("Selecciona un material para agregar la línea.");
+      return;
+    }
+    if (!isMaterialLine && !description) {
+      setError("Ingresa una descripcion para la linea manual.");
+      return;
+    }
+    if (quantity <= 0 || Number.isNaN(quantity)) {
+      setError("La cantidad debe ser mayor a cero.");
+      return;
+    }
+    if (price < 0 || Number.isNaN(price)) {
+      setError("Captura un precio valido para continuar.");
+      return;
+    }
+    if (discount < 0 || Number.isNaN(discount) || discount > price) {
+      setError("El descuento no puede superar el subtotal.");
+      return;
+    }
+    if (taxRate < 0 || Number.isNaN(taxRate)) {
+      setError("Captura un impuesto valido para continuar.");
+      return;
+    }
+    if (manualCost != null && (Number.isNaN(manualCost) || manualCost < 0)) {
+      setError("Captura un costo estimado valido.");
+      return;
+    }
+
+    setEditableSaleSubmitting(true);
+    clearFeedback();
+    try {
+      let summary;
+      if (editableSaleLineMode === "edit") {
+        summary = await updatePosSaleLine({
+          saleId,
+          lineId: editableSaleLineForm.line_id,
+          token,
+          empresaId,
+          payload: {
+            cantidad: editableSaleLineForm.cantidad,
+            precio_unitario: editableSaleLineForm.precio_unitario === "" ? "0" : editableSaleLineForm.precio_unitario,
+            descuento: editableSaleLineForm.descuento_unitario || "0",
+            impuesto_tasa: editableSaleLineForm.impuesto_tasa || "0",
+            descripcion: !isMaterialLine ? description : undefined,
+            costo_unitario_manual: !isMaterialLine && manualCost != null ? editableSaleLineForm.costo_unitario_manual : undefined,
+          },
+        });
+        await syncEditableSaleResult(summary);
+        setSuccess("Línea actualizada.");
+      } else {
+        summary = await addPosSaleLine({
+          saleId,
+          token,
+          empresaId,
+          payload: {
+            tipo_linea: lineType,
+            material_id: isMaterialLine ? editableSaleLineForm.material_id : undefined,
+            descripcion: !isMaterialLine ? description : undefined,
+            cantidad: editableSaleLineForm.cantidad,
+            precio_unitario: editableSaleLineForm.precio_unitario === "" ? "0" : editableSaleLineForm.precio_unitario,
+            descuento: editableSaleLineForm.descuento_unitario || "0",
+            impuesto_tasa: editableSaleLineForm.impuesto_tasa || "0",
+            costo_unitario_manual: !isMaterialLine && manualCost != null ? editableSaleLineForm.costo_unitario_manual : undefined,
+          },
+        });
+        await syncEditableSaleResult(summary);
+        setSuccess("Línea agregada.");
+      }
+      closeEditableSaleLineModal();
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo actualizar la venta suspendida."));
+    } finally {
+      setEditableSaleSubmitting(false);
+    }
+  }
+
+  async function handleDeleteEditableSaleLine(line) {
+    const saleId = editableSaleSummary?.sale?.id || resumedSaleId;
+    const lineId = line?.id || line?.sale_line_id || line?.cart_id;
+    if (!saleId || !lineId) {
+      setError("Selecciona una línea válida para eliminar.");
+      return;
+    }
+    if (!window.confirm("¿Quitar esta línea de la venta?")) {
+      return;
+    }
+
+    setEditableSaleSubmitting(true);
+    clearFeedback();
+    try {
+      const summary = await deletePosSaleLine({
+        saleId,
+        lineId,
+        token,
+        empresaId,
+      });
+      await syncEditableSaleResult(summary);
+      setSuccess("Línea eliminada.");
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo actualizar la venta suspendida."));
+    } finally {
+      setEditableSaleSubmitting(false);
+    }
+  }
+
+  async function handleRecalculateEditableSale() {
+    const saleId = editableSaleSummary?.sale?.id || resumedSaleId;
+    const discountValue = editableDiscountGlobalInput === "" ? "0" : editableDiscountGlobalInput;
+    if (!saleId) {
+      setError("Selecciona una venta suspendida para recalcular.");
+      return;
+    }
+    if (Number(discountValue || 0) < 0 || Number.isNaN(Number(discountValue || 0))) {
+      setError("El descuento no puede superar el subtotal.");
+      return;
+    }
+
+    setEditableSaleRecalculating(true);
+    clearFeedback();
+    try {
+      const summary = await recalculatePosSale({
+        saleId,
+        token,
+        empresaId,
+        payload: {
+          descuento_global: discountValue,
+        },
+      });
+      await syncEditableSaleResult(summary);
+      setSuccess("Venta recalculada.");
+    } catch (requestError) {
+      setError(getPosUiError(requestError, "No se pudo recalcular la venta suspendida."));
+    } finally {
+      setEditableSaleRecalculating(false);
+    }
   }
 
   async function loadCrmClientsForSaleLink(query = crmClientSearch) {
@@ -1748,6 +2128,23 @@ export default function PosPage() {
       return;
     }
 
+    if (resumedSaleId) {
+      clearFeedback();
+      try {
+        const savedSaleId = resumedSaleId;
+        clearCart();
+        setSelectedSale(null);
+        setSelectedTicket(null);
+        await loadSales(saleFilters);
+        setSuccess("Venta suspendida correctamente.");
+        setSuccessContext({ type: "suspended", saleId: savedSaleId });
+        updateView("history");
+      } catch (requestError) {
+        setError(getPosUiError(requestError, "No se pudo completar la acción."));
+      }
+      return;
+    }
+
     setSubmitting(true);
     clearFeedback();
     const payload = {
@@ -1804,55 +2201,8 @@ export default function PosPage() {
           String(detail.tipo_linea || "material").toLowerCase() === "material" &&
           Number(detail.stock_actual ?? 0) < Number(detail.cantidad ?? 0),
       );
-      setSelectedWarehouseId(sale.almacen_id);
-      setCart(
-        (sale.details ?? []).map((detail) => ({
-          cart_id: detail.id || createCartLineId(),
-          tipo_linea: detail.tipo_linea || "material",
-          material_id: detail.material_id,
-          sku: detail.sku_snapshot,
-          nombre: detail.material_nombre || detail.nombre_snapshot,
-          descripcion: detail.descripcion || detail.descripcion_manual || detail.nombre_snapshot,
-          unidad: detail.unidad ?? "",
-          precio_unitario: String(detail.precio_unitario ?? 0),
-          descuento_unitario: String(detail.descuento_unitario ?? 0),
-          impuesto_tasa: String(detail.impuesto_tasa ?? 0),
-          cantidad: String(detail.cantidad ?? 0),
-          existencia: detail.stock_actual != null ? Number(detail.stock_actual) : null,
-          es_inventariable: detail.es_inventariable !== false,
-        })),
-      );
-      setSaleForm({
-        cliente_nombre: sale.cliente_nombre ?? "",
-        cliente_email: sale.cliente_email ?? "",
-        metodo_pago:
-          sale.metodo_pago && sale.metodo_pago !== "mixto"
-            ? sale.metodo_pago
-            : sale.payments?.[0]?.metodo || "efectivo",
-        payment_mode: sale.payments?.length > 1 || sale.metodo_pago === "mixto" ? "mixed" : "simple",
-        payments:
-          sale.payments?.length > 0
-            ? sale.payments.map((payment) =>
-                createPaymentDraft(
-                  payment.metodo,
-                  payment.monto != null ? String(payment.monto) : "",
-                  payment.referencia ?? "",
-                ),
-              )
-            : sale.metodo_pago === "mixto"
-              ? [createPaymentDraft("efectivo", "", "")]
-              : [],
-        monto_recibido:
-          sale.payments?.length === 1 && sale.payments[0].metodo === "efectivo"
-            ? String(sale.payments[0].monto ?? "")
-            : "",
-        descuento_global:
-          sale.descuento_global != null && Number(sale.descuento_global) > 0
-            ? String(sale.descuento_global)
-            : "",
-        notas: sale.notas ?? "",
-      });
-      setResumedSaleId(sale.id);
+      syncSaleFormFromSale(sale);
+      await fetchEditableSaleSummary(sale.id, { baseSale: sale });
       setDetailModalOpen(false);
       updateView("sell");
       if (stockChanged) {
@@ -2605,7 +2955,7 @@ export default function PosPage() {
       ) : null}
       {selectedSale.estatus === "suspendida" ? (
         <button className="primary-button" onClick={() => handleResumeSale(selectedSale.id)} type="button">
-          Reanudar venta
+          {resumedSaleId === selectedSale.id ? "Volver a edición" : "Editar venta suspendida"}
         </button>
       ) : null}
       {["pagada", "suspendida"].includes(selectedSale.estatus) ? (
@@ -2821,11 +3171,16 @@ export default function PosPage() {
                           ) : null}
                           <button
                             className="ghost-button"
-                            disabled={Number(item.existencia || 0) <= 0}
-                            onClick={() => addToCart(item)}
+                            disabled={
+                              Number(item.existencia || 0) <= 0 ||
+                              (isEditingSuspendedSale && !editableSaleIsEditable)
+                            }
+                            onClick={() =>
+                              isEditingSuspendedSale ? openEditableMaterialLineModal(item) : addToCart(item)
+                            }
                             type="button"
                           >
-                            Agregar
+                            {isEditingSuspendedSale ? "Agregar a venta" : "Agregar"}
                           </button>
                         </article>
                       );
@@ -2848,9 +3203,18 @@ export default function PosPage() {
                   <h2>Carrito ({cart.length} lineas)</h2>
                 </div>
                 <div className="pos-cart-header-actions">
-                  <button className="ghost-button" onClick={openManualLineModal} type="button">
+                  <button
+                    className="ghost-button"
+                    disabled={isEditingSuspendedSale && (!editableSaleIsEditable || editableSaleLoading)}
+                    onClick={
+                      isEditingSuspendedSale
+                        ? () => openEditableSaleLineModal("add")
+                        : openManualLineModal
+                    }
+                    type="button"
+                  >
                     <Plus size={16} />
-                    <span>Agregar servicio/manual</span>
+                    <span>{isEditingSuspendedSale ? "Agregar línea" : "Agregar servicio/manual"}</span>
                   </button>
                   <div className="pos-cart-total-chip">
                     <span>Total del carrito</span>
@@ -2859,9 +3223,108 @@ export default function PosPage() {
                 </div>
               </div>
 
+              {isEditingSuspendedSale ? (
+                <section className="pos-warning-box pos-editable-sale-panel is-warning">
+                  <div className="pos-section-header">
+                    <div>
+                      <strong>Editar venta suspendida</strong>
+                      <p>
+                        {editableSaleSummary?.sale?.folio
+                          ? `Ajusta ${editableSaleSummary.sale.folio} antes de cobrar.`
+                          : "Ajusta líneas, descuentos e impuesto antes de cobrar."}
+                      </p>
+                    </div>
+                    <div className="pos-action-row">
+                      <button
+                        className="ghost-button"
+                        disabled={!editableSaleIsEditable || editableSaleRecalculating || editableSaleLoading}
+                        onClick={handleRecalculateEditableSale}
+                        type="button"
+                      >
+                        {editableSaleRecalculating ? "Recalculando..." : "Recalcular"}
+                      </button>
+                    </div>
+                  </div>
+
+                  {!editableSaleIsEditable ? (
+                    <div className="pos-warning-box is-error">
+                      <strong>Esta venta ya no puede editarse.</strong>
+                      <p>{editableSaleSummary?.reason || "La venta ya no está disponible para ajustes."}</p>
+                    </div>
+                  ) : null}
+
+                  <div className="pos-editable-sale-controls">
+                    <label>
+                      Descuento global
+                      <input
+                        className="pos-input"
+                        disabled={!editableSaleIsEditable || editableSaleLoading}
+                        min="0"
+                        onChange={(event) => setEditableDiscountGlobalInput(normalizeDecimalInput(event.target.value))}
+                        placeholder="0.00"
+                        step="0.01"
+                        type="number"
+                        value={editableDiscountGlobalInput}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="pos-ticket-meta-grid">
+                    <article className="mini-card">
+                      <span className="eyebrow">Subtotal</span>
+                      <strong>{formatMoney(editableSaleSummary?.totals?.subtotal_bruto)}</strong>
+                    </article>
+                    <article className="mini-card">
+                      <span className="eyebrow">Descuento total</span>
+                      <strong>{formatMoney(editableSaleSummary?.totals?.descuento_total)}</strong>
+                    </article>
+                    <article className="mini-card">
+                      <span className="eyebrow">Impuesto</span>
+                      <strong>{formatMoney(editableSaleSummary?.totals?.impuesto_total)}</strong>
+                    </article>
+                    <article className="mini-card">
+                      <span className="eyebrow">Total</span>
+                      <strong>{formatMoney(editableSaleSummary?.totals?.total)}</strong>
+                    </article>
+                    <article className="mini-card">
+                      <span className="eyebrow">Margen estimado</span>
+                      <strong>
+                        {editableSaleSummary?.totals?.margen_estimado != null
+                          ? formatMoney(editableSaleSummary.totals.margen_estimado)
+                          : "Margen no disponible."}
+                      </strong>
+                      <p>{editableSaleSummary?.totals?.margen_completo ? "Cálculo completo." : "Hay líneas sin costo estimado."}</p>
+                    </article>
+                  </div>
+
+                  {editableSaleLoading ? <p className="table-note">Actualizando venta suspendida...</p> : null}
+
+                  <div className="pos-margin-warning-list">
+                    {editableSaleWarnings.length > 0 ? (
+                      <>
+                        <strong>Advertencias de margen</strong>
+                        <div className="pos-margin-warning-items">
+                          {editableSaleWarnings.map((warning) => (
+                            <span className="status-badge warning" key={warning}>
+                              {warning}
+                            </span>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="table-note">Sin advertencias de margen en esta venta.</p>
+                    )}
+                  </div>
+                </section>
+              ) : null}
+
               {!hasCartItems ? (
                 <EmptyState
-                  note="Agrega productos desde el buscador o captura un servicio/manual."
+                  note={
+                    isEditingSuspendedSale
+                      ? "Agrega una línea para continuar editando la venta suspendida."
+                      : "Agrega productos desde el buscador o captura un servicio/manual."
+                  }
                   title="El carrito esta vacio"
                 />
               ) : (
@@ -2873,6 +3336,7 @@ export default function PosPage() {
                     const lineHasMissingPrice = isMaterialLine
                       ? Number(item.precio_unitario || 0) <= 0
                       : Number(item.precio_unitario || 0) < 0;
+                    const lineWarnings = Array.isArray(item.warnings) ? item.warnings : [];
                     return (
                       <article className="pos-cart-item pos-cart-row" key={item.cart_id || item.material_id}>
                         <div className="pos-cart-main">
@@ -2886,77 +3350,147 @@ export default function PosPage() {
                               <p className="table-note">{getSaleLineSecondaryLabel(item)}</p>
                             </div>
                           </div>
-                          <button className="link-button" onClick={() => removeCartLine(item.cart_id)} type="button">
-                            Quitar
-                          </button>
+                          {isEditingSuspendedSale ? (
+                            <div className="pos-action-row">
+                              <button
+                                className="link-button"
+                                disabled={!editableSaleIsEditable || editableSaleSubmitting}
+                                onClick={() => openEditableSaleLineModal("edit", item)}
+                                type="button"
+                              >
+                                Editar
+                              </button>
+                              <button
+                                className="link-button"
+                                disabled={!editableSaleIsEditable || editableSaleSubmitting}
+                                onClick={() => handleDeleteEditableSaleLine(item)}
+                                type="button"
+                              >
+                                Quitar
+                              </button>
+                            </div>
+                          ) : (
+                            <button className="link-button" onClick={() => removeCartLine(item.cart_id)} type="button">
+                              Quitar
+                            </button>
+                          )}
                         </div>
 
-                        <div className="pos-cart-grid">
-                          <label>
-                            Cantidad
-                            <input
-                              className="pos-input"
-                              min="0.0001"
-                              onChange={(event) => updateCartLine(item.cart_id, "cantidad", event.target.value)}
-                              step="0.0001"
-                              type="number"
-                              value={item.cantidad}
-                            />
-                          </label>
-                          <label>
-                            Precio
-                            <input
-                              className={`pos-input ${lineHasMissingPrice ? "is-warning" : ""}`}
-                              min="0"
-                              onChange={(event) => updateCartLine(item.cart_id, "precio_unitario", event.target.value)}
-                              placeholder="0.00"
-                              step="0.01"
-                              type="number"
-                              value={item.precio_unitario}
-                            />
-                          </label>
-                          <label>
-                            Descuento
-                            <input
-                              className="pos-input"
-                              min="0"
-                              onChange={(event) => updateCartLine(item.cart_id, "descuento_unitario", event.target.value)}
-                              step="0.01"
-                              type="number"
-                              value={item.descuento_unitario}
-                            />
-                          </label>
-                          <label>
-                            Impuesto tasa
-                            <input
-                              className="pos-input"
-                              min="0"
-                              onChange={(event) => updateCartLine(item.cart_id, "impuesto_tasa", event.target.value)}
-                              placeholder="0.16"
-                              step="0.01"
-                              type="number"
-                              value={item.impuesto_tasa || "0"}
-                            />
-                          </label>
-                          <div className="pos-cart-inline-meta">
-                            {isMaterialLine ? (
+                        {isEditingSuspendedSale ? (
+                          <>
+                            <div className="pos-editable-line-grid">
+                              <div>
+                                <span>Cantidad</span>
+                                <strong>{formatNumber(item.cantidad)}</strong>
+                              </div>
+                              <div>
+                                <span>Precio unitario</span>
+                                <strong>{formatMoney(item.precio_unitario)}</strong>
+                              </div>
+                              <div>
+                                <span>Descuento</span>
+                                <strong>{formatMoney(item.descuento_unitario)}</strong>
+                              </div>
+                              <div>
+                                <span>Impuesto</span>
+                                <strong>{formatMoney(getSaleLineTaxTotal(item))}</strong>
+                              </div>
+                              <div>
+                                <span>Margen estimado</span>
+                                <strong>
+                                  {item.margen_estimado != null ? formatMoney(item.margen_estimado) : "Margen no disponible."}
+                                </strong>
+                                <p className="table-note">{formatMarginPercentage(item.margen_porcentaje)}</p>
+                              </div>
+                            </div>
+                            <div className="pos-cart-inline-meta">
+                              {isMaterialLine ? (
+                                <span className="table-note">
+                                  Disponible: {formatNumber(item.existencia)} {item.unidad}
+                                </span>
+                              ) : (
+                                <span className="table-note">Esta linea no afecta inventario.</span>
+                              )}
+                              {lineHasStockIssue ? <span className="form-error">No hay stock suficiente.</span> : null}
+                              {lineWarnings.length > 0 ? (
+                                <div className="pos-margin-warning-items">
+                                  {lineWarnings.map((warning) => (
+                                    <span className="status-badge warning" key={`${item.cart_id}-${warning}`}>
+                                      {warning}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="pos-cart-grid">
+                            <label>
+                              Cantidad
+                              <input
+                                className="pos-input"
+                                min="0.0001"
+                                onChange={(event) => updateCartLine(item.cart_id, "cantidad", event.target.value)}
+                                step="0.0001"
+                                type="number"
+                                value={item.cantidad}
+                              />
+                            </label>
+                            <label>
+                              Precio
+                              <input
+                                className={`pos-input ${lineHasMissingPrice ? "is-warning" : ""}`}
+                                min="0"
+                                onChange={(event) => updateCartLine(item.cart_id, "precio_unitario", event.target.value)}
+                                placeholder="0.00"
+                                step="0.01"
+                                type="number"
+                                value={item.precio_unitario}
+                              />
+                            </label>
+                            <label>
+                              Descuento
+                              <input
+                                className="pos-input"
+                                min="0"
+                                onChange={(event) => updateCartLine(item.cart_id, "descuento_unitario", event.target.value)}
+                                step="0.01"
+                                type="number"
+                                value={item.descuento_unitario}
+                              />
+                            </label>
+                            <label>
+                              Impuesto tasa
+                              <input
+                                className="pos-input"
+                                min="0"
+                                onChange={(event) => updateCartLine(item.cart_id, "impuesto_tasa", event.target.value)}
+                                placeholder="0.16"
+                                step="0.01"
+                                type="number"
+                                value={item.impuesto_tasa || "0"}
+                              />
+                            </label>
+                            <div className="pos-cart-inline-meta">
+                              {isMaterialLine ? (
+                                <span className="table-note">
+                                  Disponible: {formatNumber(item.existencia)} {item.unidad}
+                                </span>
+                              ) : (
+                                <span className="table-note">Esta linea no afecta inventario.</span>
+                              )}
                               <span className="table-note">
-                                Disponible: {formatNumber(item.existencia)} {item.unidad}
+                                Impuesto: {formatMoney(getSaleLineTaxTotal(item))}
                               </span>
-                            ) : (
-                              <span className="table-note">Esta linea no afecta inventario.</span>
-                            )}
-                            <span className="table-note">
-                              Impuesto: {formatMoney(getSaleLineTaxTotal(item))}
-                            </span>
-                            {lineHasMissingPrice ? (
-                              <span className="table-note inventory-value-negative">Captura precio de venta.</span>
-                            ) : null}
-                            {lineHasStockIssue ? (
-                              <span className="form-error">No hay stock suficiente.</span>
-                            ) : null}
+                              {lineHasMissingPrice ? (
+                                <span className="table-note inventory-value-negative">Captura precio de venta.</span>
+                              ) : null}
+                              {lineHasStockIssue ? (
+                                <span className="form-error">No hay stock suficiente.</span>
+                              ) : null}
+                            </div>
                           </div>
-                        </div>
+                        )}
 
                         <div className="pos-cart-total">{formatMoney(getSaleLineTotal(item))}</div>
                       </article>
@@ -3230,7 +3764,7 @@ export default function PosPage() {
 
               <div className="pos-action-row pos-bottom-actions">
                 <button className="ghost-button" disabled={!hasCartItems} onClick={handleSuspendSale} type="button">
-                  Suspender
+                  {isEditingSuspendedSale ? "Guardar suspendida" : "Suspender"}
                 </button>
                 <button className="ghost-button" disabled={!hasCartItems} onClick={clearCart} type="button">
                   Cancelar
@@ -4434,6 +4968,190 @@ export default function PosPage() {
             </label>
           </div>
           <p className="table-note">Esta linea no afecta inventario.</p>
+        </form>
+      </PosModal>
+
+      <PosModal
+        footer={
+          <div className="inventory-actions">
+            <button className="ghost-button" onClick={closeEditableSaleLineModal} type="button">
+              Cancelar
+            </button>
+            <button
+              className="primary-button"
+              disabled={editableSaleSubmitting}
+              form="pos-editable-sale-line-form"
+              type="submit"
+            >
+              {editableSaleSubmitting
+                ? editableSaleLineMode === "edit"
+                  ? "Guardando..."
+                  : "Agregando..."
+                : editableSaleLineMode === "edit"
+                  ? "Guardar cambios"
+                  : "Agregar línea"}
+            </button>
+          </div>
+        }
+        onClose={closeEditableSaleLineModal}
+        open={editableSaleLineModalOpen}
+        size="wide"
+        subtitle="Modifica líneas de una venta suspendida sin afectar inventario hasta el cobro."
+        title={editableSaleLineMode === "edit" ? "Editar línea de venta" : "Agregar línea a venta suspendida"}
+      >
+        <form className="pos-modal-stack" id="pos-editable-sale-line-form" onSubmit={handleEditableSaleLineSubmit}>
+          <div className="pos-form-grid">
+            <label>
+              Tipo de línea
+              <select
+                className="pos-input"
+                disabled={editableSaleLineMode === "edit"}
+                onChange={(event) =>
+                  setEditableSaleLineForm((current) => ({
+                    ...current,
+                    tipo_linea: event.target.value,
+                    material_id: event.target.value === "material" ? current.material_id : "",
+                  }))
+                }
+                value={editableSaleLineForm.tipo_linea}
+              >
+                <option value="material">Material</option>
+                <option value="servicio">Servicio</option>
+                <option value="manual">Manual</option>
+              </select>
+            </label>
+
+            {editableSaleLineForm.tipo_linea === "material" ? (
+              <label className="inventory-form-span-2">
+                Material
+                <select
+                  className="pos-input"
+                  disabled={editableSaleLineMode === "edit"}
+                  onChange={(event) => handleEditableLineMaterialChange(event.target.value)}
+                  value={editableSaleLineForm.material_id}
+                >
+                  <option value="">Selecciona un material del almacén activo</option>
+                  {catalogItems.map((item) => (
+                    <option key={item.material_id} value={item.material_id}>
+                      {item.nombre} · {item.sku} · {formatMoney(item.precio)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <label className="inventory-form-span-2">
+                Descripción
+                <input
+                  className="pos-input"
+                  maxLength={4000}
+                  onChange={(event) =>
+                    setEditableSaleLineForm((current) => ({
+                      ...current,
+                      descripcion: event.target.value,
+                    }))
+                  }
+                  placeholder="Describe el servicio o concepto manual"
+                  type="text"
+                  value={editableSaleLineForm.descripcion}
+                />
+              </label>
+            )}
+          </div>
+
+          <div className="pos-cart-grid">
+            <label>
+              Cantidad
+              <input
+                className="pos-input"
+                min="0.0001"
+                onChange={(event) =>
+                  setEditableSaleLineForm((current) => ({
+                    ...current,
+                    cantidad: normalizeDecimalInput(event.target.value),
+                  }))
+                }
+                step="0.0001"
+                type="number"
+                value={editableSaleLineForm.cantidad}
+              />
+            </label>
+            <label>
+              Precio unitario
+              <input
+                className="pos-input"
+                min="0"
+                onChange={(event) =>
+                  setEditableSaleLineForm((current) => ({
+                    ...current,
+                    precio_unitario: normalizeDecimalInput(event.target.value),
+                  }))
+                }
+                placeholder="0.00"
+                step="0.01"
+                type="number"
+                value={editableSaleLineForm.precio_unitario}
+              />
+            </label>
+            <label>
+              Descuento
+              <input
+                className="pos-input"
+                min="0"
+                onChange={(event) =>
+                  setEditableSaleLineForm((current) => ({
+                    ...current,
+                    descuento_unitario: normalizeDecimalInput(event.target.value),
+                  }))
+                }
+                placeholder="0.00"
+                step="0.01"
+                type="number"
+                value={editableSaleLineForm.descuento_unitario}
+              />
+            </label>
+            <label>
+              Impuesto tasa
+              <input
+                className="pos-input"
+                min="0"
+                onChange={(event) =>
+                  setEditableSaleLineForm((current) => ({
+                    ...current,
+                    impuesto_tasa: normalizeDecimalInput(event.target.value),
+                  }))
+                }
+                placeholder="0.16"
+                step="0.01"
+                type="number"
+                value={editableSaleLineForm.impuesto_tasa}
+              />
+            </label>
+            {editableSaleLineForm.tipo_linea !== "material" ? (
+              <label>
+                Costo estimado opcional
+                <input
+                  className="pos-input"
+                  min="0"
+                  onChange={(event) =>
+                    setEditableSaleLineForm((current) => ({
+                      ...current,
+                      costo_unitario_manual: normalizeDecimalInput(event.target.value),
+                    }))
+                  }
+                  placeholder="0.00"
+                  step="0.01"
+                  type="number"
+                  value={editableSaleLineForm.costo_unitario_manual}
+                />
+              </label>
+            ) : null}
+          </div>
+
+          {editableSaleLineForm.tipo_linea === "material" ? (
+            <p className="table-note">Esta línea seguirá validando stock y afectará inventario al cobrar.</p>
+          ) : (
+            <p className="table-note">Esta línea no afecta inventario.</p>
+          )}
         </form>
       </PosModal>
 
