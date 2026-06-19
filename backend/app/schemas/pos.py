@@ -75,6 +75,14 @@ class SaleRecalculateRequest(BaseModel):
     motivo: str | None = Field(default=None, max_length=2000)
 
 
+class SaleApprovalRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class SaleApprovalDecisionRequest(BaseModel):
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class SaleCrmLinkRequest(BaseModel):
     cliente_id: str = Field(min_length=1, max_length=36)
     contacto_id: str | None = Field(default=None, max_length=36)
@@ -129,6 +137,64 @@ class SaleEditableTotals(BaseModel):
     margen_estimado: Decimal | None = None
     margen_completo: bool = False
     warnings: list[str] = Field(default_factory=list)
+
+
+class PosSaleRiskReason(BaseModel):
+    code: str
+    message: str
+
+
+class PosSaleApprovalItem(BaseModel):
+    id: str
+    sale_id: str
+    status: str
+    reason: str | None = None
+    decision_note: str | None = None
+    requested_by_usuario_id: str
+    requested_by_usuario_nombre: str
+    approved_by_usuario_id: str | None = None
+    approved_by_usuario_nombre: str | None = None
+    rejected_by_usuario_id: str | None = None
+    rejected_by_usuario_nombre: str | None = None
+    risk_summary_json: dict | None = None
+    approved_at: datetime | None = None
+    rejected_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PosSaleApprovalRequestResponse(BaseModel):
+    approval_id: str
+    status: str
+    requires_approval: bool
+    reasons: list[PosSaleRiskReason] = Field(default_factory=list)
+
+
+class PosSaleApprovalListResponse(BaseModel):
+    items: list[PosSaleApprovalItem]
+    total: int
+    limit: int
+    offset: int
+
+
+class PosSaleAdjustmentItem(BaseModel):
+    id: str
+    sale_id: str
+    line_id: str | None = None
+    tipo: str
+    usuario_id: str
+    usuario_nombre: str
+    before_json: dict | None = None
+    after_json: dict | None = None
+    motivo: str | None = None
+    created_at: datetime
+
+
+class PosSaleAdjustmentListResponse(BaseModel):
+    items: list[PosSaleAdjustmentItem]
+    total: int
+    limit: int
+    offset: int
 
 
 class SalePaymentItem(BaseModel):
@@ -205,6 +271,12 @@ class SaleEditableSummaryResponse(BaseModel):
     editable: bool
     reason: str | None = None
     totals: SaleEditableTotals
+    requires_approval: bool = False
+    approval_status: str | None = None
+    approval_id: str | None = None
+    approval_reasons: list[PosSaleRiskReason] = Field(default_factory=list)
+    can_charge: bool = True
+    last_adjustments: list[PosSaleAdjustmentItem] = Field(default_factory=list)
 
 
 class PosInvoiceRequestUpsertRequest(BaseModel):

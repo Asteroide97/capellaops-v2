@@ -1415,6 +1415,20 @@ textarea {
   grid-template-columns: minmax(220px, 320px);
 }
 
+.pos-approval-block,
+.pos-adjustment-panel {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.pos-approval-reason-list {
+  margin: 0;
+  padding-left: 1rem;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+}
+
 .pos-editable-line-grid {
   display: grid;
   gap: 0.75rem;
@@ -1449,6 +1463,37 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+.pos-adjustment-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.pos-adjustment-item {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.9rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(20, 92, 67, 0.12);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.pos-adjustment-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.pos-adjustment-head .table-note,
+.pos-adjustment-summary {
+  margin: 0;
+}
+
+.pos-adjustment-summary {
+  color: var(--text-secondary);
 }
 
 .pos-payment-panel {
@@ -1786,6 +1831,11 @@ textarea {
 
 .pos-section-card {
   padding: 1.1rem 1.2rem;
+}
+
+.pos-approval-table-risk {
+  display: grid;
+  gap: 0.35rem;
 }
 
 .pos-history-filters {

@@ -916,6 +916,63 @@ export function recalculatePosSale({ saleId, token, empresaId, payload = {} }) {
 }
 
 
+export function requestPosSaleApproval({ saleId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/approval-request`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPosSaleApprovals({ saleId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pos/sales/${saleId}/approvals${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function approvePosSaleApproval({ saleId, approvalId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/approvals/${approvalId}/approve`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function rejectPosSaleApproval({ saleId, approvalId, token, empresaId, payload }) {
+  return apiRequest(`/pos/sales/${saleId}/approvals/${approvalId}/reject`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPendingPosApprovals({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pos/approvals/pending${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function listPosSaleAdjustments({ saleId, token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pos/sales/${saleId}/adjustments${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
 export function linkPosSaleToCrm({ saleId, token, empresaId, payload }) {
   return apiRequest(`/pos/sales/${saleId}/crm-link`, {
     method: "PUT",

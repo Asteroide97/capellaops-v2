@@ -152,6 +152,52 @@ class PosTurnoCajaMovimiento(UUIDPrimaryKeyMixin, Base):
     usuario = relationship("Usuario")
 
 
+class PosSettings(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "pos_settings"
+    __table_args__ = (
+        UniqueConstraint("empresa_id", name="uq_pos_settings_empresa"),
+        CheckConstraint(
+            "max_discount_percent_without_approval >= 0 AND max_discount_percent_without_approval <= 100",
+            name="ck_pos_settings_max_discount_percent_range",
+        ),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    max_discount_percent_without_approval: Mapped[Decimal] = mapped_column(
+        Numeric(9, 4),
+        nullable=False,
+        default=Decimal("15"),
+        server_default="15",
+    )
+    allow_negative_margin_without_approval: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="0",
+    )
+    require_approval_below_cost: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="1",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+        server_default=func.now(),
+    )
+
+    empresa = relationship("Empresa")
+
+
 class Venta(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "ventas"
     __table_args__ = (
@@ -277,6 +323,7 @@ class Venta(UUIDPrimaryKeyMixin, Base):
     detalles = relationship("VentaDetalle", back_populates="venta", cascade="all, delete-orphan")
     pagos = relationship("VentaPago", back_populates="venta", cascade="all, delete-orphan")
     ajustes = relationship("PosSaleAdjustment", back_populates="venta")
+    approvals = relationship("PosSaleApproval", back_populates="venta")
 
 
 class VentaDetalle(UUIDPrimaryKeyMixin, Base):
@@ -411,3 +458,50 @@ class PosSaleAdjustment(UUIDPrimaryKeyMixin, Base):
     empresa = relationship("Empresa")
     venta = relationship("Venta", back_populates="ajustes")
     usuario = relationship("Usuario")
+
+
+class PosSaleApproval(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "pos_sale_approvals"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected', 'cancelled')",
+            name="ck_pos_sale_approval_status",
+        ),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    sale_id: Mapped[str] = mapped_column(ForeignKey("ventas.id"), nullable=False, index=True)
+    requested_by_usuario_id: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
+    approved_by_usuario_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    rejected_by_usuario_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="pending",
+        server_default=text("'pending'"),
+        index=True,
+    )
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_summary_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    rejected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utcnow,
+        onupdate=utcnow,
+        server_default=func.now(),
+    )
+
+    empresa = relationship("Empresa")
+    venta = relationship("Venta", back_populates="approvals")
+    requested_by_usuario = relationship("Usuario", foreign_keys=[requested_by_usuario_id])
+    approved_by_usuario = relationship("Usuario", foreign_keys=[approved_by_usuario_id])
+    rejected_by_usuario = relationship("Usuario", foreign_keys=[rejected_by_usuario_id])
