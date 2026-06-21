@@ -26,7 +26,6 @@ import { useAuth } from "../auth/AuthContext";
 import BarcodeScannerModal from "../components/BarcodeScannerModal";
 import {
   addPosSaleLine,
-  approvePosSaleApproval,
   cancelPosSale,
   closePosShift,
   createPosSale,
@@ -46,16 +45,11 @@ import {
   getPosTicket,
   getWarehouses,
   linkPosSaleToCrm,
-  listPendingPosApprovals,
   listCrmClientContacts,
   listCrmClients,
-  listPosSaleAdjustments,
-  listPosSaleApprovals,
   openPosShift,
   paySuspendedPosSale,
   recalculatePosSale,
-  rejectPosSaleApproval,
-  requestPosSaleApproval,
   requestPosSaleInvoice,
   resumePosSale,
   suspendPosSale,
@@ -67,7 +61,7 @@ import {
 
 
 const DEFAULT_PAGE_SIZE = 25;
-const POS_VIEWS = ["sell", "history", "tickets", "cash", "reports", "invoicing", "approvals"];
+const POS_VIEWS = ["sell", "history", "tickets", "cash", "reports", "invoicing"];
 
 const paymentMethodOptions = [
   { value: "efectivo", label: "Efectivo" },
@@ -83,7 +77,6 @@ const viewTabs = [
   { value: "cash", label: "Caja / Turnos", icon: <Wallet size={16} /> },
   { value: "reports", label: "Reportes", icon: <BarChart3 size={16} /> },
   { value: "invoicing", label: "Facturación", icon: <ReceiptText size={16} /> },
-  { value: "approvals", label: "Autorizaciones", icon: <LockKeyhole size={16} /> },
 ];
 
 const catalogFilterDefaults = {
@@ -123,11 +116,6 @@ const invoiceRequestFilterDefaults = {
   fecha_hasta: "",
   rfc: "",
   folio: "",
-  limit: DEFAULT_PAGE_SIZE,
-  offset: 0,
-};
-
-const pendingApprovalFilterDefaults = {
   limit: DEFAULT_PAGE_SIZE,
   offset: 0,
 };
@@ -188,10 +176,6 @@ const defaultInvoiceCrmSuggestion = {
 const defaultCrmLinkForm = {
   cliente_id: "",
   contacto_id: "",
-};
-
-const defaultApprovalRequestForm = {
-  reason: "",
 };
 
 const defaultManualLineForm = {
@@ -490,118 +474,6 @@ function formatMarginPercentage(value) {
 }
 
 
-function getAdjustmentTypeLabel(value) {
-  const labels = {
-    add_line: "Linea agregada",
-    update_line: "Linea actualizada",
-    delete_line: "Linea eliminada",
-    recalculate: "Venta recalculada",
-  };
-  return labels[String(value ?? "").toLowerCase()] ?? safeText(value, "Ajuste");
-}
-
-
-function formatAdjustmentFieldValue(field, value) {
-  if (value === null || value === undefined || value === "") {
-    return "-";
-  }
-  if (field === "cantidad") {
-    return formatNumber(value);
-  }
-  if (
-    [
-      "precio_unitario",
-      "descuento_unitario",
-      "impuesto_linea",
-      "subtotal_linea",
-      "total_linea",
-      "subtotal",
-      "descuento_lineas_total",
-      "descuento_global",
-      "descuento_total",
-      "impuesto_total",
-      "total",
-      "costo_unitario_manual",
-    ].includes(field)
-  ) {
-    return formatMoney(value);
-  }
-  if (field === "impuesto_tasa") {
-    const numericValue = Number(value);
-    return Number.isNaN(numericValue) ? safeText(value) : `${(numericValue * 100).toFixed(2)}%`;
-  }
-  if (field === "tipo_linea") {
-    return getSaleLineTypeLabel(value);
-  }
-  return safeText(value);
-}
-
-
-function summarizeAdjustmentChanges(beforeSnapshot = {}, afterSnapshot = {}, fields = []) {
-  return fields
-    .filter((field) => beforeSnapshot?.[field] !== afterSnapshot?.[field])
-    .map((field) => {
-      const label =
-        field === "cantidad"
-          ? "Cantidad"
-          : field === "precio_unitario"
-            ? "Precio"
-            : field === "descuento_unitario"
-              ? "Descuento"
-              : field === "impuesto_tasa"
-                ? "Impuesto"
-                : field === "descripcion_manual"
-                  ? "Descripcion"
-                  : field === "descuento_global"
-                    ? "Descuento global"
-                    : field === "total"
-                      ? "Total"
-                      : safeText(field);
-      return `${label}: ${formatAdjustmentFieldValue(field, beforeSnapshot?.[field])} -> ${formatAdjustmentFieldValue(
-        field,
-        afterSnapshot?.[field],
-      )}`;
-    });
-}
-
-
-function summarizeSaleAdjustment(adjustment) {
-  const beforeSnapshot = adjustment?.before_json ?? {};
-  const afterSnapshot = adjustment?.after_json ?? {};
-  const type = String(adjustment?.tipo ?? "").toLowerCase();
-  const lineSnapshot = afterSnapshot.line_id ? afterSnapshot : beforeSnapshot;
-  const lineName =
-    lineSnapshot.descripcion_manual || lineSnapshot.nombre || lineSnapshot.sku || "Linea";
-
-  if (type === "add_line") {
-    return `${lineName}: cantidad ${formatAdjustmentFieldValue("cantidad", afterSnapshot.cantidad)} · total ${formatAdjustmentFieldValue(
-      "total_linea",
-      afterSnapshot.total_linea,
-    )}`;
-  }
-  if (type === "delete_line") {
-    return `${lineName}: linea eliminada con total ${formatAdjustmentFieldValue("total_linea", beforeSnapshot.total_linea)}`;
-  }
-  if (type === "recalculate") {
-    const changes = summarizeAdjustmentChanges(beforeSnapshot, afterSnapshot, [
-      "descuento_global",
-      "impuesto_total",
-      "total",
-    ]);
-    return changes.length > 0 ? changes.join(" · ") : "Totales recalculados.";
-  }
-
-  const lineChanges = summarizeAdjustmentChanges(beforeSnapshot, afterSnapshot, [
-    "descripcion_manual",
-    "cantidad",
-    "precio_unitario",
-    "descuento_unitario",
-    "impuesto_tasa",
-  ]);
-  return lineChanges.length > 0 ? `${lineName}: ${lineChanges.join(" · ")}` : `${lineName}: ajustes guardados.`;
-}
-
-
 function createPaymentDraft(method = "efectivo", amount = "", reference = "") {
   return {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -677,7 +549,6 @@ function getViewTitle(view) {
     cash: "Caja / Turnos",
     reports: "Reportes POS",
     invoicing: "Facturación POS",
-    approvals: "Autorizaciones POS",
   };
   return titles[view] ?? "Punto de Venta";
 }
@@ -691,7 +562,6 @@ function getViewSubtitle(view) {
     cash: "Consulta el estado del turno y prepara el flujo de caja.",
     reports: "Analiza ventas, pagos, descuentos, cancelaciones y utilidad estimada.",
     invoicing: "Revisa ventas con solicitud de factura pendientes de timbrado.",
-    approvals: "Revisa ventas suspendidas que requieren autorizacion antes de cobrarse.",
   };
   return subtitles[view] ?? "Cobra desde el almacén activo y descuenta inventario automáticamente.";
 }
@@ -729,24 +599,6 @@ function getPosUiError(requestError, fallback) {
   }
   if (normalized.includes("total pagado") || normalized.includes("no cubre")) {
     return "El total pagado no cubre el total de la venta.";
-  }
-  if (normalized.includes("requiere autorizacion")) {
-    return "Esta venta requiere autorizacion antes de cobrar.";
-  }
-  if (normalized.includes("ya no esta pendiente")) {
-    return "La autorizacion ya no esta pendiente.";
-  }
-  if (normalized.includes("ya no requiere autorizacion")) {
-    return "La venta ya no requiere autorizacion para cobrarse.";
-  }
-  if (normalized.includes("no tienes permiso") && normalized.includes("autorizar ventas pos")) {
-    return "No tienes permiso para autorizar ventas POS.";
-  }
-  if (normalized.includes("no tienes permiso") && normalized.includes("rechazar ventas pos")) {
-    return "No tienes permiso para rechazar ventas POS.";
-  }
-  if (normalized.includes("no tienes permiso") && normalized.includes("autorizaciones pendientes")) {
-    return "No tienes permiso para revisar autorizaciones pendientes de POS.";
   }
   if (normalized.includes("rfc")) {
     return "Ingresa un RFC válido.";
@@ -818,81 +670,6 @@ function getInvoiceStatusTone(status) {
     return "danger";
   }
   return "neutral";
-}
-
-
-function getApprovalStatusLabel(status) {
-  const labels = {
-    pending: "Autorizacion pendiente",
-    approved: "Autorizada",
-    rejected: "Rechazada",
-    cancelled: "Invalidada",
-  };
-  return labels[String(status ?? "").toLowerCase()] ?? safeText(status, "Sin solicitud");
-}
-
-
-function getApprovalStatusTone(status) {
-  const normalized = String(status ?? "").toLowerCase();
-  if (normalized === "approved") {
-    return "success";
-  }
-  if (normalized === "rejected") {
-    return "danger";
-  }
-  if (normalized === "cancelled") {
-    return "neutral";
-  }
-  return "warning";
-}
-
-
-function getApprovalReasonShortLabel(code) {
-  const labels = {
-    global_discount_exceeds_limit: "Descuento alto",
-    line_discount_exceeds_limit: "Descuento alto",
-    negative_margin: "Margen negativo",
-    below_cost: "Precio debajo de costo",
-    manual_line_high_discount: "Descuento alto",
-    zero_total: "Total cero",
-  };
-  return labels[String(code ?? "").toLowerCase()] ?? "Riesgo operativo";
-}
-
-
-function getApprovalReasons(source) {
-  const rawItems = Array.isArray(source)
-    ? source
-    : Array.isArray(source?.risk_summary_json?.reasons)
-      ? source.risk_summary_json.reasons
-      : [];
-  return rawItems
-    .map((item) => ({
-      code: String(item?.code || "").trim(),
-      message: String(item?.message || "").trim(),
-    }))
-    .filter((item) => item.code || item.message);
-}
-
-
-function getApprovalOperationalMessage({ requiresApproval, approvalStatus, canCharge }) {
-  if (!requiresApproval) {
-    return "La venta puede cobrarse sin autorizacion adicional.";
-  }
-  const normalized = String(approvalStatus ?? "").toLowerCase();
-  if (normalized === "approved" && canCharge) {
-    return "La venta ya fue autorizada y puede cobrarse.";
-  }
-  if (normalized === "pending") {
-    return "Un administrador debe aprobar esta venta para continuar.";
-  }
-  if (normalized === "rejected") {
-    return "La autorizacion fue rechazada. Ajusta la venta o solicita una nueva autorizacion.";
-  }
-  if (normalized === "cancelled" || normalized === "invalidated") {
-    return "La autorizacion anterior fue invalidada por cambios en la venta.";
-  }
-  return "Esta venta requiere autorizacion antes de cobrar.";
 }
 
 
@@ -1168,8 +945,6 @@ export default function PosPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeView = POS_VIEWS.includes(searchParams.get("view")) ? searchParams.get("view") : "sell";
   const canOpenBillingQueue = user?.is_superadmin || ["owner", "admin"].includes(String(membership?.role ?? "").toLowerCase());
-  const canManagePosApprovals =
-    user?.is_superadmin || ["owner", "admin"].includes(String(membership?.role ?? "").toLowerCase());
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -1216,15 +991,6 @@ export default function PosPage() {
     offset: 0,
   });
   const [invoiceSubmitting, setInvoiceSubmitting] = useState(false);
-  const [pendingApprovalFilters, setPendingApprovalFilters] = useState(pendingApprovalFilterDefaults);
-  const [pendingApprovals, setPendingApprovals] = useState([]);
-  const [pendingApprovalMeta, setPendingApprovalMeta] = useState({
-    total: 0,
-    limit: DEFAULT_PAGE_SIZE,
-    offset: 0,
-  });
-  const [pendingApprovalsLoading, setPendingApprovalsLoading] = useState(false);
-  const [pendingApprovalsError, setPendingApprovalsError] = useState("");
 
   const [cart, setCart] = useState([]);
   const [manualLineModalOpen, setManualLineModalOpen] = useState(false);
@@ -1237,20 +1003,6 @@ export default function PosPage() {
   const [editableSaleLineMode, setEditableSaleLineMode] = useState("add");
   const [editableSaleLineForm, setEditableSaleLineForm] = useState(defaultEditableSaleLineForm);
   const [editableDiscountGlobalInput, setEditableDiscountGlobalInput] = useState("");
-  const [approvalRequestModalOpen, setApprovalRequestModalOpen] = useState(false);
-  const [approvalRequestForm, setApprovalRequestForm] = useState(defaultApprovalRequestForm);
-  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
-  const [saleApprovals, setSaleApprovals] = useState([]);
-  const [saleApprovalsLoading, setSaleApprovalsLoading] = useState(false);
-  const [saleApprovalsError, setSaleApprovalsError] = useState("");
-  const [saleAdjustments, setSaleAdjustments] = useState([]);
-  const [saleAdjustmentsLoading, setSaleAdjustmentsLoading] = useState(false);
-  const [saleAdjustmentsError, setSaleAdjustmentsError] = useState("");
-  const [approvalDecisionModalOpen, setApprovalDecisionModalOpen] = useState(false);
-  const [approvalDecisionMode, setApprovalDecisionMode] = useState("approve");
-  const [approvalDecisionTarget, setApprovalDecisionTarget] = useState(null);
-  const [approvalDecisionNote, setApprovalDecisionNote] = useState("");
-  const [approvalDecisionSubmitting, setApprovalDecisionSubmitting] = useState(false);
   const [saleForm, setSaleForm] = useState(defaultSaleForm);
   const [openShiftForm, setOpenShiftForm] = useState(defaultOpenShiftForm);
   const [shiftMovementForm, setShiftMovementForm] = useState(defaultShiftMovementForm);
@@ -1284,10 +1036,6 @@ export default function PosPage() {
   const selectedWarehouse = useMemo(
     () => warehouses.find((warehouse) => warehouse.id === selectedWarehouseId) ?? null,
     [warehouses, selectedWarehouseId],
-  );
-  const visibleViewTabs = useMemo(
-    () => viewTabs.filter((tab) => tab.value !== "approvals" || canManagePosApprovals),
-    [canManagePosApprovals],
   );
 
   const crmClientSelectOptions = useMemo(() => {
@@ -1386,24 +1134,6 @@ export default function PosPage() {
   const isEditingSuspendedSale = Boolean(resumedSaleId) && editableSaleId === resumedSaleId;
   const editableSaleIsEditable = Boolean(editableSaleSummary?.editable);
   const editableSaleWarnings = editableSaleSummary?.totals?.warnings ?? [];
-  const editableSaleRequiresApproval = Boolean(editableSaleSummary?.requires_approval);
-  const editableSaleApprovalStatus = editableSaleSummary?.approval_status ?? saleApprovals[0]?.status ?? null;
-  const editableSaleApprovalId = editableSaleSummary?.approval_id ?? saleApprovals[0]?.id ?? null;
-  const editableSaleApprovalReasons = editableSaleSummary?.approval_reasons ?? [];
-  const editableSaleCanCharge = editableSaleSummary?.can_charge !== false;
-  const editableSaleChargeBlocked = isEditingSuspendedSale && editableSaleRequiresApproval && !editableSaleCanCharge;
-  const editableSaleApprovalMessage = getApprovalOperationalMessage({
-    requiresApproval: editableSaleRequiresApproval,
-    approvalStatus: editableSaleApprovalStatus,
-    canCharge: editableSaleCanCharge,
-  });
-  const editableSaleLatestApproval = saleApprovals[0] ?? null;
-  const visibleSaleAdjustments =
-    saleAdjustments.length > 0
-      ? saleAdjustments
-      : Array.isArray(editableSaleSummary?.last_adjustments)
-        ? editableSaleSummary.last_adjustments
-        : [];
 
   const hasCartItems = cart.length > 0;
   const cartHasInvalidQuantity = cart.some((item) => {
@@ -1437,7 +1167,7 @@ export default function PosPage() {
   const cartHasInvalidPayments =
     (usesMixedPayments && (!hasMixedPaymentRows || hasInvalidMixedPaymentAmounts || nonCashOverageWithoutCash)) ||
     hasInsufficientMixedPayment;
-  const baseCanCharge =
+  const canCharge =
     Boolean(selectedWarehouseId) &&
     hasActiveShift &&
     hasCartItems &&
@@ -1449,7 +1179,6 @@ export default function PosPage() {
     paidPreview >= cartTotal &&
     (!usesMixedPayments || !nonCashOverageWithoutCash) &&
     (!usesMixedPayments || hasMixedPaymentRows);
-  const canCharge = baseCanCharge && !editableSaleChargeBlocked;
   const paymentState = getPaymentState({
     selectedWarehouseId,
     hasActiveShift,
@@ -1525,20 +1254,6 @@ export default function PosPage() {
     setEditableSaleLineMode("add");
     setEditableSaleLineForm(defaultEditableSaleLineForm);
     setEditableDiscountGlobalInput("");
-    setApprovalRequestModalOpen(false);
-    setApprovalRequestForm(defaultApprovalRequestForm);
-    setApprovalSubmitting(false);
-    setSaleApprovals([]);
-    setSaleApprovalsLoading(false);
-    setSaleApprovalsError("");
-    setSaleAdjustments([]);
-    setSaleAdjustmentsLoading(false);
-    setSaleAdjustmentsError("");
-    setApprovalDecisionModalOpen(false);
-    setApprovalDecisionMode("approve");
-    setApprovalDecisionTarget(null);
-    setApprovalDecisionNote("");
-    setApprovalDecisionSubmitting(false);
     setResumedSaleId("");
   }
 
@@ -1699,112 +1414,6 @@ export default function PosPage() {
     return response;
   }
 
-  async function loadSaleApprovals(saleId, { limit = 10, offset = 0 } = {}) {
-    if (!saleId) {
-      setSaleApprovals([]);
-      setSaleApprovalsError("");
-      return null;
-    }
-
-    setSaleApprovalsLoading(true);
-    setSaleApprovals([]);
-    setSaleApprovalsError("");
-    try {
-      const response = await listPosSaleApprovals({
-        saleId,
-        token,
-        empresaId,
-        filters: { limit, offset },
-      });
-      setSaleApprovals(response.items ?? []);
-      return response;
-    } catch (requestError) {
-      setSaleApprovals([]);
-      setSaleApprovalsError("No se pudo cargar el historial de autorizaciones.");
-      return null;
-    } finally {
-      setSaleApprovalsLoading(false);
-    }
-  }
-
-  async function loadSaleAdjustments(saleId, { limit = 25, offset = 0, fallbackItems = [] } = {}) {
-    if (!saleId) {
-      setSaleAdjustments([]);
-      setSaleAdjustmentsError("");
-      return null;
-    }
-
-    setSaleAdjustments(fallbackItems.length > 0 ? fallbackItems : []);
-    setSaleAdjustmentsLoading(true);
-    setSaleAdjustmentsError("");
-    try {
-      const response = await listPosSaleAdjustments({
-        saleId,
-        token,
-        empresaId,
-        filters: { limit, offset },
-      });
-      setSaleAdjustments(response.items ?? []);
-      return response;
-    } catch (requestError) {
-      setSaleAdjustmentsError("No se pudo cargar el historial de ajustes.");
-      return null;
-    } finally {
-      setSaleAdjustmentsLoading(false);
-    }
-  }
-
-  async function loadPendingApprovals(nextFilters = pendingApprovalFilters) {
-    if (!canManagePosApprovals) {
-      setPendingApprovals([]);
-      setPendingApprovalsError("");
-      return null;
-    }
-
-    setPendingApprovalsLoading(true);
-    setPendingApprovalsError("");
-    try {
-      const response = await listPendingPosApprovals({
-        token,
-        empresaId,
-        filters: {
-          limit: nextFilters.limit,
-          offset: nextFilters.offset,
-        },
-      });
-      const uniqueSaleIds = [...new Set((response.items ?? []).map((item) => item.sale_id).filter(Boolean))];
-      const detailEntries = await Promise.all(
-        uniqueSaleIds.map(async (saleId) => {
-          try {
-            const saleDetail = await getPosSaleDetail({ saleId, token, empresaId });
-            return [saleId, saleDetail];
-          } catch (requestError) {
-            return [saleId, null];
-          }
-        }),
-      );
-      const detailMap = new Map(detailEntries);
-      setPendingApprovals(
-        (response.items ?? []).map((item) => ({
-          ...item,
-          sale_detail: detailMap.get(item.sale_id) ?? null,
-        })),
-      );
-      setPendingApprovalMeta({
-        total: response.total ?? 0,
-        limit: response.limit ?? DEFAULT_PAGE_SIZE,
-        offset: response.offset ?? 0,
-      });
-      return response;
-    } catch (requestError) {
-      setPendingApprovals([]);
-      setPendingApprovalsError(getPosUiError(requestError, "No se pudo cargar las autorizaciones pendientes."));
-      return null;
-    } finally {
-      setPendingApprovalsLoading(false);
-    }
-  }
-
   async function loadSaleArtifacts(saleId) {
     const saleDetail = await getPosSaleDetail({ saleId, token, empresaId });
     const ticket =
@@ -1866,8 +1475,6 @@ export default function PosPage() {
     setResumedSaleId(summarySale.id);
     setSelectedWarehouseId(summarySale.almacen_id);
     setCart((summary.lines ?? []).map((detail) => buildCartLineFromSaleDetail(detail)));
-    setSaleAdjustments(Array.isArray(summary.last_adjustments) ? summary.last_adjustments : []);
-    setSaleAdjustmentsError("");
     setSaleForm((current) => ({
       ...current,
       cliente_nombre: sourceSale.cliente_nombre ?? current.cliente_nombre,
@@ -1893,12 +1500,6 @@ export default function PosPage() {
       const summary = await getPosSaleEditableSummary({ saleId, token, empresaId });
       applyEditableSaleSummary(summary, { baseSale });
       await loadSales(saleFilters);
-      await Promise.allSettled([
-        loadSaleApprovals(saleId),
-        loadSaleAdjustments(saleId, {
-          fallbackItems: Array.isArray(summary.last_adjustments) ? summary.last_adjustments : [],
-        }),
-      ]);
       return summary;
     } finally {
       setEditableSaleLoading(false);
@@ -1954,13 +1555,6 @@ export default function PosPage() {
   async function syncEditableSaleResult(summary) {
     applyEditableSaleSummary(summary);
     await loadSales(saleFilters);
-    await Promise.allSettled([
-      loadSaleApprovals(summary?.sale?.id),
-      loadSaleAdjustments(summary?.sale?.id, {
-        fallbackItems: Array.isArray(summary?.last_adjustments) ? summary.last_adjustments : [],
-      }),
-      canManagePosApprovals && activeView === "approvals" ? loadPendingApprovals(pendingApprovalFilters) : Promise.resolve(),
-    ]);
   }
 
   function handleEditableLineMaterialChange(materialId) {
@@ -2131,120 +1725,6 @@ export default function PosPage() {
     }
   }
 
-  function openApprovalRequestModal() {
-    clearFeedback();
-    setApprovalRequestForm(defaultApprovalRequestForm);
-    setApprovalRequestModalOpen(true);
-  }
-
-  function closeApprovalRequestModal() {
-    setApprovalRequestModalOpen(false);
-    setApprovalRequestForm(defaultApprovalRequestForm);
-  }
-
-  async function handleApprovalRequestSubmit(event) {
-    event.preventDefault();
-    const saleId = editableSaleSummary?.sale?.id || resumedSaleId;
-    const reason = String(approvalRequestForm.reason || "").trim();
-    if (!saleId) {
-      setError("Selecciona una venta suspendida para solicitar autorizacion.");
-      return;
-    }
-    if (!reason) {
-      setError("Escribe el motivo de la solicitud.");
-      return;
-    }
-
-    setApprovalSubmitting(true);
-    clearFeedback();
-    try {
-      await requestPosSaleApproval({
-        saleId,
-        token,
-        empresaId,
-        payload: { reason },
-      });
-      closeApprovalRequestModal();
-      await fetchEditableSaleSummary(saleId);
-      if (canManagePosApprovals) {
-        await loadPendingApprovals(pendingApprovalFilters);
-      }
-      setSuccess("Solicitud de autorizacion enviada.");
-    } catch (requestError) {
-      setError(getPosUiError(requestError, "No se pudo solicitar la autorizacion."));
-    } finally {
-      setApprovalSubmitting(false);
-    }
-  }
-
-  function openApprovalDecisionModal(mode, approval) {
-    clearFeedback();
-    setApprovalDecisionMode(mode);
-    setApprovalDecisionTarget(approval);
-    setApprovalDecisionNote("");
-    setApprovalDecisionModalOpen(true);
-  }
-
-  function closeApprovalDecisionModal() {
-    setApprovalDecisionModalOpen(false);
-    setApprovalDecisionMode("approve");
-    setApprovalDecisionTarget(null);
-    setApprovalDecisionNote("");
-  }
-
-  async function handleApprovalDecisionSubmit(event) {
-    event.preventDefault();
-    const approval = approvalDecisionTarget;
-    const note = String(approvalDecisionNote || "").trim();
-    if (!approval?.sale_id || !approval?.id) {
-      setError("Selecciona una autorizacion valida.");
-      return;
-    }
-    if (approvalDecisionMode === "reject" && !note) {
-      setError("Escribe el motivo del rechazo.");
-      return;
-    }
-
-    setApprovalDecisionSubmitting(true);
-    clearFeedback();
-    try {
-      if (approvalDecisionMode === "approve") {
-        await approvePosSaleApproval({
-          saleId: approval.sale_id,
-          approvalId: approval.id,
-          token,
-          empresaId,
-          payload: { note: note || null },
-        });
-        setSuccess("Autorizacion aprobada.");
-      } else {
-        await rejectPosSaleApproval({
-          saleId: approval.sale_id,
-          approvalId: approval.id,
-          token,
-          empresaId,
-          payload: { note },
-        });
-        setSuccess("Autorizacion rechazada.");
-      }
-      closeApprovalDecisionModal();
-      await loadPendingApprovals(pendingApprovalFilters);
-      if ((editableSaleSummary?.sale?.id || resumedSaleId) === approval.sale_id) {
-        await fetchEditableSaleSummary(approval.sale_id);
-      }
-    } catch (requestError) {
-      setError(getPosUiError(requestError, "No se pudo actualizar la autorizacion."));
-    } finally {
-      setApprovalDecisionSubmitting(false);
-    }
-  }
-
-  async function handlePendingApprovalPageChange(nextOffset) {
-    const nextFilters = { ...pendingApprovalFilters, offset: nextOffset };
-    setPendingApprovalFilters(nextFilters);
-    await loadPendingApprovals(nextFilters);
-  }
-
   async function loadCrmClientsForSaleLink(query = crmClientSearch) {
     setCrmClientsLoading(true);
     try {
@@ -2322,9 +1802,6 @@ export default function PosPage() {
       if (activeView === "invoicing") {
         requests.push(loadInvoiceRequests(invoiceRequestFilters));
       }
-      if (activeView === "approvals" && canManagePosApprovals) {
-        requests.push(loadPendingApprovals(pendingApprovalFilters));
-      }
       await Promise.all(requests);
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
@@ -2354,9 +1831,6 @@ export default function PosPage() {
       }
       if (activeView === "invoicing") {
         requests.push(loadInvoiceRequests(invoiceRequestFilters));
-      }
-      if (activeView === "approvals" && canManagePosApprovals) {
-        requests.push(loadPendingApprovals(pendingApprovalFilters));
       }
       await Promise.all(requests);
       if (keepTicket && selectedSale?.id) {
@@ -2404,16 +1878,6 @@ export default function PosPage() {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     });
   }, [activeView, token, empresaId]);
-
-  useEffect(() => {
-    if (activeView !== "approvals" || !token || !empresaId || !canManagePosApprovals) {
-      return;
-    }
-
-    loadPendingApprovals(pendingApprovalFilters).catch((requestError) => {
-      setPendingApprovalsError(getPosUiError(requestError, "No se pudo cargar las autorizaciones pendientes."));
-    });
-  }, [activeView, token, empresaId, canManagePosApprovals]);
 
   function addToCart(item) {
     if (Number(item.existencia) <= 0) {
@@ -2755,13 +2219,6 @@ export default function PosPage() {
 
   async function handleCreateSale(event) {
     event.preventDefault();
-    if (editableSaleChargeBlocked) {
-      setError("Esta venta requiere autorizacion antes de cobrar.");
-      if (resumedSaleId) {
-        await fetchEditableSaleSummary(resumedSaleId).catch(() => null);
-      }
-      return;
-    }
     if (!selectedWarehouseId) {
       setError("Selecciona un almacén para vender.");
       return;
@@ -2848,15 +2305,7 @@ export default function PosPage() {
       setTicketModalOpen(false);
       updateView("sell");
     } catch (requestError) {
-      const normalizedMessage = String(requestError?.message ?? "").toLowerCase();
-      if (normalizedMessage.includes("requiere autorizacion")) {
-        setError("Esta venta requiere autorizacion antes de cobrar.");
-        if (resumedSaleId) {
-          await fetchEditableSaleSummary(resumedSaleId).catch(() => null);
-        }
-      } else {
-        setError(getPosUiError(requestError, "No se pudo cobrar la venta. Intenta de nuevo."));
-      }
+      setError(getPosUiError(requestError, "No se pudo cobrar la venta. Intenta de nuevo."));
     } finally {
       setSubmitting(false);
     }
@@ -3567,7 +3016,7 @@ export default function PosPage() {
         </div>
 
         <div className="register-stepper pos-view-nav">
-          {visibleViewTabs.map((tab) => (
+          {viewTabs.map((tab) => (
             <button
               className={`register-step-pill ${activeView === tab.value ? "is-active" : ""}`}
               key={tab.value}
@@ -3804,121 +3253,6 @@ export default function PosPage() {
                     </div>
                   ) : null}
 
-                  {editableSaleRequiresApproval ? (
-                    <div className={`pos-warning-box ${editableSaleCanCharge ? "is-success" : "is-error"}`}>
-                      <div className="pos-section-header">
-                        <div>
-                          <strong>Autorizacion requerida</strong>
-                          <p>{editableSaleApprovalMessage}</p>
-                        </div>
-                        <StatusBadge
-                          label={getApprovalStatusLabel(editableSaleApprovalStatus || "pending")}
-                          tone={getApprovalStatusTone(editableSaleApprovalStatus || "pending")}
-                        />
-                      </div>
-
-                      <div className="pos-ticket-meta-grid">
-                        <article className="mini-card">
-                          <span className="eyebrow">Estado</span>
-                          <strong>{getApprovalStatusLabel(editableSaleApprovalStatus || "pending")}</strong>
-                          <p>{editableSaleCanCharge ? "Cobro habilitado." : "Cobro bloqueado hasta autorizar."}</p>
-                        </article>
-                        <article className="mini-card">
-                          <span className="eyebrow">Solicitud</span>
-                          <strong>{editableSaleApprovalId || "Sin solicitud"}</strong>
-                          <p>{editableSaleLatestApproval?.requested_by_usuario_nombre || "Sin responsable"}</p>
-                        </article>
-                      </div>
-
-                      {editableSaleApprovalReasons.length > 0 ? (
-                        <div className="pos-approval-block">
-                          <div className="pos-margin-warning-items">
-                            {editableSaleApprovalReasons.map((reason) => (
-                              <span className="status-badge warning" key={`${reason.code}-${reason.message}`}>
-                                {getApprovalReasonShortLabel(reason.code)}
-                              </span>
-                            ))}
-                          </div>
-                          <ul className="pos-approval-reason-list">
-                            {editableSaleApprovalReasons.map((reason) => (
-                              <li key={`${reason.code}-${reason.message}-detail`}>{reason.message || getApprovalReasonShortLabel(reason.code)}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      ) : null}
-
-                      {editableSaleLatestApproval?.decision_note ? (
-                        <p className="table-note">{editableSaleLatestApproval.decision_note}</p>
-                      ) : null}
-
-                      <div className="pos-action-row">
-                        {!["pending", "approved"].includes(String(editableSaleApprovalStatus || "").toLowerCase()) ||
-                        !editableSaleApprovalId ? (
-                          <button
-                            className="ghost-button"
-                            disabled={!editableSaleIsEditable || approvalSubmitting}
-                            onClick={openApprovalRequestModal}
-                            type="button"
-                          >
-                            {approvalSubmitting ? "Solicitando..." : "Solicitar autorizacion"}
-                          </button>
-                        ) : null}
-                        {String(editableSaleApprovalStatus || "").toLowerCase() === "pending" &&
-                        editableSaleLatestApproval &&
-                        canManagePosApprovals ? (
-                          <>
-                            <button
-                              className="ghost-button"
-                              disabled={approvalDecisionSubmitting}
-                              onClick={() => openApprovalDecisionModal("approve", editableSaleLatestApproval)}
-                              type="button"
-                            >
-                              Aprobar
-                            </button>
-                            <button
-                              className="ghost-button"
-                              disabled={approvalDecisionSubmitting}
-                              onClick={() => openApprovalDecisionModal("reject", editableSaleLatestApproval)}
-                              type="button"
-                            >
-                              Rechazar
-                            </button>
-                          </>
-                        ) : null}
-                        {canManagePosApprovals && activeView !== "approvals" ? (
-                          <button className="ghost-button" onClick={() => updateView("approvals")} type="button">
-                            Ver pendientes
-                          </button>
-                        ) : null}
-                      </div>
-
-                      {saleApprovalsLoading ? <p className="table-note">Cargando historial de autorizaciones...</p> : null}
-                      {saleApprovalsError ? <p className="table-note">{saleApprovalsError}</p> : null}
-                      {!saleApprovalsLoading && !saleApprovalsError && saleApprovals.length > 0 ? (
-                        <div className="pos-adjustment-list">
-                          {saleApprovals.slice(0, 3).map((approval) => (
-                            <article className="pos-adjustment-item" key={approval.id}>
-                              <div className="pos-adjustment-head">
-                                <div>
-                                  <strong>{getApprovalStatusLabel(approval.status)}</strong>
-                                  <p className="table-note">
-                                    {approval.requested_by_usuario_nombre} · {formatDateTime(approval.created_at)}
-                                  </p>
-                                </div>
-                                <StatusBadge
-                                  label={getApprovalStatusLabel(approval.status)}
-                                  tone={getApprovalStatusTone(approval.status)}
-                                />
-                              </div>
-                              {approval.reason ? <p className="pos-adjustment-summary">{approval.reason}</p> : null}
-                              {approval.decision_note ? <p className="table-note">{approval.decision_note}</p> : null}
-                            </article>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-
                   <div className="pos-editable-sale-controls">
                     <label>
                       Descuento global
@@ -3980,39 +3314,6 @@ export default function PosPage() {
                     ) : (
                       <p className="table-note">Sin advertencias de margen en esta venta.</p>
                     )}
-                  </div>
-
-                  <div className="pos-adjustment-panel">
-                    <div className="feature-header">
-                      <div>
-                        <p className="eyebrow">Trazabilidad</p>
-                        <h3>Historial de ajustes</h3>
-                      </div>
-                    </div>
-                    {saleAdjustmentsLoading ? <p className="table-note">Cargando ajustes...</p> : null}
-                    {!saleAdjustmentsLoading && saleAdjustmentsError ? <p className="table-note">{saleAdjustmentsError}</p> : null}
-                    {!saleAdjustmentsLoading && !saleAdjustmentsError && visibleSaleAdjustments.length === 0 ? (
-                      <p className="table-note">No hay ajustes registrados.</p>
-                    ) : null}
-                    {!saleAdjustmentsLoading && !saleAdjustmentsError && visibleSaleAdjustments.length > 0 ? (
-                      <div className="pos-adjustment-list">
-                        {visibleSaleAdjustments.map((adjustment) => (
-                          <article className="pos-adjustment-item" key={adjustment.id}>
-                            <div className="pos-adjustment-head">
-                              <div>
-                                <strong>{getAdjustmentTypeLabel(adjustment.tipo)}</strong>
-                                <p className="table-note">
-                                  {adjustment.usuario_nombre || "Usuario"} · {formatDateTime(adjustment.created_at)}
-                                </p>
-                              </div>
-                              {adjustment.motivo ? <StatusBadge label="Con motivo" tone="info" /> : null}
-                            </div>
-                            <p className="pos-adjustment-summary">{summarizeSaleAdjustment(adjustment)}</p>
-                            {adjustment.motivo ? <p className="table-note">{adjustment.motivo}</p> : null}
-                          </article>
-                        ))}
-                      </div>
-                    ) : null}
                   </div>
                 </section>
               ) : null}
@@ -4446,13 +3747,6 @@ export default function PosPage() {
                 </div>
               </div>
 
-              {editableSaleChargeBlocked ? (
-                <div className="pos-warning-box is-error">
-                  <strong>Autorizacion pendiente</strong>
-                  <p>No puedes cobrar esta venta hasta que sea autorizada.</p>
-                </div>
-              ) : null}
-
               <label>
                 Nota de venta
                 <textarea
@@ -4465,13 +3759,7 @@ export default function PosPage() {
               </label>
 
               <button className="primary-button pos-charge-button" disabled={!canCharge || submitting} type="submit">
-                {submitting
-                  ? "Cobrando..."
-                  : editableSaleChargeBlocked
-                    ? "Autorizacion requerida"
-                    : canCharge
-                      ? `Cobrar ${formatMoney(cartTotal)}`
-                      : paymentState.buttonLabel}
+                {submitting ? "Cobrando..." : canCharge ? `Cobrar ${formatMoney(cartTotal)}` : paymentState.buttonLabel}
               </button>
 
               <div className="pos-action-row pos-bottom-actions">
@@ -5584,255 +4872,6 @@ export default function PosPage() {
           </section>
         </div>
       ) : null}
-
-      {activeView === "approvals" ? (
-        <div className="pos-view-stack">
-          {!canManagePosApprovals ? (
-            <section className="feature-card pos-section-card">
-              <div className="pos-warning-box is-error">
-                <strong>Sin acceso a autorizaciones</strong>
-                <p>No tienes permiso para revisar autorizaciones pendientes de POS.</p>
-              </div>
-            </section>
-          ) : (
-            <>
-              <section className="feature-card pos-section-card">
-                <div className="feature-header">
-                  <div>
-                    <p className="eyebrow">Control operativo</p>
-                    <h2>Autorizaciones pendientes</h2>
-                    <p className="table-note">Aprueba o rechaza ventas suspendidas con descuento alto, margen negativo o precio debajo de costo.</p>
-                  </div>
-                  <button className="ghost-button" disabled={pendingApprovalsLoading} onClick={() => loadPendingApprovals(pendingApprovalFilters)} type="button">
-                    {pendingApprovalsLoading ? "Actualizando..." : "Actualizar pendientes"}
-                  </button>
-                </div>
-
-                <div className="pos-kpi-grid pos-kpi-grid-compact">
-                  <PosKpiCard
-                    icon={<LockKeyhole size={18} />}
-                    label="Pendientes"
-                    meta="Solicitudes activas"
-                    value={pendingApprovalMeta.total}
-                  />
-                </div>
-              </section>
-
-              <section className="feature-card pos-section-card">
-                {pendingApprovalsError ? (
-                  <div className="pos-warning-box is-error">
-                    <strong>No se pudo cargar la bandeja</strong>
-                    <p>{pendingApprovalsError}</p>
-                  </div>
-                ) : null}
-
-                {pendingApprovalsLoading ? (
-                  <p className="table-note">Cargando autorizaciones pendientes...</p>
-                ) : pendingApprovals.length === 0 ? (
-                  <EmptyState
-                    icon={<LockKeyhole size={18} />}
-                    note="Cuando una venta suspendida requiera autorizacion, aparecerá en esta bandeja."
-                    title="No hay autorizaciones pendientes."
-                  />
-                ) : (
-                  <>
-                    <div className="table-wrap">
-                      <table className="inventory-table">
-                        <thead>
-                          <tr>
-                            <th>Venta</th>
-                            <th>Solicitante</th>
-                            <th>Fecha</th>
-                            <th>Motivo</th>
-                            <th>Riesgo</th>
-                            <th>Total</th>
-                            <th>Acciones</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {pendingApprovals.map((approval) => {
-                            const riskReasons = getApprovalReasons(approval);
-                            const saleDetail = approval.sale_detail;
-                            const marginTotal = approval.risk_summary_json?.margin_total ?? null;
-                            const marginPercent = approval.risk_summary_json?.margin_percent ?? null;
-                            return (
-                              <tr key={approval.id}>
-                                <td>
-                                  <div className="pos-record-copy">
-                                    <strong>{saleDetail?.folio || approval.sale_id}</strong>
-                                    <span className="table-note">
-                                      {saleDetail?.cliente_nombre || saleDetail?.vendedor_nombre || "Mostrador"}
-                                    </span>
-                                  </div>
-                                </td>
-                                <td>{approval.requested_by_usuario_nombre}</td>
-                                <td>{formatDateTime(approval.created_at)}</td>
-                                <td>{approval.reason || "Sin motivo"}</td>
-                                <td>
-                                  <div className="pos-approval-table-risk">
-                                    {riskReasons.length > 0 ? (
-                                      <>
-                                        <div className="pos-margin-warning-items">
-                                          {riskReasons.map((reason) => (
-                                            <span className="status-badge warning" key={`${approval.id}-${reason.code}-${reason.message}`}>
-                                              {getApprovalReasonShortLabel(reason.code)}
-                                            </span>
-                                          ))}
-                                        </div>
-                                        {marginTotal != null ? (
-                                          <p className="table-note">
-                                            Margen: {formatMoney(marginTotal)}
-                                            {marginPercent != null ? ` (${formatMarginPercentage(marginPercent)})` : ""}
-                                          </p>
-                                        ) : null}
-                                      </>
-                                    ) : (
-                                      <p className="table-note">Sin detalle de riesgo.</p>
-                                    )}
-                                  </div>
-                                </td>
-                                <td>{saleDetail?.total != null ? formatMoney(saleDetail.total) : "-"}</td>
-                                <td>
-                                  <div className="inventory-actions">
-                                    <button
-                                      className="ghost-button"
-                                      disabled={approvalDecisionSubmitting}
-                                      onClick={() => openApprovalDecisionModal("approve", approval)}
-                                      type="button"
-                                    >
-                                      Aprobar
-                                    </button>
-                                    <button
-                                      className="ghost-button"
-                                      disabled={approvalDecisionSubmitting}
-                                      onClick={() => openApprovalDecisionModal("reject", approval)}
-                                      type="button"
-                                    >
-                                      Rechazar
-                                    </button>
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <PaginationControls
-                      meta={pendingApprovalMeta}
-                      onNext={() => handlePendingApprovalPageChange(pendingApprovalMeta.offset + pendingApprovalMeta.limit)}
-                      onPrevious={() =>
-                        handlePendingApprovalPageChange(Math.max(0, pendingApprovalMeta.offset - pendingApprovalMeta.limit))
-                      }
-                    />
-                  </>
-                )}
-              </section>
-            </>
-          )}
-        </div>
-      ) : null}
-
-      <PosModal
-        footer={
-          <div className="inventory-actions">
-            <button className="ghost-button" onClick={closeApprovalRequestModal} type="button">
-              Cancelar
-            </button>
-            <button className="primary-button" disabled={approvalSubmitting} form="pos-approval-request-form" type="submit">
-              {approvalSubmitting ? "Enviando..." : "Solicitar autorizacion"}
-            </button>
-          </div>
-        }
-        onClose={closeApprovalRequestModal}
-        open={approvalRequestModalOpen}
-        subtitle="Describe por qué esta venta requiere una excepcion operativa antes de cobrarse."
-        title="Solicitar autorizacion"
-      >
-        <form className="pos-modal-stack" id="pos-approval-request-form" onSubmit={handleApprovalRequestSubmit}>
-          <div className="pos-warning-box is-warning">
-            <strong>Autorizacion requerida</strong>
-            <p>La venta no podra cobrarse hasta que un administrador la apruebe.</p>
-          </div>
-          <label>
-            Motivo
-            <textarea
-              className="pos-textarea"
-              onChange={(event) => setApprovalRequestForm({ reason: event.target.value })}
-              placeholder="Solicito autorizacion por descuento especial."
-              required
-              rows={4}
-              value={approvalRequestForm.reason}
-            />
-          </label>
-        </form>
-      </PosModal>
-
-      <PosModal
-        footer={
-          <div className="inventory-actions">
-            <button className="ghost-button" onClick={closeApprovalDecisionModal} type="button">
-              Cancelar
-            </button>
-            <button
-              className="primary-button"
-              disabled={approvalDecisionSubmitting}
-              form="pos-approval-decision-form"
-              type="submit"
-            >
-              {approvalDecisionSubmitting
-                ? approvalDecisionMode === "approve"
-                  ? "Aprobando..."
-                  : "Rechazando..."
-                : approvalDecisionMode === "approve"
-                  ? "Aprobar"
-                  : "Rechazar"}
-            </button>
-          </div>
-        }
-        onClose={closeApprovalDecisionModal}
-        open={approvalDecisionModalOpen}
-        subtitle={
-          approvalDecisionMode === "approve"
-            ? "Confirma la autorizacion operativa de esta venta suspendida."
-            : "Explica por qué no se autoriza esta venta."
-        }
-        title={approvalDecisionMode === "approve" ? "Aprobar venta" : "Rechazar autorizacion"}
-      >
-        <form className="pos-modal-stack" id="pos-approval-decision-form" onSubmit={handleApprovalDecisionSubmit}>
-          {approvalDecisionTarget ? (
-            <div className="pos-ticket-meta-grid">
-              <article className="mini-card">
-                <span className="eyebrow">Solicitud</span>
-                <strong>{approvalDecisionTarget.id}</strong>
-                <p>{approvalDecisionTarget.requested_by_usuario_nombre}</p>
-              </article>
-              <article className="mini-card">
-                <span className="eyebrow">Venta</span>
-                <strong>{approvalDecisionTarget.sale_detail?.folio || approvalDecisionTarget.sale_id}</strong>
-                <p>
-                  {approvalDecisionTarget.sale_detail?.total != null
-                    ? formatMoney(approvalDecisionTarget.sale_detail.total)
-                    : "Total no disponible"}
-                </p>
-              </article>
-            </div>
-          ) : null}
-
-          <label>
-            {approvalDecisionMode === "approve" ? "Nota opcional" : "Motivo del rechazo"}
-            <textarea
-              className="pos-textarea"
-              onChange={(event) => setApprovalDecisionNote(event.target.value)}
-              placeholder={approvalDecisionMode === "approve" ? "Autorizado." : "No autorizado."}
-              required={approvalDecisionMode === "reject"}
-              rows={4}
-              value={approvalDecisionNote}
-            />
-          </label>
-        </form>
-      </PosModal>
 
       <PosModal
         footer={

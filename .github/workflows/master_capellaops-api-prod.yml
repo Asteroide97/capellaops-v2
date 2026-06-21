@@ -10,12 +10,6 @@ permissions:
   id-token: write
   contents: read
 
-env:
-  AZURE_WEBAPP_NAME: capellaops-api-prod
-  AZURE_WEBAPP_PACKAGE_PATH: backend_deploy
-  PYTHON_VERSION: "3.11"
-  AZURE_WEBAPP_STARTUP_COMMAND: python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -27,35 +21,15 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: '3.11'
 
       - name: Validate backend
         working-directory: backend
-        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           python -m compileall app
-
-      - name: Prepare backend deploy package
-        shell: bash
-        run: |
-          rm -rf "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}"
-          mkdir -p "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}"
-          rsync -av --delete \
-            --exclude '.venv' \
-            --exclude 'antenv' \
-            --exclude '__pycache__' \
-            --exclude '*.pyc' \
-            --exclude '.env' \
-            --exclude '*.db' \
-            --exclude '*.log' \
-            --exclude '.validation_*' \
-            --exclude '.smoke_*' \
-            backend/ "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/"
-          test -f "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/requirements.txt"
-          test -d "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/app"
-
+      
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -63,50 +37,10 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_009E4C2DB69E46C194C468D5B4115D97 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_4FFA962AEBCF4FA7A0735B3E8288FF09 }}
 
-      - name: Resolve Azure resource group
-        id: azure-resource-group
-        shell: bash
-        run: |
-          resource_group="$(az resource list --name "${AZURE_WEBAPP_NAME}" --resource-type "Microsoft.Web/sites" --query "[0].resourceGroup" -o tsv)"
-          if [ -z "$resource_group" ]; then
-            echo "No se encontro el resource group para ${AZURE_WEBAPP_NAME}" >&2
-            exit 1
-          fi
-          echo "resource_group=$resource_group" >> "$GITHUB_OUTPUT"
-
-      - name: Configure Azure App Service build settings
-        shell: bash
-        run: |
-          az webapp config appsettings set \
-            --resource-group "${{ steps.azure-resource-group.outputs.resource_group }}" \
-            --name "${AZURE_WEBAPP_NAME}" \
-            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true ENABLE_ORYX_BUILD=true
-
-          az webapp config set \
-            --resource-group "${{ steps.azure-resource-group.outputs.resource_group }}" \
-            --name "${AZURE_WEBAPP_NAME}" \
-            --startup-file "${AZURE_WEBAPP_STARTUP_COMMAND}"
-
-      - name: Wait for Azure SCM restart
-        shell: bash
-        run: sleep 90
-
-      - name: Deploy to Azure Web App
+      - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
         with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          slot-name: Production
-          package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
-
-      - name: Verify health endpoint
-        shell: bash
-        run: |
-          for attempt in {1..10}; do
-            if curl --fail --silent --show-error "https://capellaops-api-prod-awhsbghcgpeme5dz.mexicocentral-01.azurewebsites.net/health"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "Health check fallo para https://capellaops-api-prod-awhsbghcgpeme5dz.mexicocentral-01.azurewebsites.net/health" >&2
-          exit 1
+          app-name: 'capellaops-api-prod'
+          slot-name: 'Production'
+          package: 'backend'     

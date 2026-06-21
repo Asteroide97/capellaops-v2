@@ -10,18 +10,12 @@ from app.api.deps import TenantContext, get_tenant_context
 from app.db.session import get_db
 from app.schemas.pos import (
     PosActiveShiftResponse,
-    PosSaleAdjustmentListResponse,
-    SaleApprovalDecisionRequest,
-    PosSaleApprovalItem,
-    PosSaleApprovalListResponse,
-    PosSaleApprovalRequestResponse,
     PosCatalogResponse,
     PosInvoiceRequestListResponse,
     PosInvoiceRequestResponse,
     PosInvoiceRequestUpsertRequest,
     PosReportSummaryResponse,
     SaleEditableSummaryResponse,
-    SaleApprovalRequest,
     SaleLineAddRequest,
     PosShiftCloseRequest,
     PosShiftListResponse,
@@ -42,7 +36,6 @@ from app.schemas.pos import (
 from app.services.inventory import get_warehouse_for_company
 from app.services.pos import (
     add_shift_manual_movement,
-    approve_sale_approval,
     cancel_sale,
     close_shift,
     create_suspended_sale,
@@ -58,17 +51,12 @@ from app.services.pos import (
     get_shift_detail_response,
     get_shift_report,
     list_invoice_requests,
-    list_pending_sale_approvals,
-    list_sale_adjustments,
-    list_sale_approvals,
     list_sales,
     list_shifts,
     link_sale_to_crm,
     open_shift,
     pay_suspended_sale,
     recalculate_sale_adjustments,
-    reject_sale_approval,
-    request_sale_approval,
     resume_suspended_sale,
     serialize_sale_response,
     add_sale_line,
@@ -87,15 +75,6 @@ T = TypeVar("T")
 def get_pos_context(context: TenantContext = Depends(get_tenant_context)) -> TenantContext:
     validate_pos_access(context.user, context.empresa)
     return context
-
-
-def can_manage_pos_approvals(context: TenantContext) -> bool:
-    return bool(getattr(context.user, "is_superadmin", False) or context.membership.role in {"owner", "admin"})
-
-
-def ensure_pos_approval_manager(context: TenantContext, detail: str) -> None:
-    if not can_manage_pos_approvals(context):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 
 def run_pos_write(db: Session, action: str, operation: Callable[[], T]) -> T:
@@ -468,128 +447,6 @@ def recalculate_sale_endpoint(
     )
 
 
-@router.post("/sales/{sale_id}/approval-request", response_model=PosSaleApprovalRequestResponse)
-def request_sale_approval_endpoint(
-    sale_id: str,
-    payload: SaleApprovalRequest,
-    request: Request,
-    context: TenantContext = Depends(get_pos_context),
-    db: Session = Depends(get_db),
-) -> PosSaleApprovalRequestResponse:
-    return run_pos_write(
-        db,
-        "request_sale_approval",
-        lambda: request_sale_approval(
-            db,
-            empresa=context.empresa,
-            user=context.user,
-            sale_id=sale_id,
-            reason=payload.reason,
-            ip_address=request.client.host if request.client else None,
-        ),
-    )
-
-
-@router.get("/sales/{sale_id}/approvals", response_model=PosSaleApprovalListResponse)
-def get_sale_approvals_endpoint(
-    sale_id: str,
-    limit: int = Query(default=25, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    context: TenantContext = Depends(get_pos_context),
-    db: Session = Depends(get_db),
-) -> PosSaleApprovalListResponse:
-    return list_sale_approvals(
-        db,
-        empresa_id=context.empresa.id,
-        sale_id=sale_id,
-        limit=limit,
-        offset=offset,
-    )
-
-
-@router.post("/sales/{sale_id}/approvals/{approval_id}/approve", response_model=PosSaleApprovalItem)
-def approve_sale_approval_endpoint(
-    sale_id: str,
-    approval_id: str,
-    payload: SaleApprovalDecisionRequest,
-    request: Request,
-    context: TenantContext = Depends(get_pos_context),
-    db: Session = Depends(get_db),
-) -> PosSaleApprovalItem:
-    ensure_pos_approval_manager(context, "No tienes permiso para autorizar ventas POS.")
-    return run_pos_write(
-        db,
-        "approve_sale_approval",
-        lambda: approve_sale_approval(
-            db,
-            empresa=context.empresa,
-            user=context.user,
-            sale_id=sale_id,
-            approval_id=approval_id,
-            note=payload.note,
-            ip_address=request.client.host if request.client else None,
-        ),
-    )
-
-
-@router.post("/sales/{sale_id}/approvals/{approval_id}/reject", response_model=PosSaleApprovalItem)
-def reject_sale_approval_endpoint(
-    sale_id: str,
-    approval_id: str,
-    payload: SaleApprovalDecisionRequest,
-    request: Request,
-    context: TenantContext = Depends(get_pos_context),
-    db: Session = Depends(get_db),
-) -> PosSaleApprovalItem:
-    ensure_pos_approval_manager(context, "No tienes permiso para rechazar ventas POS.")
-    return run_pos_write(
-        db,
-        "reject_sale_approval",
-        lambda: reject_sale_approval(
-            db,
-            empresa=context.empresa,
-            user=context.user,
-            sale_id=sale_id,
-            approval_id=approval_id,
-            note=payload.note,
-            ip_address=request.client.host if request.client else None,
-        ),
-    )
-
-
-@router.get("/approvals/pending", response_model=PosSaleApprovalListResponse)
-def get_pending_sale_approvals_endpoint(
-    limit: int = Query(default=25, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    context: TenantContext = Depends(get_pos_context),
-    db: Session = Depends(get_db),
-) -> PosSaleApprovalListResponse:
-    ensure_pos_approval_manager(context, "No tienes permiso para revisar autorizaciones pendientes de POS.")
-    return list_pending_sale_approvals(
-        db,
-        empresa_id=context.empresa.id,
-        limit=limit,
-        offset=offset,
-    )
-
-
-@router.get("/sales/{sale_id}/adjustments", response_model=PosSaleAdjustmentListResponse)
-def get_sale_adjustments_endpoint(
-    sale_id: str,
-    limit: int = Query(default=25, ge=1, le=100),
-    offset: int = Query(default=0, ge=0),
-    context: TenantContext = Depends(get_pos_context),
-    db: Session = Depends(get_db),
-) -> PosSaleAdjustmentListResponse:
-    return list_sale_adjustments(
-        db,
-        empresa_id=context.empresa.id,
-        sale_id=sale_id,
-        limit=limit,
-        offset=offset,
-    )
-
-
 @router.put("/sales/{sale_id}/crm-link", response_model=SaleResponse)
 def link_sale_to_crm_endpoint(
     sale_id: str,
@@ -858,5 +715,3 @@ def sale_ticket(
 ) -> PosTicketResponse:
     sale = get_sale_for_company(db, context.empresa.id, sale_id)
     return get_sale_ticket(db, sale)
-
-# POS approval schema compatibility redeploy marker

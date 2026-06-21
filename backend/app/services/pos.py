@@ -15,10 +15,7 @@ from app.models import (
     CRMCliente,
     CRMContacto,
     Empresa,
-    EmpresaUsuario,
     PosSaleAdjustment,
-    PosSaleApproval,
-    PosSettings,
     PosTurnoCaja,
     PosTurnoCajaMovimiento,
     Usuario,
@@ -42,12 +39,6 @@ from app.schemas.pos import (
     PosReportSalesTimelineItem,
     PosReportSummaryResponse,
     PosReportTopProductItem,
-    PosSaleAdjustmentItem,
-    PosSaleAdjustmentListResponse,
-    PosSaleApprovalItem,
-    PosSaleApprovalListResponse,
-    PosSaleApprovalRequestResponse,
-    PosSaleRiskReason,
     PosShiftCancellationReportItem,
     PosShiftMovementResponse,
     PosShiftReportResponse,
@@ -84,11 +75,6 @@ SALE_LINE_TYPES = {"material", "manual", "servicio"}
 NON_INVENTORY_LINE_TYPES = {"manual", "servicio"}
 NON_EDITABLE_SALE_STATUSES = {"pagada", "cancelada"}
 BLOCKING_INVOICE_EDIT_STATUSES = {"lista_para_facturar", "facturada", "preparada"}
-POS_APPROVAL_ACTIVE_STATUSES = {"pending", "approved"}
-POS_APPROVAL_ALLOWED_STATUSES = {"pending", "approved", "rejected", "cancelled"}
-DEFAULT_MAX_DISCOUNT_PERCENT_WITHOUT_APPROVAL = Decimal("15")
-DEFAULT_ALLOW_NEGATIVE_MARGIN_WITHOUT_APPROVAL = False
-DEFAULT_REQUIRE_APPROVAL_BELOW_COST = True
 INVOICE_READY_REQUIRED_FIELDS = (
     "factura_rfc",
     "factura_razon_social",
@@ -109,27 +95,6 @@ def validate_pos_access(user: Usuario, empresa: Empresa) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="La empresa no tiene acceso al modulo POS.",
         )
-
-
-def ensure_pos_approval_manager(
-    db: Session,
-    *,
-    empresa_id: str,
-    user: Usuario,
-    detail: str,
-) -> None:
-    if getattr(user, "is_superadmin", False):
-        return
-    role = db.scalar(
-        select(EmpresaUsuario.role).where(
-            EmpresaUsuario.empresa_id == empresa_id,
-            EmpresaUsuario.usuario_id == user.id,
-            EmpresaUsuario.is_active == True,
-        )
-    )
-    if role in {"owner", "admin"}:
-        return
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 
 def generate_sale_folio() -> str:
@@ -393,33 +358,6 @@ def create_sale_adjustment(
     )
 
 
-def serialize_sale_risk_summary(
-    *,
-    requires_approval: bool,
-    reasons: list[PosSaleRiskReason],
-    margin_total: Decimal | None,
-    margin_percent: Decimal | None,
-    discount_percent: Decimal | None,
-    settings: dict[str, Decimal | bool],
-) -> dict:
-    return {
-        "requires_approval": requires_approval,
-        "reasons": [reason.model_dump() for reason in reasons],
-        "margin_total": str(margin_total) if margin_total is not None else None,
-        "margin_percent": str(margin_percent) if margin_percent is not None else None,
-        "discount_percent": str(discount_percent) if discount_percent is not None else None,
-        "settings": {
-            "max_discount_percent_without_approval": str(
-                settings["max_discount_percent_without_approval"]
-            ),
-            "allow_negative_margin_without_approval": bool(
-                settings["allow_negative_margin_without_approval"]
-            ),
-            "require_approval_below_cost": bool(settings["require_approval_below_cost"]),
-        },
-    }
-
-
 def serialize_sale_totals_adjustment_snapshot(sale: Venta) -> dict:
     return {
         "sale_id": sale.id,
@@ -432,447 +370,6 @@ def serialize_sale_totals_adjustment_snapshot(sale: Venta) -> dict:
         "total": str(sale.total or ZERO),
     }
 
-
-def serialize_sale_adjustment_item(adjustment: PosSaleAdjustment) -> PosSaleAdjustmentItem:
-    return PosSaleAdjustmentItem(
-        id=adjustment.id,
-        sale_id=adjustment.sale_id,
-        line_id=adjustment.line_id,
-        tipo=adjustment.tipo,
-        usuario_id=adjustment.usuario_id,
-        usuario_nombre=adjustment.usuario.full_name if adjustment.usuario else "Usuario",
-        before_json=adjustment.before_json,
-        after_json=adjustment.after_json,
-        motivo=adjustment.motivo,
-        created_at=adjustment.created_at,
-    )
-
-
-def load_sale_adjustments(
-    db: Session,
-    *,
-    empresa_id: str,
-    sale_id: str,
-    limit: int | None = None,
-    offset: int = 0,
-) -> tuple[int, list[PosSaleAdjustment]]:
-    base_query = select(PosSaleAdjustment).where(
-        PosSaleAdjustment.empresa_id == empresa_id,
-        PosSaleAdjustment.sale_id == sale_id,
-    )
-    total = count_rows(db, base_query)
-    query = (
-        base_query.options(selectinload(PosSaleAdjustment.usuario))
-        .order_by(desc(PosSaleAdjustment.created_at), desc(PosSaleAdjustment.id))
-        .offset(offset)
-    )
-    if limit is not None:
-        query = query.limit(limit)
-    return total, db.scalars(query).all()
-
-
-def list_sale_adjustments(
-    db: Session,
-    *,
-    empresa_id: str,
-    sale_id: str,
-    limit: int,
-    offset: int,
-) -> PosSaleAdjustmentListResponse:
-    get_sale_for_company(db, empresa_id, sale_id)
-    total, items = load_sale_adjustments(db, empresa_id=empresa_id, sale_id=sale_id, limit=limit, offset=offset)
-    return PosSaleAdjustmentListResponse(
-        items=[serialize_sale_adjustment_item(item) for item in items],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
-
-
-def get_pos_settings_values(db: Session, empresa_id: str) -> dict[str, Decimal | bool]:
-    settings = db.scalar(select(PosSettings).where(PosSettings.empresa_id == empresa_id))
-    return {
-        "max_discount_percent_without_approval": quantize_decimal(
-            settings.max_discount_percent_without_approval
-            if settings is not None
-            else DEFAULT_MAX_DISCOUNT_PERCENT_WITHOUT_APPROVAL
-        ),
-        "allow_negative_margin_without_approval": bool(
-            settings.allow_negative_margin_without_approval
-            if settings is not None
-            else DEFAULT_ALLOW_NEGATIVE_MARGIN_WITHOUT_APPROVAL
-        ),
-        "require_approval_below_cost": bool(
-            settings.require_approval_below_cost if settings is not None else DEFAULT_REQUIRE_APPROVAL_BELOW_COST
-        ),
-    }
-
-
-def append_risk_reason(reasons: list[PosSaleRiskReason], code: str, message: str) -> None:
-    if any(reason.code == code for reason in reasons):
-        return
-    reasons.append(PosSaleRiskReason(code=code, message=message))
-
-
-def calculate_sale_margin_percent(summary: SaleEditableSummaryResponse) -> Decimal | None:
-    margin = summary.totals.margen_estimado
-    subtotal_neto = quantize_decimal(summary.totals.subtotal_neto)
-    if margin is None or subtotal_neto <= ZERO:
-        return None
-    return quantize_decimal((Decimal(margin) / subtotal_neto) * Decimal("100"))
-
-
-def evaluate_pos_sale_risk(
-    db: Session,
-    *,
-    empresa_id: str,
-    summary: SaleEditableSummaryResponse,
-) -> dict[str, object]:
-    settings = get_pos_settings_values(db, empresa_id)
-    discount_limit = quantize_decimal(settings["max_discount_percent_without_approval"])
-    requires_negative_margin_approval = not bool(settings["allow_negative_margin_without_approval"])
-    require_below_cost_approval = bool(settings["require_approval_below_cost"])
-    reasons: list[PosSaleRiskReason] = []
-
-    global_discount_percent = ZERO
-    if quantize_decimal(summary.totals.subtotal_bruto) > ZERO and quantize_decimal(summary.totals.descuento_global) > ZERO:
-        global_discount_percent = quantize_decimal(
-            (Decimal(summary.totals.descuento_global) / Decimal(summary.totals.subtotal_bruto)) * Decimal("100")
-        )
-        if global_discount_percent > discount_limit:
-            append_risk_reason(
-                reasons,
-                "global_discount_exceeds_limit",
-                "El descuento global supera el limite permitido sin autorizacion.",
-            )
-
-    for line in summary.lines:
-        subtotal_bruto = quantize_decimal(line.subtotal_bruto)
-        discount_percent = ZERO
-        if subtotal_bruto > ZERO and quantize_decimal(line.descuento_total) > ZERO:
-            discount_percent = quantize_decimal((Decimal(line.descuento_total) / subtotal_bruto) * Decimal("100"))
-        if discount_percent > discount_limit:
-            append_risk_reason(
-                reasons,
-                "line_discount_exceeds_limit",
-                "Una linea supera el limite de descuento permitido.",
-            )
-            if line.tipo_linea in NON_INVENTORY_LINE_TYPES:
-                append_risk_reason(
-                    reasons,
-                    "manual_line_high_discount",
-                    "Hay lineas manuales o de servicio con descuento elevado.",
-                )
-
-        if require_below_cost_approval and "Precio debajo de costo." in line.warnings:
-            append_risk_reason(
-                reasons,
-                "below_cost",
-                "Hay materiales con precio por debajo de costo.",
-            )
-
-    margin_total = summary.totals.margen_estimado
-    margin_percent = calculate_sale_margin_percent(summary)
-    if requires_negative_margin_approval and margin_total is not None and quantize_decimal(margin_total) < ZERO:
-        append_risk_reason(
-            reasons,
-            "negative_margin",
-            "La venta tiene margen negativo.",
-        )
-
-    if quantize_decimal(summary.totals.total) <= ZERO:
-        append_risk_reason(
-            reasons,
-            "zero_total",
-            "La venta tiene total igual a cero.",
-        )
-
-    requires_approval = bool(reasons)
-    return {
-        "requires_approval": requires_approval,
-        "reasons": reasons,
-        "margin_total": quantize_decimal(margin_total) if margin_total is not None else None,
-        "margin_percent": margin_percent,
-        "discount_percent": global_discount_percent,
-        "settings": settings,
-    }
-
-
-def get_sale_approval_for_company(
-    db: Session,
-    *,
-    empresa_id: str,
-    sale_id: str,
-    approval_id: str,
-    for_update: bool = False,
-) -> PosSaleApproval:
-    query = (
-        select(PosSaleApproval)
-        .options(
-            selectinload(PosSaleApproval.requested_by_usuario),
-            selectinload(PosSaleApproval.approved_by_usuario),
-            selectinload(PosSaleApproval.rejected_by_usuario),
-        )
-        .where(
-            PosSaleApproval.id == approval_id,
-            PosSaleApproval.empresa_id == empresa_id,
-            PosSaleApproval.sale_id == sale_id,
-        )
-    )
-    if for_update:
-        query = query.with_for_update()
-    approval = db.scalar(query)
-    if not approval:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Autorizacion POS no encontrada.")
-    return approval
-
-
-def get_latest_sale_approval(
-    db: Session,
-    *,
-    empresa_id: str,
-    sale_id: str,
-    statuses: set[str] | None = None,
-) -> PosSaleApproval | None:
-    query = (
-        select(PosSaleApproval)
-        .options(
-            selectinload(PosSaleApproval.requested_by_usuario),
-            selectinload(PosSaleApproval.approved_by_usuario),
-            selectinload(PosSaleApproval.rejected_by_usuario),
-        )
-        .where(
-            PosSaleApproval.empresa_id == empresa_id,
-            PosSaleApproval.sale_id == sale_id,
-        )
-        .order_by(desc(PosSaleApproval.created_at), desc(PosSaleApproval.id))
-    )
-    if statuses:
-        query = query.where(PosSaleApproval.status.in_(tuple(statuses)))
-    return db.scalar(query)
-
-
-def serialize_sale_approval_item(approval: PosSaleApproval) -> PosSaleApprovalItem:
-    return PosSaleApprovalItem(
-        id=approval.id,
-        sale_id=approval.sale_id,
-        status=approval.status,
-        reason=approval.reason,
-        decision_note=approval.decision_note,
-        requested_by_usuario_id=approval.requested_by_usuario_id,
-        requested_by_usuario_nombre=(
-            approval.requested_by_usuario.full_name if approval.requested_by_usuario else "Usuario"
-        ),
-        approved_by_usuario_id=approval.approved_by_usuario_id,
-        approved_by_usuario_nombre=approval.approved_by_usuario.full_name if approval.approved_by_usuario else None,
-        rejected_by_usuario_id=approval.rejected_by_usuario_id,
-        rejected_by_usuario_nombre=approval.rejected_by_usuario.full_name if approval.rejected_by_usuario else None,
-        risk_summary_json=approval.risk_summary_json,
-        approved_at=approval.approved_at,
-        rejected_at=approval.rejected_at,
-        created_at=approval.created_at,
-        updated_at=approval.updated_at,
-    )
-
-
-def build_sale_approval_response(
-    approval: PosSaleApproval,
-    *,
-    risk_reasons: list[PosSaleRiskReason],
-) -> PosSaleApprovalRequestResponse:
-    return PosSaleApprovalRequestResponse(
-        approval_id=approval.id,
-        status=approval.status,
-        requires_approval=True,
-        reasons=risk_reasons,
-    )
-
-
-def list_sale_approvals(
-    db: Session,
-    *,
-    empresa_id: str,
-    sale_id: str,
-    limit: int,
-    offset: int,
-) -> PosSaleApprovalListResponse:
-    get_sale_for_company(db, empresa_id, sale_id)
-    base_query = select(PosSaleApproval).where(
-        PosSaleApproval.empresa_id == empresa_id,
-        PosSaleApproval.sale_id == sale_id,
-    )
-    total = count_rows(db, base_query)
-    items = db.scalars(
-        base_query.options(
-            selectinload(PosSaleApproval.requested_by_usuario),
-            selectinload(PosSaleApproval.approved_by_usuario),
-            selectinload(PosSaleApproval.rejected_by_usuario),
-        )
-        .order_by(desc(PosSaleApproval.created_at), desc(PosSaleApproval.id))
-        .offset(offset)
-        .limit(limit)
-    ).all()
-    return PosSaleApprovalListResponse(
-        items=[serialize_sale_approval_item(item) for item in items],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
-
-
-def list_pending_sale_approvals(
-    db: Session,
-    *,
-    empresa_id: str,
-    limit: int,
-    offset: int,
-) -> PosSaleApprovalListResponse:
-    base_query = select(PosSaleApproval).where(
-        PosSaleApproval.empresa_id == empresa_id,
-        PosSaleApproval.status == "pending",
-    )
-    total = count_rows(db, base_query)
-    items = db.scalars(
-        base_query.options(
-            selectinload(PosSaleApproval.requested_by_usuario),
-            selectinload(PosSaleApproval.approved_by_usuario),
-            selectinload(PosSaleApproval.rejected_by_usuario),
-        )
-        .order_by(desc(PosSaleApproval.created_at), desc(PosSaleApproval.id))
-        .offset(offset)
-        .limit(limit)
-    ).all()
-    return PosSaleApprovalListResponse(
-        items=[serialize_sale_approval_item(item) for item in items],
-        total=total,
-        limit=limit,
-        offset=offset,
-    )
-
-
-def invalidate_active_sale_approvals(
-    db: Session,
-    *,
-    sale: Venta,
-    reason: str,
-) -> bool:
-    active_approvals = db.scalars(
-        select(PosSaleApproval).where(
-            PosSaleApproval.empresa_id == sale.empresa_id,
-            PosSaleApproval.sale_id == sale.id,
-            PosSaleApproval.status.in_(tuple(POS_APPROVAL_ACTIVE_STATUSES)),
-        )
-    ).all()
-    if not active_approvals:
-        return False
-
-    for approval in active_approvals:
-        approval.status = "cancelled"
-        approval.decision_note = normalize_optional_text(reason)
-        approval.updated_at = datetime.now(timezone.utc)
-    db.flush()
-    return True
-
-
-def build_comparable_sale_lines_from_details(details: list[VentaDetalle]) -> list[dict]:
-    rows = [serialize_sale_line_adjustment_snapshot(detail) or {} for detail in details]
-    normalized: list[dict] = []
-    for row in rows:
-        normalized.append(
-            {
-                "tipo_linea": row.get("tipo_linea"),
-                "material_id": row.get("material_id"),
-                "descripcion_manual": row.get("descripcion_manual"),
-                "cantidad": str(quantize_decimal(row.get("cantidad"))),
-                "precio_unitario": str(quantize_decimal(row.get("precio_unitario"))),
-                "descuento_unitario": str(quantize_decimal(row.get("descuento_unitario"))),
-                "impuesto_tasa": str(quantize_decimal(row.get("impuesto_tasa"))),
-                "costo_unitario_manual": (
-                    str(quantize_decimal(row.get("costo_unitario_manual")))
-                    if row.get("costo_unitario_manual") is not None
-                    else None
-                ),
-            }
-        )
-    return sorted(
-        normalized,
-        key=lambda item: (
-            item.get("tipo_linea") or "",
-            item.get("material_id") or "",
-            item.get("descripcion_manual") or "",
-            item.get("cantidad") or "",
-            item.get("precio_unitario") or "",
-            item.get("descuento_unitario") or "",
-            item.get("impuesto_tasa") or "",
-            item.get("costo_unitario_manual") or "",
-        ),
-    )
-
-
-def build_comparable_sale_lines_from_resolved_lines(resolved_lines: list[dict]) -> list[dict]:
-    normalized: list[dict] = []
-    for line in resolved_lines:
-        normalized.append(
-            {
-                "tipo_linea": line.get("tipo_linea"),
-                "material_id": line["material"].id if line.get("material") is not None else None,
-                "descripcion_manual": line.get("descripcion_manual"),
-                "cantidad": str(quantize_decimal(line.get("cantidad") or ZERO)),
-                "precio_unitario": str(quantize_decimal(line.get("precio_unitario") or ZERO)),
-                "descuento_unitario": str(quantize_decimal(line.get("descuento_unitario") or ZERO)),
-                "impuesto_tasa": str(quantize_decimal(line.get("impuesto_tasa") or ZERO)),
-                "costo_unitario_manual": (
-                    str(quantize_decimal(line.get("costo_unitario_manual")))
-                    if line.get("costo_unitario_manual") is not None
-                    else None
-                ),
-            }
-        )
-    return sorted(
-        normalized,
-        key=lambda item: (
-            item.get("tipo_linea") or "",
-            item.get("material_id") or "",
-            item.get("descripcion_manual") or "",
-            item.get("cantidad") or "",
-            item.get("precio_unitario") or "",
-            item.get("descuento_unitario") or "",
-            item.get("impuesto_tasa") or "",
-            item.get("costo_unitario_manual") or "",
-        ),
-    )
-
-
-def sale_payload_differs_from_current(
-    *,
-    sale: Venta,
-    current_details: list[VentaDetalle],
-    resolved_lines: list[dict],
-    subtotal_bruto: Decimal,
-    descuento_lineas_total: Decimal,
-    descuento_global: Decimal,
-    impuesto_total: Decimal,
-    total: Decimal,
-) -> bool:
-    if build_comparable_sale_lines_from_details(current_details) != build_comparable_sale_lines_from_resolved_lines(
-        resolved_lines
-    ):
-        return True
-    comparable_totals = {
-        "subtotal": str(quantize_decimal(sale.subtotal)),
-        "descuento_lineas_total": str(quantize_decimal(sale.descuento_lineas_total)),
-        "descuento_global": str(quantize_decimal(sale.descuento_global)),
-        "impuesto_total": str(quantize_decimal(sale.impuesto_total)),
-        "total": str(quantize_decimal(sale.total)),
-    }
-    incoming_totals = {
-        "subtotal": str(quantize_decimal(subtotal_bruto)),
-        "descuento_lineas_total": str(quantize_decimal(descuento_lineas_total)),
-        "descuento_global": str(quantize_decimal(descuento_global)),
-        "impuesto_total": str(quantize_decimal(impuesto_total)),
-        "total": str(quantize_decimal(total)),
-    }
-    return comparable_totals != incoming_totals
 
 def calculate_sale_paid_amount(sale: Venta) -> Decimal | None:
     if sale.monto_recibido is not None:
@@ -1505,88 +1002,6 @@ def recalculate_editable_sale_models(
     return details, resolved_lines, subtotal_bruto, descuento_lineas_total, impuesto_total
 
 
-def build_preview_sale_details(*, sale_id: str, resolved_lines: list[dict]) -> list[VentaDetalle]:
-    details: list[VentaDetalle] = []
-    for index, line in enumerate(resolved_lines, start=1):
-        material = line.get("material")
-        detail = VentaDetalle(
-            id=f"{sale_id}-line-{index}",
-            venta_id=sale_id,
-            material_id=material.id if material else None,
-            tipo_linea=line["tipo_linea"],
-            descripcion_manual=line["descripcion_manual"],
-            es_inventariable=bool(line["es_inventariable"]),
-            costo_unitario_manual=line["costo_unitario_manual"],
-            sku_snapshot=material.sku if material else line["sku_snapshot"],
-            nombre_snapshot=material.nombre if material else line["nombre_snapshot"],
-            cantidad=line["cantidad"],
-            precio_unitario=line["precio_unitario"],
-            descuento_unitario=line["descuento_unitario"],
-            impuesto_tasa=line["impuesto_tasa"],
-            impuesto_linea=line["impuesto_linea"],
-            subtotal_linea=line["subtotal_linea"],
-            total_linea=line["total_linea"],
-        )
-        detail.material = material
-        details.append(detail)
-    return details
-
-
-def build_preview_sale_summary(
-    db: Session,
-    *,
-    empresa: Empresa,
-    user: Usuario,
-    warehouse: Almacen,
-    sale_id: str | None = None,
-    sale_folio: str | None = None,
-    resolved_lines: list[dict],
-    subtotal_bruto: Decimal,
-    descuento_lineas_total: Decimal,
-    descuento_global: Decimal,
-    impuesto_total: Decimal,
-    total: Decimal,
-    cliente_nombre: str | None,
-    cliente_email: str | None,
-    notas: str | None,
-) -> SaleEditableSummaryResponse:
-    preview_sale = Venta(
-        id=sale_id or f"preview-{uuid4()}",
-        empresa_id=empresa.id,
-        folio=sale_folio or "PREVIEW",
-        almacen_id=warehouse.id,
-        usuario_id=user.id,
-        cliente_nombre=normalize_optional_text(cliente_nombre),
-        cliente_email=normalize_customer_email(cliente_email),
-        subtotal=quantize_decimal(subtotal_bruto),
-        descuento_lineas_total=quantize_decimal(descuento_lineas_total),
-        descuento_global=quantize_decimal(descuento_global),
-        descuento_total=quantize_decimal(descuento_lineas_total + descuento_global),
-        impuesto_total=quantize_decimal(impuesto_total),
-        total=quantize_decimal(total),
-        metodo_pago="efectivo",
-        estatus="suspendida",
-        notas=normalize_optional_text(notas),
-        created_at=datetime.now(timezone.utc),
-    )
-    preview_sale.empresa = empresa
-    preview_sale.almacen = warehouse
-    preview_sale.usuario = user
-    return build_sale_editable_summary_response(
-        db,
-        preview_sale,
-        details=build_preview_sale_details(sale_id=preview_sale.id, resolved_lines=resolved_lines),
-    )
-
-
-def ensure_sale_can_charge(summary: SaleEditableSummaryResponse) -> None:
-    if summary.requires_approval and not summary.can_charge:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Esta venta requiere autorizacion antes de cobrar.",
-        )
-
-
 def build_sale_editable_summary_response(
     db: Session,
     sale: Venta,
@@ -1708,44 +1123,12 @@ def build_sale_editable_summary_response(
         margen_completo=margin_complete,
         warnings=collected_warnings,
     )
-    approval_evaluation = evaluate_pos_sale_risk(
-        db,
-        empresa_id=sale.empresa_id,
-        summary=SaleEditableSummaryResponse(
-            sale=summary,
-            lines=line_items,
-            editable=editable,
-            reason=editable_reason,
-            totals=totals,
-        ),
-    )
-    active_approval = get_latest_sale_approval(
-        db,
-        empresa_id=sale.empresa_id,
-        sale_id=sale.id,
-        statuses=POS_APPROVAL_ACTIVE_STATUSES,
-    )
-    latest_approval = active_approval or get_latest_sale_approval(db, empresa_id=sale.empresa_id, sale_id=sale.id)
-    requires_approval = bool(approval_evaluation["requires_approval"])
-    can_charge = not requires_approval or (active_approval is not None and active_approval.status == "approved")
-    approval_status: str | None = None
-    approval_id: str | None = None
-    if requires_approval and latest_approval is not None:
-        approval_status = latest_approval.status
-        approval_id = latest_approval.id
-    _, latest_adjustments = load_sale_adjustments(db, empresa_id=sale.empresa_id, sale_id=sale.id, limit=5, offset=0)
     return SaleEditableSummaryResponse(
         sale=summary,
         lines=line_items,
         editable=editable,
         reason=editable_reason,
         totals=totals,
-        requires_approval=requires_approval,
-        approval_status=approval_status,
-        approval_id=approval_id,
-        approval_reasons=list(approval_evaluation["reasons"]),
-        can_charge=can_charge,
-        last_adjustments=[serialize_sale_adjustment_item(item) for item in latest_adjustments],
     )
 
 
@@ -1757,200 +1140,6 @@ def get_sale_editable_summary(
 ) -> SaleEditableSummaryResponse:
     sale = get_sale_for_company(db, empresa_id, sale_id)
     return build_sale_editable_summary_response(db, sale)
-
-
-def request_sale_approval(
-    db: Session,
-    *,
-    empresa: Empresa,
-    user: Usuario,
-    sale_id: str,
-    reason: str | None,
-    ip_address: str | None,
-) -> PosSaleApprovalRequestResponse:
-    validate_pos_access(user, empresa)
-    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
-    if sale.estatus != "suspendida":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Solo se pueden solicitar autorizaciones sobre ventas suspendidas.",
-        )
-
-    summary = build_sale_editable_summary_response(db, sale)
-    if not summary.requires_approval:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="La venta no requiere autorizacion para cobrarse.",
-        )
-
-    active_approval = get_latest_sale_approval(
-        db,
-        empresa_id=empresa.id,
-        sale_id=sale.id,
-        statuses=POS_APPROVAL_ACTIVE_STATUSES,
-    )
-    if active_approval is not None:
-        return build_sale_approval_response(active_approval, risk_reasons=summary.approval_reasons)
-
-    risk_summary_json = serialize_sale_risk_summary(
-        requires_approval=summary.requires_approval,
-        reasons=summary.approval_reasons,
-        margin_total=summary.totals.margen_estimado,
-        margin_percent=calculate_sale_margin_percent(summary),
-        discount_percent=quantize_decimal(
-            (Decimal(summary.totals.descuento_global) / Decimal(summary.totals.subtotal_bruto)) * Decimal("100")
-        )
-        if quantize_decimal(summary.totals.subtotal_bruto) > ZERO and quantize_decimal(summary.totals.descuento_global) > ZERO
-        else ZERO,
-        settings=get_pos_settings_values(db, empresa.id),
-    )
-    approval = PosSaleApproval(
-        empresa_id=empresa.id,
-        sale_id=sale.id,
-        requested_by_usuario_id=user.id,
-        status="pending",
-        reason=normalize_optional_text(reason),
-        risk_summary_json=risk_summary_json,
-    )
-    db.add(approval)
-    db.flush()
-    db.refresh(approval)
-
-    create_audit_log(
-        db,
-        empresa_id=empresa.id,
-        usuario_id=user.id,
-        action="pos.sale.approval.request",
-        entity_name="venta",
-        entity_id=sale.id,
-        ip_address=ip_address,
-        metadata_json={"folio": sale.folio, "approval_id": approval.id},
-    )
-    return build_sale_approval_response(approval, risk_reasons=summary.approval_reasons)
-
-
-def approve_sale_approval(
-    db: Session,
-    *,
-    empresa: Empresa,
-    user: Usuario,
-    sale_id: str,
-    approval_id: str,
-    note: str | None,
-    ip_address: str | None,
-) -> PosSaleApprovalItem:
-    validate_pos_access(user, empresa)
-    ensure_pos_approval_manager(
-        db,
-        empresa_id=empresa.id,
-        user=user,
-        detail="No tienes permiso para autorizar ventas POS.",
-    )
-    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
-    approval = get_sale_approval_for_company(
-        db,
-        empresa_id=empresa.id,
-        sale_id=sale.id,
-        approval_id=approval_id,
-        for_update=True,
-    )
-    if approval.status != "pending":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="La autorizacion ya no esta pendiente.",
-        )
-
-    summary = build_sale_editable_summary_response(db, sale)
-    if not summary.requires_approval:
-        approval.status = "cancelled"
-        approval.decision_note = "La venta ya no requiere autorizacion."
-        db.flush()
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="La venta ya no requiere autorizacion para cobrarse.",
-        )
-
-    approval.status = "approved"
-    approval.approved_by_usuario_id = user.id
-    approval.approved_at = datetime.now(timezone.utc)
-    approval.decision_note = normalize_optional_text(note)
-    approval.risk_summary_json = serialize_sale_risk_summary(
-        requires_approval=True,
-        reasons=summary.approval_reasons,
-        margin_total=summary.totals.margen_estimado,
-        margin_percent=calculate_sale_margin_percent(summary),
-        discount_percent=quantize_decimal(
-            (Decimal(summary.totals.descuento_global) / Decimal(summary.totals.subtotal_bruto)) * Decimal("100")
-        )
-        if quantize_decimal(summary.totals.subtotal_bruto) > ZERO and quantize_decimal(summary.totals.descuento_global) > ZERO
-        else ZERO,
-        settings=get_pos_settings_values(db, empresa.id),
-    )
-    db.flush()
-    db.refresh(approval)
-
-    create_audit_log(
-        db,
-        empresa_id=empresa.id,
-        usuario_id=user.id,
-        action="pos.sale.approval.approve",
-        entity_name="venta",
-        entity_id=sale.id,
-        ip_address=ip_address,
-        metadata_json={"folio": sale.folio, "approval_id": approval.id},
-    )
-    return serialize_sale_approval_item(approval)
-
-
-def reject_sale_approval(
-    db: Session,
-    *,
-    empresa: Empresa,
-    user: Usuario,
-    sale_id: str,
-    approval_id: str,
-    note: str | None,
-    ip_address: str | None,
-) -> PosSaleApprovalItem:
-    validate_pos_access(user, empresa)
-    ensure_pos_approval_manager(
-        db,
-        empresa_id=empresa.id,
-        user=user,
-        detail="No tienes permiso para rechazar ventas POS.",
-    )
-    sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
-    approval = get_sale_approval_for_company(
-        db,
-        empresa_id=empresa.id,
-        sale_id=sale.id,
-        approval_id=approval_id,
-        for_update=True,
-    )
-    if approval.status != "pending":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="La autorizacion ya no esta pendiente.",
-        )
-
-    approval.status = "rejected"
-    approval.rejected_by_usuario_id = user.id
-    approval.rejected_at = datetime.now(timezone.utc)
-    approval.decision_note = normalize_optional_text(note)
-    db.flush()
-    db.refresh(approval)
-
-    create_audit_log(
-        db,
-        empresa_id=empresa.id,
-        usuario_id=user.id,
-        action="pos.sale.approval.reject",
-        entity_name="venta",
-        entity_id=sale.id,
-        ip_address=ip_address,
-        metadata_json={"folio": sale.folio, "approval_id": approval.id},
-    )
-    return serialize_sale_approval_item(approval)
 
 
 def add_sale_line(
@@ -2031,11 +1220,6 @@ def add_sale_line(
     db.flush()
 
     details, _, _, _, _ = recalculate_editable_sale_models(db, sale=sale, validate_stock=True)
-    invalidated = invalidate_active_sale_approvals(
-        db,
-        sale=sale,
-        reason="Venta modificada despues de autorizacion.",
-    )
     create_sale_adjustment(
         db,
         empresa_id=empresa.id,
@@ -2057,17 +1241,6 @@ def add_sale_line(
         ip_address=ip_address,
         metadata_json={"folio": sale.folio, "line_id": new_detail.id, "tipo_linea": line_type},
     )
-    if invalidated:
-        create_audit_log(
-            db,
-            empresa_id=empresa.id,
-            usuario_id=user.id,
-            action="pos.sale.approval.invalidate",
-            entity_name="venta",
-            entity_id=sale.id,
-            ip_address=ip_address,
-            metadata_json={"folio": sale.folio},
-        )
     db.flush()
     db.refresh(sale)
     return build_sale_editable_summary_response(db, sale, details=details)
@@ -2120,14 +1293,6 @@ def update_sale_line(
         detail.costo_unitario_manual = quantize_decimal(payload.costo_unitario_manual) if payload.costo_unitario_manual is not None else None
 
     details, _, _, _, _ = recalculate_editable_sale_models(db, sale=sale, validate_stock=True)
-    after_snapshot = serialize_sale_line_adjustment_snapshot(detail)
-    invalidated = False
-    if before_snapshot != after_snapshot:
-        invalidated = invalidate_active_sale_approvals(
-            db,
-            sale=sale,
-            reason="Venta modificada despues de autorizacion.",
-        )
     create_sale_adjustment(
         db,
         empresa_id=empresa.id,
@@ -2136,7 +1301,7 @@ def update_sale_line(
         usuario_id=user.id,
         adjustment_type="update_line",
         before_json=before_snapshot,
-        after_json=after_snapshot,
+        after_json=serialize_sale_line_adjustment_snapshot(detail),
         motivo=getattr(payload, "motivo", None),
     )
     create_audit_log(
@@ -2149,17 +1314,6 @@ def update_sale_line(
         ip_address=ip_address,
         metadata_json={"folio": sale.folio, "line_id": detail.id},
     )
-    if invalidated:
-        create_audit_log(
-            db,
-            empresa_id=empresa.id,
-            usuario_id=user.id,
-            action="pos.sale.approval.invalidate",
-            entity_name="venta",
-            entity_id=sale.id,
-            ip_address=ip_address,
-            metadata_json={"folio": sale.folio},
-        )
     db.flush()
     db.refresh(sale)
     return build_sale_editable_summary_response(db, sale, details=details)
@@ -2193,11 +1347,6 @@ def delete_sale_line(
     db.flush()
 
     remaining_details, _, _, _, _ = recalculate_editable_sale_models(db, sale=sale, validate_stock=True)
-    invalidated = invalidate_active_sale_approvals(
-        db,
-        sale=sale,
-        reason="Venta modificada despues de autorizacion.",
-    )
     create_sale_adjustment(
         db,
         empresa_id=empresa.id,
@@ -2219,17 +1368,6 @@ def delete_sale_line(
         ip_address=ip_address,
         metadata_json={"folio": sale.folio, "line_id": line_id},
     )
-    if invalidated:
-        create_audit_log(
-            db,
-            empresa_id=empresa.id,
-            usuario_id=user.id,
-            action="pos.sale.approval.invalidate",
-            entity_name="venta",
-            entity_id=sale.id,
-            ip_address=ip_address,
-            metadata_json={"folio": sale.folio},
-        )
     db.flush()
     db.refresh(sale)
     return build_sale_editable_summary_response(db, sale, details=remaining_details)
@@ -2256,13 +1394,6 @@ def recalculate_sale_adjustments(
         descuento_global=descuento_global,
     )
     after_snapshot = serialize_sale_totals_adjustment_snapshot(sale)
-    invalidated = False
-    if before_snapshot != after_snapshot:
-        invalidated = invalidate_active_sale_approvals(
-            db,
-            sale=sale,
-            reason="Venta modificada despues de autorizacion.",
-        )
     create_sale_adjustment(
         db,
         empresa_id=empresa.id,
@@ -2284,17 +1415,6 @@ def recalculate_sale_adjustments(
         ip_address=ip_address,
         metadata_json={"folio": sale.folio},
     )
-    if invalidated:
-        create_audit_log(
-            db,
-            empresa_id=empresa.id,
-            usuario_id=user.id,
-            action="pos.sale.approval.invalidate",
-            entity_name="venta",
-            entity_id=sale.id,
-            ip_address=ip_address,
-            metadata_json={"folio": sale.folio},
-        )
     db.flush()
     db.refresh(sale)
     return build_sale_editable_summary_response(db, sale, details=details)
@@ -3901,22 +3021,6 @@ def create_sale(
         impuesto_total=impuesto_total,
         descuento_global=descuento_global,
     )
-    preview_summary = build_preview_sale_summary(
-        db,
-        empresa=empresa,
-        user=user,
-        warehouse=warehouse,
-        resolved_lines=resolved_lines,
-        subtotal_bruto=subtotal_bruto,
-        descuento_lineas_total=descuento_lineas_total,
-        descuento_global=normalized_global_discount,
-        impuesto_total=impuesto_total,
-        total=total,
-        cliente_nombre=cliente_nombre,
-        cliente_email=cliente_email,
-        notas=notas,
-    )
-    ensure_sale_can_charge(preview_summary)
     shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
     if not shift:
         raise HTTPException(
@@ -4163,68 +3267,6 @@ def pay_suspended_sale(
         impuesto_total=impuesto_total,
         descuento_global=descuento_global,
     )
-    preview_summary = build_preview_sale_summary(
-        db,
-        empresa=empresa,
-        user=user,
-        warehouse=warehouse,
-        sale_id=sale.id,
-        sale_folio=sale.folio,
-        resolved_lines=resolved_lines,
-        subtotal_bruto=subtotal_bruto,
-        descuento_lineas_total=descuento_lineas_total,
-        descuento_global=normalized_global_discount,
-        impuesto_total=impuesto_total,
-        total=total,
-        cliente_nombre=cliente_nombre,
-        cliente_email=cliente_email,
-        notas=notas,
-    )
-    current_details = load_sale_details(db, sale_id=sale.id, for_update=True)
-    if sale_payload_differs_from_current(
-        sale=sale,
-        current_details=current_details,
-        resolved_lines=resolved_lines,
-        subtotal_bruto=subtotal_bruto,
-        descuento_lineas_total=descuento_lineas_total,
-        descuento_global=normalized_global_discount,
-        impuesto_total=impuesto_total,
-        total=total,
-    ):
-        invalidated = invalidate_active_sale_approvals(
-            db,
-            sale=sale,
-            reason="Venta modificada despues de autorizacion.",
-        )
-        if invalidated:
-            create_audit_log(
-                db,
-                empresa_id=empresa.id,
-                usuario_id=user.id,
-                action="pos.sale.approval.invalidate",
-                entity_name="venta",
-                entity_id=sale.id,
-                ip_address=ip_address,
-                metadata_json={"folio": sale.folio},
-            )
-        preview_summary = build_preview_sale_summary(
-            db,
-            empresa=empresa,
-            user=user,
-            warehouse=warehouse,
-            sale_id=sale.id,
-            sale_folio=sale.folio,
-            resolved_lines=resolved_lines,
-            subtotal_bruto=subtotal_bruto,
-            descuento_lineas_total=descuento_lineas_total,
-            descuento_global=normalized_global_discount,
-            impuesto_total=impuesto_total,
-            total=total,
-            cliente_nombre=cliente_nombre,
-            cliente_email=cliente_email,
-            notas=notas,
-        )
-    ensure_sale_can_charge(preview_summary)
     shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
     if not shift:
         raise HTTPException(
