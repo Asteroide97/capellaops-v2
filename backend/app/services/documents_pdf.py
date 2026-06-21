@@ -12,7 +12,11 @@ from fastapi import HTTPException, status
 from app.models import Empresa
 from app.models.pm import PMProyecto
 from app.schemas.crm import CRMCotizacionResponse
-from app.schemas.pm import PMEstimacionDetailOut
+from app.schemas.pm import (
+    PMEstimacionDetailOut,
+    PMSimpleProjectProgressHistoryResponse,
+    PMSimpleWorkProgressRowOut,
+)
 from app.schemas.procurement import PurchaseOrderResponse
 
 
@@ -416,6 +420,41 @@ def _build_story_shell(
     return story
 
 
+def _pm_simple_operational_status_label(value: str | None) -> str:
+    mapping = {
+        "nuevo": "Nuevo",
+        "cotizado": "Cotizado",
+        "autorizado": "Autorizado",
+        "en_proceso": "En proceso",
+        "pausado": "Pausado",
+        "pendiente_cliente": "Pendiente de cliente",
+        "listo_entrega": "Listo para entrega",
+        "entregado": "Entregado",
+        "cobrado": "Cobrado",
+        "cancelado": "Cancelado",
+    }
+    return mapping.get(_text(value, "").lower(), _text(value, "Nuevo"))
+
+
+def _pm_simple_semaforo_label(value: str | None) -> str:
+    mapping = {
+        "a_tiempo": "A tiempo",
+        "en_riesgo": "En riesgo",
+        "atrasado": "Atrasado",
+        "sin_fecha": "Sin fecha",
+    }
+    return mapping.get(_text(value, "").lower(), _text(value, "Sin fecha"))
+
+
+def _compact_url(value: str | None, max_length: int = 72) -> str:
+    text = _text(value, "")
+    if not text:
+        return "-"
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 3]}..."
+
+
 def _render_pdf(story_builder):
     rl = _load_reportlab()
     styles = _build_styles(rl)
@@ -635,6 +674,89 @@ def build_crm_quote_pdf(company: Empresa, quote: CRMCotizacionResponse) -> tuple
     pdf_bytes = _render_pdf(story_builder)
     folio = _sanitize_filename(quote.folio, "cotizacion")
     return pdf_bytes, f"cotizacion-{folio}.pdf"
+
+
+def build_pm_simple_progress_report_pdf(
+    company: Empresa,
+    project: PMProyecto,
+    progress_row: PMSimpleWorkProgressRowOut,
+    history: PMSimpleProjectProgressHistoryResponse,
+) -> tuple[bytes, str]:
+    subtitle = "Seguimiento operativo del trabajo."
+
+    def story_builder(rl: dict, styles: dict):
+        intro_rows = [
+            ("Cliente", _text(progress_row.cliente_nombre, "Sin cliente")),
+            ("Trabajo", _text(progress_row.nombre, "Sin nombre")),
+            ("Codigo", _text(progress_row.codigo, "Sin codigo")),
+            ("Responsable", _text(progress_row.responsable_nombre, "Sin responsable")),
+            ("Estado operativo", _pm_simple_operational_status_label(progress_row.estado_operativo)),
+            ("Avance", _percent(progress_row.avance_porcentaje)),
+        ]
+        secondary_rows = [
+            ("Fecha compromiso", _date_label(progress_row.fecha_compromiso)),
+            ("Semaforo", _pm_simple_semaforo_label(progress_row.semaforo)),
+            ("Proximo paso", _text(progress_row.proximo_paso, "Sin siguiente paso")),
+            ("Bloqueo actual", _text(progress_row.bloqueo_actual, "Sin bloqueo")),
+            ("Importe pactado", _money(progress_row.presupuesto_estimado) if progress_row.presupuesto_estimado is not None else "-"),
+            ("Pendiente de cobro", _money(progress_row.saldo_pendiente) if progress_row.saldo_pendiente is not None else "-"),
+            ("Ultima actualizacion", _date_label(progress_row.ultima_actualizacion_avance_at)),
+        ]
+        history_rows = [
+            [
+                _date_label(item.created_at),
+                _text(item.usuario_nombre, "Sin usuario"),
+                _text(item.comentario, "Sin comentario"),
+                _percent(item.avance_porcentaje),
+                _pm_simple_operational_status_label(item.estado_operativo),
+                _text(item.proximo_paso, "Sin siguiente paso"),
+                _text(item.bloqueo_actual, "Sin bloqueo"),
+                _compact_url(item.evidencia_url),
+            ]
+            for item in history.items
+        ]
+
+        story = []
+        story.extend(_build_company_header(rl, styles, company, "Reporte de avance", subtitle))
+        story.append(rl["Spacer"](1, 4 * rl["mm"]))
+        story.append(_build_meta_table(rl, styles, intro_rows, col_widths=[40 * rl["mm"], 49 * rl["mm"]]))
+        story.append(rl["Spacer"](1, 3 * rl["mm"]))
+        story.append(_build_meta_table(rl, styles, secondary_rows, col_widths=[40 * rl["mm"], 138 * rl["mm"]]))
+        story.append(rl["Spacer"](1, 4 * rl["mm"]))
+        story.append(_paragraph(rl, "Historial de avances", styles["section"]))
+        story.append(
+            _build_line_table(
+                rl,
+                styles,
+                ["Fecha", "Usuario", "Comentario", "Avance", "Estado", "Proximo paso", "Bloqueo", "Evidencia"],
+                history_rows or [["-", "-", "No hay avances registrados", "-", "-", "-", "-", "-"]],
+                col_widths=[
+                    20 * rl["mm"],
+                    22 * rl["mm"],
+                    44 * rl["mm"],
+                    16 * rl["mm"],
+                    22 * rl["mm"],
+                    24 * rl["mm"],
+                    18 * rl["mm"],
+                    22 * rl["mm"],
+                ],
+            )
+        )
+        story.append(rl["Spacer"](1, 4 * rl["mm"]))
+        story.append(_paragraph(rl, "Notas operativas", styles["section"]))
+        notes_parts = [
+            f"Trabajo: {_text(project.nombre, 'Sin nombre')}",
+            f"Descripcion: {_text(project.descripcion, 'Sin descripcion')}",
+            "",
+            "Este reporte resume el avance operativo del trabajo. No es una factura fiscal.",
+        ]
+        story.append(_paragraph(rl, "\n".join(notes_parts), styles["body"]))
+        return story
+
+    pdf_bytes = _render_pdf(story_builder)
+    filename_source = progress_row.codigo or progress_row.nombre or project.codigo or project.nombre
+    filename = _sanitize_filename(filename_source, "avance-trabajo")
+    return pdf_bytes, f"avance-trabajo-{filename}.pdf"
 
 
 def _string_contains(value: str | None, token: str) -> bool:

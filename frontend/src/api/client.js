@@ -1171,6 +1171,49 @@ export function getPmDashboard({ token, empresaId }) {
 }
 
 
+export function getPmSimpleSummary({ token, empresaId }) {
+  return apiRequest("/pm/simple/summary", { token, empresaId });
+}
+
+
+export function listPmSimpleWorkProgress({ token, empresaId, filters = {} }) {
+  const query = new URLSearchParams();
+  appendQueryValue(query, "search", filters.search);
+  appendQueryValue(query, "estado_operativo", filters.estado_operativo);
+  appendQueryValue(query, "responsable_id", filters.responsable_id);
+  appendQueryValue(query, "cliente", filters.cliente);
+  appendQueryValue(query, "atrasados", filters.atrasados);
+  appendQueryValue(query, "limit", filters.limit);
+  appendQueryValue(query, "offset", filters.offset);
+  const suffix = query.toString();
+  return apiRequest(`/pm/simple/work-progress${suffix ? `?${suffix}` : ""}`, { token, empresaId });
+}
+
+
+export function updatePmSimpleProjectProgress({ projectId, token, empresaId, payload }) {
+  return apiRequest(`/pm/simple/projects/${projectId}/progress`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function listPmSimpleProjectProgress({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/simple/projects/${projectId}/progress`, { token, empresaId });
+}
+
+
+export function downloadPmSimpleProgressReportPdf({ projectId, token, empresaId }) {
+  return downloadFileRequest(`/pm/simple/projects/${projectId}/progress-report/pdf`, {
+    token,
+    empresaId,
+    filenameFallback: "avance-trabajo.pdf",
+  });
+}
+
+
 export function getPmExecutiveReport({ token, empresaId, params = {} }) {
   const query = new URLSearchParams();
   appendQueryValue(query, "estatus", params?.estatus);

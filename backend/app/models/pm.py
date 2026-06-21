@@ -1,10 +1,24 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
 from app.models.mixins import TimestampMixin, UUIDPrimaryKeyMixin
+
+
+PM_SIMPLE_OPERATIONAL_STATUS = (
+    "nuevo",
+    "cotizado",
+    "autorizado",
+    "en_proceso",
+    "pausado",
+    "pendiente_cliente",
+    "listo_entrega",
+    "entregado",
+    "cobrado",
+    "cancelado",
+)
 
 
 class EmpresaPMConfig(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -29,9 +43,16 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "presupuesto_estimado IS NULL OR presupuesto_estimado >= 0",
             name="ck_pm_proyectos_presupuesto_non_negative",
         ),
+        CheckConstraint(
+            "estado_operativo IN ('nuevo', 'cotizado', 'autorizado', 'en_proceso', 'pausado', "
+            "'pendiente_cliente', 'listo_entrega', 'entregado', 'cobrado', 'cancelado')",
+            name="ck_pm_proyectos_estado_operativo",
+        ),
         Index("ix_pm_proyectos_empresa_id", "empresa_id"),
         Index("ix_pm_proyectos_estatus", "estatus"),
+        Index("ix_pm_proyectos_estado_operativo", "estado_operativo"),
         Index("ix_pm_proyectos_activo", "activo"),
+        Index("ix_pm_proyectos_ultima_actualizacion_avance_at", "ultima_actualizacion_avance_at"),
         Index(
             "uq_pm_proyectos_empresa_codigo",
             "empresa_id",
@@ -49,10 +70,19 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     tipo_proyecto: Mapped[str | None] = mapped_column(String(80), nullable=True)
     estatus: Mapped[str] = mapped_column(String(20), nullable=False, default="borrador", server_default="borrador")
     prioridad: Mapped[str] = mapped_column(String(20), nullable=False, default="media", server_default="media")
+    estado_operativo: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="nuevo",
+        server_default="nuevo",
+    )
     fecha_inicio: Mapped[date | None] = mapped_column(Date(), nullable=True)
     fecha_fin_planificada: Mapped[date | None] = mapped_column(Date(), nullable=True)
     fecha_fin_real: Mapped[date | None] = mapped_column(Date(), nullable=True)
     porcentaje_avance: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    proximo_paso: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bloqueo_actual: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ultima_actualizacion_avance_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     responsable_user_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
     responsable_nombre_snapshot: Mapped[str | None] = mapped_column(String(160), nullable=True)
     cliente_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
@@ -71,6 +101,7 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     external_invites = relationship("PMInvitadoExterno", back_populates="proyecto", cascade="all, delete-orphan")
     portal_access_logs = relationship("PMPortalAccessLog", back_populates="proyecto", cascade="all, delete-orphan")
     alerts = relationship("PMAlerta", back_populates="proyecto", cascade="all, delete-orphan")
+    work_progress_entries = relationship("PMTrabajoAvance", back_populates="proyecto", cascade="all, delete-orphan")
     work_calendars = relationship("PMCalendarioLaboral", back_populates="proyecto", cascade="all, delete-orphan")
     baselines = relationship("PMProyectoLineaBase", back_populates="proyecto", cascade="all, delete-orphan")
     changes = relationship("PMCambioProyecto", back_populates="proyecto", cascade="all, delete-orphan")
@@ -87,6 +118,46 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     crm_cliente = relationship("CRMCliente", foreign_keys=[crm_cliente_id])
     crm_contacto = relationship("CRMContacto", foreign_keys=[crm_contacto_id])
+
+
+class PMTrabajoAvance(UUIDPrimaryKeyMixin, Base):
+    __tablename__ = "pm_trabajo_avances"
+    __table_args__ = (
+        CheckConstraint("avance_porcentaje >= 0 AND avance_porcentaje <= 100", name="ck_pm_trabajo_avances_porcentaje"),
+        CheckConstraint(
+            "estado_operativo IN ('nuevo', 'cotizado', 'autorizado', 'en_proceso', 'pausado', "
+            "'pendiente_cliente', 'listo_entrega', 'entregado', 'cobrado', 'cancelado')",
+            name="ck_pm_trabajo_avances_estado_operativo",
+        ),
+        Index("ix_pm_trabajo_avances_empresa_id", "empresa_id"),
+        Index("ix_pm_trabajo_avances_proyecto_id", "proyecto_id"),
+        Index("ix_pm_trabajo_avances_usuario_id", "usuario_id"),
+        Index("ix_pm_trabajo_avances_estado_operativo", "estado_operativo"),
+        Index("ix_pm_trabajo_avances_created_at", "created_at"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    usuario_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    comentario: Mapped[str] = mapped_column(Text, nullable=False)
+    avance_porcentaje: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0, server_default="0")
+    estado_operativo: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="nuevo",
+        server_default="nuevo",
+    )
+    proximo_paso: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    bloqueo_actual: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fecha_compromiso: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    evidencia_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    proyecto = relationship("PMProyecto", back_populates="work_progress_entries")
 
 
 class PMProyectoMiembro(UUIDPrimaryKeyMixin, TimestampMixin, Base):

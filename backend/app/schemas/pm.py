@@ -172,6 +172,81 @@ class PMProyectoListResponse(BaseModel):
     offset: int
 
 
+class PMSimpleProjectProgressCreate(BaseModel):
+    comentario: str = Field(min_length=1)
+    avance_porcentaje: Decimal | None = Field(default=None, ge=0, le=100)
+    estado_operativo: str | None = Field(default=None, min_length=4, max_length=30)
+    proximo_paso: str | None = Field(default=None, max_length=255)
+    bloqueo_actual: str | None = None
+    fecha_compromiso: date | None = None
+    evidencia_url: str | None = Field(default=None, max_length=500)
+
+
+class PMSimpleProjectProgressOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    usuario_id: str | None = None
+    usuario_nombre: str | None = None
+    comentario: str
+    avance_porcentaje: Decimal = Decimal("0")
+    estado_operativo: str
+    proximo_paso: str | None = None
+    bloqueo_actual: str | None = None
+    fecha_compromiso: date | None = None
+    evidencia_url: str | None = None
+    created_at: datetime
+
+
+class PMSimpleProjectProgressHistoryResponse(BaseModel):
+    items: list[PMSimpleProjectProgressOut] = Field(default_factory=list)
+
+
+class PMSimpleWorkProgressRowOut(BaseModel):
+    proyecto_id: str
+    codigo: str | None = None
+    nombre: str
+    cliente_nombre: str | None = None
+    responsable_id: str | None = None
+    responsable_nombre: str | None = None
+    estado_operativo: str
+    avance_porcentaje: Decimal = Decimal("0")
+    fecha_compromiso: date | None = None
+    proximo_paso: str | None = None
+    bloqueo_actual: str | None = None
+    ultima_actualizacion_avance_at: datetime | None = None
+    presupuesto_estimado: Decimal | None = None
+    costo_real: Decimal | None = None
+    saldo_pendiente: Decimal | None = None
+    semaforo: str = "sin_fecha"
+
+
+class PMSimpleWorkProgressListResponse(BaseModel):
+    items: list[PMSimpleWorkProgressRowOut] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+
+
+class PMSimpleSummaryOut(BaseModel):
+    trabajos_totales: int = 0
+    en_proceso: int = 0
+    atrasados: int = 0
+    pendientes_cliente: int = 0
+    listos_entrega: int = 0
+    entregados: int = 0
+    cobrados: int = 0
+    avance_promedio: Decimal = Decimal("0")
+    monto_total_trabajos: Decimal = Decimal("0")
+    monto_pendiente_cobro: Decimal = Decimal("0")
+
+
+class PMSimpleProjectProgressMutationOut(BaseModel):
+    avance: PMSimpleProjectProgressOut
+    proyecto: PMSimpleWorkProgressRowOut
+    summary: PMSimpleSummaryOut
+
+
 class PMTareaCreate(BaseModel):
     titulo: str = Field(min_length=1, max_length=180)
     descripcion: str | None = None

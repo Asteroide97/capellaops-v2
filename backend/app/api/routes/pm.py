@@ -89,6 +89,11 @@ from app.schemas.pm import (
     PMProyectoOut,
     PMProjectCrmLinkRequest,
     PMProyectoUpdate,
+    PMSimpleProjectProgressCreate,
+    PMSimpleProjectProgressHistoryResponse,
+    PMSimpleProjectProgressMutationOut,
+    PMSimpleSummaryOut,
+    PMSimpleWorkProgressListResponse,
     PMTarifaHoraRolCreate,
     PMTarifaHoraRolListResponse,
     PMTarifaHoraRolOut,
@@ -171,6 +176,7 @@ from app.services.pm import (
     get_pm_context,
     get_pm_dashboard,
     get_pm_executive_report,
+    get_simple_pm_summary,
     get_portal_project,
     get_project_baseline,
     get_project_baseline_vs_actual,
@@ -200,6 +206,8 @@ from app.services.pm import (
     list_project_time_entries,
     list_project_material_plan,
     list_project_members,
+    list_simple_project_progress_history,
+    list_simple_work_progress,
     list_task_dependencies,
     list_projects,
     link_project_to_crm,
@@ -245,12 +253,13 @@ from app.services.pm import (
     archive_project_baseline,
     mark_estimation_collected,
     mark_estimation_sent,
+    create_simple_project_progress,
     submit_project_requisition,
     submit_project_change,
     submit_estimation,
     unlink_project_from_crm,
 )
-from app.services.documents_pdf import build_pm_estimation_pdf
+from app.services.documents_pdf import build_pm_estimation_pdf, build_pm_simple_progress_report_pdf
 from app.schemas.procurement import RequisitionListResponse, RequisitionResponse
 from app.services.storage import StorageConfigurationError
 
@@ -343,6 +352,108 @@ def pm_executive_report(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/simple/work-progress", response_model=PMSimpleWorkProgressListResponse)
+def get_simple_work_progress_endpoint(
+    search: str | None = None,
+    estado_operativo: str | None = None,
+    responsable_id: str | None = None,
+    cliente: str | None = None,
+    atrasados: bool | None = None,
+    limit: int = Query(default=25, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMSimpleWorkProgressListResponse:
+    return list_simple_work_progress(
+        db,
+        pm_context,
+        search=search,
+        estado_operativo=estado_operativo,
+        responsable_id=responsable_id,
+        cliente=cliente,
+        atrasados=atrasados,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post("/simple/projects/{project_id}/progress", response_model=PMSimpleProjectProgressMutationOut, status_code=status.HTTP_201_CREATED)
+def create_simple_project_progress_endpoint(
+    project_id: str,
+    payload: PMSimpleProjectProgressCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMSimpleProjectProgressMutationOut:
+    return run_pm_write(
+        db,
+        "create_simple_project_progress",
+        lambda: create_simple_project_progress(
+            db,
+            pm_context,
+            project_id=project_id,
+            comentario=payload.comentario,
+            avance_porcentaje=payload.avance_porcentaje,
+            estado_operativo=payload.estado_operativo,
+            proximo_paso=payload.proximo_paso,
+            bloqueo_actual=payload.bloqueo_actual,
+            fecha_compromiso=payload.fecha_compromiso,
+            evidencia_url=payload.evidencia_url,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/simple/projects/{project_id}/progress", response_model=PMSimpleProjectProgressHistoryResponse)
+def get_simple_project_progress_history_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMSimpleProjectProgressHistoryResponse:
+    return list_simple_project_progress_history(
+        db,
+        pm_context,
+        project_id=project_id,
+    )
+
+
+@router.get("/simple/projects/{project_id}/progress-report/pdf")
+def get_simple_project_progress_report_pdf_endpoint(
+    project_id: str,
+    context: TenantContext = Depends(get_tenant_context),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> Response:
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    work_progress = list_simple_work_progress(
+        db,
+        pm_context,
+        limit=1000,
+        offset=0,
+    )
+    progress_row = next((item for item in work_progress.items if item.proyecto_id == project_id), None)
+    if progress_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No se encontró el trabajo solicitado.",
+        )
+    history = list_simple_project_progress_history(db, pm_context, project_id=project_id)
+    pdf_bytes, filename = build_pm_simple_progress_report_pdf(context.empresa, project, progress_row, history)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/simple/summary", response_model=PMSimpleSummaryOut)
+def get_simple_pm_summary_endpoint(
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMSimpleSummaryOut:
+    return get_simple_pm_summary(db, pm_context)
 
 
 @router.get("/projects", response_model=PMProyectoListResponse)

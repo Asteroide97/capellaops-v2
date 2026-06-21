@@ -39,6 +39,7 @@ from app.models.pm import (
     PMProyectoMaterialPlan,
     PMProyecto,
     PMProyectoMiembro,
+    PMTrabajoAvance,
     PMTarifaHoraRol,
     PMTarifaHoraUsuario,
     PMSubtarea,
@@ -110,6 +111,12 @@ from app.schemas.pm import (
     PMProyectoMiembroOut,
     PMProyectoOut,
     PMProyectoListResponse,
+    PMSimpleProjectProgressHistoryResponse,
+    PMSimpleProjectProgressMutationOut,
+    PMSimpleProjectProgressOut,
+    PMSimpleSummaryOut,
+    PMSimpleWorkProgressListResponse,
+    PMSimpleWorkProgressRowOut,
     PMRescheduleAffectedTaskOut,
     PMRescheduleImpactOut,
     PMStatusCount,
@@ -182,6 +189,19 @@ PM_BASELINE_STATUS = {"activa", "archivada", "sustituida", "cancelada"}
 PM_CHANGE_TYPES = {"fecha", "alcance", "presupuesto", "partida", "tarea_critica", "documento", "otro"}
 PM_CHANGE_STATUS = {"borrador", "pendiente_aprobacion", "aprobado", "rechazado", "aplicado", "cancelado"}
 PM_ESTIMATION_STATUS = {"borrador", "enviada_aprobacion", "aprobada", "rechazada", "enviada_cliente", "cobrada", "cancelada"}
+PM_SIMPLE_OPERATIONAL_STATUS = {
+    "nuevo",
+    "cotizado",
+    "autorizado",
+    "en_proceso",
+    "pausado",
+    "pendiente_cliente",
+    "listo_entrega",
+    "entregado",
+    "cobrado",
+    "cancelado",
+}
+PM_SIMPLE_FINAL_OPERATIONAL_STATUS = {"entregado", "cobrado", "cancelado"}
 ZERO = Decimal("0")
 WORKDAY_FIELDS = {
     0: "lunes",
@@ -261,6 +281,13 @@ def normalize_project_status(value: str | None) -> str:
     normalized = normalize_required_text(value or "", "Estatus").lower()
     if normalized not in ALLOWED_PROJECT_STATUS:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estatus de proyecto invalido.")
+    return normalized
+
+
+def normalize_operational_status(value: str | None) -> str:
+    normalized = normalize_required_text(value or "", "Estado operativo").lower()
+    if normalized not in PM_SIMPLE_OPERATIONAL_STATUS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estado operativo invalido.")
     return normalized
 
 
@@ -1293,6 +1320,406 @@ def serialize_project(db: Session, project: PMProyecto) -> PMProyectoOut:
         task_stats=build_task_stats(db, project.empresa_id, project.id),
         comments=[serialize_comment(item) for item in comments],
     )
+
+
+def get_simple_project_cliente_nombre(project: PMProyecto) -> str | None:
+    return normalize_optional_text(project.cliente_nombre_snapshot) or (
+        project.crm_cliente.nombre_comercial if project.crm_cliente else None
+    )
+
+
+def get_simple_project_presupuesto(project: PMProyecto) -> Decimal | None:
+    summary = project.material_cost_summary
+    if summary is not None:
+        detailed_sale_budget = quantize_money(decimal_or_zero(summary.presupuesto_detallado_venta))
+        if detailed_sale_budget > ZERO:
+            return detailed_sale_budget
+        summary_budget = quantize_money(decimal_or_zero(summary.presupuesto_estimado))
+        if summary_budget > ZERO:
+            return summary_budget
+    project_budget = quantize_money(decimal_or_zero(project.presupuesto_estimado))
+    return project_budget if project_budget > ZERO else None
+
+
+def get_simple_project_costo_real(project: PMProyecto) -> Decimal | None:
+    if project.material_cost_summary is None:
+        return None
+    return quantize_money(decimal_or_zero(project.material_cost_summary.costo_total_real))
+
+
+def calculate_simple_work_progress_semaforo(
+    *,
+    fecha_compromiso: date | None,
+    estado_operativo: str | None,
+    avance_porcentaje: Decimal,
+    today: date,
+) -> str:
+    normalized_status = str(estado_operativo or "nuevo").lower()
+    if fecha_compromiso is None:
+        return "sin_fecha"
+    if fecha_compromiso < today and normalized_status not in PM_SIMPLE_FINAL_OPERATIONAL_STATUS:
+        return "atrasado"
+    days_until_due = (fecha_compromiso - today).days
+    if 0 <= days_until_due <= 3 and quantize_percentage(decimal_or_zero(avance_porcentaje)) < Decimal("80"):
+        return "en_riesgo"
+    return "a_tiempo"
+
+
+def build_simple_project_estimation_stats_map(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_ids: list[str],
+) -> dict[str, dict[str, Decimal | int]]:
+    if not project_ids:
+        return {}
+
+    approved_statuses = ("aprobada", "enviada_cliente", "cobrada")
+    rows = db.execute(
+        select(
+            PMEstimacion.proyecto_id,
+            func.count(PMEstimacion.id),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (PMEstimacion.estatus.in_(approved_statuses), PMEstimacion.monto_aprobado),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+            func.coalesce(func.sum(PMEstimacion.monto_cobrado), 0),
+        )
+        .where(
+            PMEstimacion.empresa_id == empresa_id,
+            PMEstimacion.proyecto_id.in_(project_ids),
+            PMEstimacion.activo == True,
+            PMEstimacion.estatus != "cancelada",
+        )
+        .group_by(PMEstimacion.proyecto_id)
+    ).all()
+
+    stats: dict[str, dict[str, Decimal | int]] = {}
+    for project_id, estimations_count, total_aprobado, total_cobrado in rows:
+        approved_amount = quantize_money(decimal_or_zero(total_aprobado))
+        collected_amount = quantize_money(decimal_or_zero(total_cobrado))
+        stats[project_id] = {
+            "estimations_count": int(estimations_count or 0),
+            "total_aprobado": approved_amount,
+            "total_cobrado": collected_amount,
+            "saldo_pendiente": quantize_money(max(ZERO, approved_amount - collected_amount)),
+        }
+    return stats
+
+
+def serialize_simple_work_progress_row(
+    project: PMProyecto,
+    *,
+    estimation_stats: dict[str, Decimal | int] | None = None,
+    today: date | None = None,
+) -> PMSimpleWorkProgressRowOut:
+    today = today or today_utc()
+    avance_porcentaje = quantize_percentage(decimal_or_zero(project.porcentaje_avance))
+    fecha_compromiso = project.fecha_fin_planificada
+    saldo_pendiente = None
+    if estimation_stats and int(estimation_stats.get("estimations_count") or 0) > 0:
+        saldo_pendiente = quantize_money(decimal_or_zero(estimation_stats.get("saldo_pendiente")))
+
+    estado_operativo = str(project.estado_operativo or "nuevo").lower()
+    return PMSimpleWorkProgressRowOut(
+        proyecto_id=project.id,
+        codigo=project.codigo,
+        nombre=project.nombre,
+        cliente_nombre=get_simple_project_cliente_nombre(project),
+        responsable_id=project.responsable_user_id,
+        responsable_nombre=project.responsable_nombre_snapshot,
+        estado_operativo=estado_operativo,
+        avance_porcentaje=avance_porcentaje,
+        fecha_compromiso=fecha_compromiso,
+        proximo_paso=project.proximo_paso,
+        bloqueo_actual=project.bloqueo_actual,
+        ultima_actualizacion_avance_at=project.ultima_actualizacion_avance_at or project.updated_at,
+        presupuesto_estimado=get_simple_project_presupuesto(project),
+        costo_real=get_simple_project_costo_real(project),
+        saldo_pendiente=saldo_pendiente,
+        semaforo=calculate_simple_work_progress_semaforo(
+            fecha_compromiso=fecha_compromiso,
+            estado_operativo=estado_operativo,
+            avance_porcentaje=avance_porcentaje,
+            today=today,
+        ),
+    )
+
+
+def build_simple_work_progress_rows(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    search: str | None = None,
+    estado_operativo: str | None = None,
+    responsable_id: str | None = None,
+    cliente: str | None = None,
+    atrasados: bool | None = None,
+) -> list[PMSimpleWorkProgressRowOut]:
+    query = (
+        select(PMProyecto)
+        .options(
+            selectinload(PMProyecto.crm_cliente),
+            selectinload(PMProyecto.material_cost_summary),
+        )
+        .where(
+            PMProyecto.empresa_id == pm_context.empresa_id,
+            PMProyecto.activo == True,
+        )
+    )
+
+    if search:
+        pattern = f"%{search.strip().lower()}%"
+        query = query.where(
+            or_(
+                func.lower(func.coalesce(PMProyecto.nombre, "")).like(pattern),
+                func.lower(func.coalesce(PMProyecto.codigo, "")).like(pattern),
+                func.lower(func.coalesce(PMProyecto.descripcion, "")).like(pattern),
+                func.lower(func.coalesce(PMProyecto.cliente_nombre_snapshot, "")).like(pattern),
+            )
+        )
+
+    normalized_operational_status = normalize_operational_status(estado_operativo) if estado_operativo else None
+    if normalized_operational_status:
+        query = query.where(PMProyecto.estado_operativo == normalized_operational_status)
+
+    if responsable_id:
+        get_company_member_by_user_id(db, pm_context.empresa_id, responsable_id)
+        query = query.where(PMProyecto.responsable_user_id == responsable_id)
+
+    projects = db.scalars(query).all()
+    estimation_stats_map = build_simple_project_estimation_stats_map(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_ids=[project.id for project in projects],
+    )
+    today = today_utc()
+    rows = [
+        serialize_simple_work_progress_row(
+            project,
+            estimation_stats=estimation_stats_map.get(project.id),
+            today=today,
+        )
+        for project in projects
+    ]
+
+    if cliente:
+        cliente_pattern = cliente.strip().lower()
+        rows = [row for row in rows if cliente_pattern in str(row.cliente_nombre or "").lower()]
+    if atrasados is True:
+        rows = [row for row in rows if row.semaforo == "atrasado"]
+
+    semaforo_rank = {"atrasado": 0, "en_riesgo": 1, "sin_fecha": 2, "a_tiempo": 3}
+    rows.sort(
+        key=lambda item: (
+            semaforo_rank.get(item.semaforo, 99),
+            item.fecha_compromiso or date.max,
+            item.ultima_actualizacion_avance_at or datetime.min.replace(tzinfo=timezone.utc),
+        )
+    )
+    return rows
+
+
+def build_simple_pm_summary_from_rows(rows: list[PMSimpleWorkProgressRowOut]) -> PMSimpleSummaryOut:
+    total_rows = len(rows)
+    total_progress = sum((decimal_or_zero(item.avance_porcentaje) for item in rows), ZERO)
+    total_budget = sum((decimal_or_zero(item.presupuesto_estimado) for item in rows if item.presupuesto_estimado is not None), ZERO)
+    total_pending = sum((decimal_or_zero(item.saldo_pendiente) for item in rows if item.saldo_pendiente is not None), ZERO)
+    average_progress = quantize_percentage(total_progress / Decimal(total_rows)) if total_rows else ZERO
+    return PMSimpleSummaryOut(
+        trabajos_totales=total_rows,
+        en_proceso=sum(1 for item in rows if item.estado_operativo == "en_proceso"),
+        atrasados=sum(1 for item in rows if item.semaforo == "atrasado"),
+        pendientes_cliente=sum(1 for item in rows if item.estado_operativo == "pendiente_cliente"),
+        listos_entrega=sum(1 for item in rows if item.estado_operativo == "listo_entrega"),
+        entregados=sum(1 for item in rows if item.estado_operativo == "entregado"),
+        cobrados=sum(1 for item in rows if item.estado_operativo == "cobrado"),
+        avance_promedio=average_progress,
+        monto_total_trabajos=quantize_money(total_budget),
+        monto_pendiente_cobro=quantize_money(total_pending),
+    )
+
+
+def serialize_simple_project_progress_entry(
+    progress: PMTrabajoAvance,
+    *,
+    user_name: str | None = None,
+) -> PMSimpleProjectProgressOut:
+    return PMSimpleProjectProgressOut(
+        id=progress.id,
+        empresa_id=progress.empresa_id,
+        proyecto_id=progress.proyecto_id,
+        usuario_id=progress.usuario_id,
+        usuario_nombre=user_name,
+        comentario=progress.comentario,
+        avance_porcentaje=quantize_percentage(decimal_or_zero(progress.avance_porcentaje)),
+        estado_operativo=progress.estado_operativo,
+        proximo_paso=progress.proximo_paso,
+        bloqueo_actual=progress.bloqueo_actual,
+        fecha_compromiso=progress.fecha_compromiso,
+        evidencia_url=progress.evidencia_url,
+        created_at=progress.created_at,
+    )
+
+
+def list_simple_work_progress(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    search: str | None = None,
+    estado_operativo: str | None = None,
+    responsable_id: str | None = None,
+    cliente: str | None = None,
+    atrasados: bool | None = None,
+    limit: int = 25,
+    offset: int = 0,
+) -> PMSimpleWorkProgressListResponse:
+    rows = build_simple_work_progress_rows(
+        db,
+        pm_context,
+        search=search,
+        estado_operativo=estado_operativo,
+        responsable_id=responsable_id,
+        cliente=cliente,
+        atrasados=atrasados,
+    )
+    return PMSimpleWorkProgressListResponse(
+        items=rows[offset : offset + limit],
+        total=len(rows),
+        limit=limit,
+        offset=offset,
+    )
+
+
+def create_simple_project_progress(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+    comentario: str,
+    avance_porcentaje: Decimal | None,
+    estado_operativo: str | None,
+    proximo_paso: str | None,
+    bloqueo_actual: str | None,
+    fecha_compromiso: date | None,
+    evidencia_url: str | None,
+    ip_address: str | None,
+) -> PMSimpleProjectProgressMutationOut:
+    ensure_pm_project_edit_access(
+        pm_context,
+        "No tienes permiso para actualizar el avance operativo de este trabajo.",
+    )
+    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    comment_text = normalize_required_text(comentario, "Comentario")
+
+    if avance_porcentaje is not None:
+        if not (ZERO <= decimal_or_zero(avance_porcentaje) <= Decimal("100")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El avance debe estar entre 0 y 100.",
+            )
+        project.porcentaje_avance = quantize_percentage(decimal_or_zero(avance_porcentaje))
+    if estado_operativo is not None:
+        project.estado_operativo = normalize_operational_status(estado_operativo)
+    if proximo_paso is not None:
+        project.proximo_paso = normalize_optional_text(proximo_paso)
+    if bloqueo_actual is not None:
+        project.bloqueo_actual = normalize_optional_text(bloqueo_actual)
+    if fecha_compromiso is not None:
+        project.fecha_fin_planificada = fecha_compromiso
+
+    project.ultima_actualizacion_avance_at = utcnow()
+    project.updated_by = pm_context.user.id
+
+    progress = PMTrabajoAvance(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=project.id,
+        usuario_id=pm_context.user.id,
+        comentario=comment_text,
+        avance_porcentaje=quantize_percentage(decimal_or_zero(project.porcentaje_avance)),
+        estado_operativo=str(project.estado_operativo or "nuevo").lower(),
+        proximo_paso=normalize_optional_text(project.proximo_paso),
+        bloqueo_actual=normalize_optional_text(project.bloqueo_actual),
+        fecha_compromiso=project.fecha_fin_planificada,
+        evidencia_url=normalize_optional_text(evidencia_url),
+    )
+    db.add(progress)
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.simple.progress.create",
+            entity_name="pm_trabajo_avance",
+            entity_id=project.id,
+            ip_address=ip_address,
+            metadata_json={
+                "estado_operativo": project.estado_operativo,
+                "avance_porcentaje": float(decimal_or_zero(project.porcentaje_avance)),
+                "fecha_compromiso": project.fecha_fin_planificada.isoformat() if project.fecha_fin_planificada else None,
+            },
+        )
+    )
+    db.flush()
+    db.refresh(project)
+
+    row = serialize_simple_work_progress_row(
+        project,
+        estimation_stats=build_simple_project_estimation_stats_map(
+            db,
+            empresa_id=pm_context.empresa_id,
+            project_ids=[project.id],
+        ).get(project.id),
+        today=today_utc(),
+    )
+    summary = build_simple_pm_summary_from_rows(build_simple_work_progress_rows(db, pm_context))
+    return PMSimpleProjectProgressMutationOut(
+        avance=serialize_simple_project_progress_entry(progress, user_name=pm_context.user.full_name),
+        proyecto=row,
+        summary=summary,
+    )
+
+
+def list_simple_project_progress_history(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> PMSimpleProjectProgressHistoryResponse:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    progress_rows = db.scalars(
+        select(PMTrabajoAvance)
+        .where(
+            PMTrabajoAvance.empresa_id == pm_context.empresa_id,
+            PMTrabajoAvance.proyecto_id == project_id,
+        )
+        .order_by(desc(PMTrabajoAvance.created_at))
+    ).all()
+    user_ids = sorted({row.usuario_id for row in progress_rows if row.usuario_id})
+    user_map: dict[str, str] = {}
+    if user_ids:
+        user_map = {
+            row.id: row.full_name
+            for row in db.scalars(select(Usuario).where(Usuario.id.in_(user_ids))).all()
+        }
+    return PMSimpleProjectProgressHistoryResponse(
+        items=[
+            serialize_simple_project_progress_entry(progress, user_name=user_map.get(progress.usuario_id or ""))
+            for progress in progress_rows
+        ]
+    )
+
+
+def get_simple_pm_summary(
+    db: Session,
+    pm_context: PMContext,
+) -> PMSimpleSummaryOut:
+    rows = build_simple_work_progress_rows(db, pm_context)
+    return build_simple_pm_summary_from_rows(rows)
 
 
 def list_projects(
