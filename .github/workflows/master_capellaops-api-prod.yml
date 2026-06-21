@@ -93,6 +93,10 @@ jobs:
             --name "${AZURE_WEBAPP_NAME}" \
             --startup-file "${AZURE_WEBAPP_STARTUP_COMMAND}"
 
+      - name: Wait for Azure SCM restart
+        shell: bash
+        run: sleep 90
+
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
