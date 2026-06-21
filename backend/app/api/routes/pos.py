@@ -11,7 +11,7 @@ from app.db.session import get_db
 from app.schemas.pos import (
     PosActiveShiftResponse,
     PosSaleAdjustmentListResponse,
-    PosSaleApprovalDecisionRequest,
+    SaleApprovalDecisionRequest,
     PosSaleApprovalItem,
     PosSaleApprovalListResponse,
     PosSaleApprovalRequestResponse,
@@ -511,7 +511,7 @@ def get_sale_approvals_endpoint(
 def approve_sale_approval_endpoint(
     sale_id: str,
     approval_id: str,
-    payload: PosSaleApprovalDecisionRequest,
+    payload: SaleApprovalDecisionRequest,
     request: Request,
     context: TenantContext = Depends(get_pos_context),
     db: Session = Depends(get_db),
@@ -536,7 +536,7 @@ def approve_sale_approval_endpoint(
 def reject_sale_approval_endpoint(
     sale_id: str,
     approval_id: str,
-    payload: PosSaleApprovalDecisionRequest,
+    payload: SaleApprovalDecisionRequest,
     request: Request,
     context: TenantContext = Depends(get_pos_context),
     db: Session = Depends(get_db),
