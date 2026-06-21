@@ -858,3 +858,5 @@ def sale_ticket(
 ) -> PosTicketResponse:
     sale = get_sale_for_company(db, context.empresa.id, sale_id)
     return get_sale_ticket(db, sale)
+
+# POS approval schema compatibility redeploy marker
