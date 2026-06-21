@@ -79,8 +79,12 @@ class SaleApprovalRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=2000)
 
 
-class SaleApprovalDecisionRequest(BaseModel):
+class PosSaleApprovalDecisionRequest(BaseModel):
     note: str | None = Field(default=None, max_length=2000)
+
+
+class SaleApprovalDecisionRequest(PosSaleApprovalDecisionRequest):
+    pass
 
 
 class SaleCrmLinkRequest(BaseModel):
