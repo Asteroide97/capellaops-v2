@@ -29,6 +29,14 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Validate backend
+        working-directory: backend
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m compileall app
+
       - name: Prepare backend deploy package
         shell: bash
         run: |
@@ -47,20 +55,6 @@ jobs:
             backend/ "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/"
           test -f "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/requirements.txt"
           test -d "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/app"
-
-      - name: Build backend virtual environment locally
-        shell: bash
-        run: |
-          python -m venv "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/antenv"
-          "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/antenv/bin/python" -m pip install --upgrade pip
-          "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/antenv/bin/python" -m pip install -r "${{ env.AZURE_WEBAPP_PACKAGE_PATH }}/requirements.txt"
-
-      - name: Validate packaged backend
-        shell: bash
-        working-directory: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
-        run: |
-          antenv/bin/python -m compileall app
-          antenv/bin/python -c "import uvicorn; print(uvicorn.__version__)"
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -86,7 +80,7 @@ jobs:
           az webapp config appsettings set \
             --resource-group "${{ steps.azure-resource-group.outputs.resource_group }}" \
             --name "${AZURE_WEBAPP_NAME}" \
-            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false ENABLE_ORYX_BUILD=false
+            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true ENABLE_ORYX_BUILD=true
 
           az webapp config set \
             --resource-group "${{ steps.azure-resource-group.outputs.resource_group }}" \
