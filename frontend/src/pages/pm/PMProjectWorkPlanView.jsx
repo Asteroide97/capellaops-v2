@@ -310,13 +310,13 @@ export default function PMProjectWorkPlanView({
       <section className="pm-workplan-stack">
         <div className="pm-workplan-toolbar">
           <div className="pm-workplan-toolbar-copy">
-            <strong>Plan de trabajo</strong>
-            <span>Tareas, fechas, responsables y prerrequisitos.</span>
+            <strong>Cronograma y etapas</strong>
+            <span>Fechas, responsables, bloqueos y avance del trabajo.</span>
           </div>
           <div className="inventory-actions inventory-actions-wrap">{headerActions}</div>
         </div>
 
-        <DataCard subtitle="La tabla y el cronograma se activan cuando existe plan de trabajo." title="Plan de trabajo">
+        <DataCard subtitle="El Gantt y la tabla se activan cuando este trabajo ya tiene etapas o tareas." title="Cronograma del trabajo">
           <EmptyState
             action={(
               canEditTasks ? (
@@ -375,8 +375,8 @@ export default function PMProjectWorkPlanView({
     <section className="pm-workplan-stack">
       <div className="pm-workplan-toolbar">
         <div className="pm-workplan-toolbar-copy">
-          <strong>Plan de trabajo</strong>
-          <span>Tareas, fechas, responsables y prerrequisitos.</span>
+          <strong>Cronograma y etapas</strong>
+          <span>Fechas, responsables, avance y bloqueos del trabajo.</span>
         </div>
         <div className="inventory-actions inventory-actions-wrap">{headerActions}</div>
       </div>
@@ -495,13 +495,14 @@ export default function PMProjectWorkPlanView({
           countLabel={tasksCountLabel}
           defaultOpen
           storageKey={`pm.workplan.timeline.expanded.${projectId}`}
-          subtitle="Consulta fechas, dependencias, ruta crítica y sugerencias de reprogramación."
-          title="Cronograma del proyecto"
+          subtitle="Gantt simple conectado a las tareas reales del trabajo."
+          title="Gantt del trabajo"
         >
           <PMProjectGanttLite
             canEditTask={canEditTasks}
             embedded
             onApplySuggestedDates={onApplySuggestedDates}
+            onEditTask={onEditTask}
             onEditTaskDates={onEditTaskDates}
             onSelectTask={onSelectTask}
             onViewTaskDetail={openTaskDetail}
@@ -516,12 +517,12 @@ export default function PMProjectWorkPlanView({
           countLabel={tasksCountLabel}
           defaultOpen
           storageKey={`pm.workplan.table.expanded.${projectId}`}
-          subtitle="Resumen operativo del plan. Abre una tarea para ver su detalle."
-          title="Tabla de tareas"
+          subtitle="Resumen operativo del cronograma. Abre una tarea para ver su detalle."
+          title="Etapas y tareas"
         >
           <div className="pm-workplan-table">
             <div className="pm-workplan-row pm-workplan-row-head pm-workplan-row-compact-head">
-              <span>Tarea</span>
+              <span>Etapa o tarea</span>
               <span>Estado</span>
               <span>Inicio</span>
               <span>Fin</span>
@@ -647,7 +648,7 @@ export default function PMProjectWorkPlanView({
             ) : null}
             storageKey={`pm.workplan.detail.expanded.${projectId}`}
             subtitle="Información completa de la tarea seleccionada."
-            title="Detalle de tarea"
+            title="Detalle de etapa o tarea"
           >
             {!selectedTask ? (
               <EmptyState compact note="Selecciona una tarea para ver su detalle." title="Sin tarea seleccionada" />

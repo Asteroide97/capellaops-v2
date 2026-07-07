@@ -100,8 +100,7 @@ const defaultProgressForm = {
   evidencia_url: "",
 };
 
-const scheduleGridTemplate =
-  "2.1fr 1.35fr 1.15fr 0.95fr 0.75fr 0.9fr 1fr 1.35fr 1.1fr 0.9fr 0.95fr 1.25fr";
+const scheduleGridTemplate = "2fr 1.35fr 0.9fr 1fr 0.95fr 1.2fr";
 
 function getOperationalStatusLabel(value) {
   return operationalStatusOptions.find((option) => option.value === value)?.label ?? safeDisplayText(value, "Nuevo");
@@ -388,6 +387,13 @@ function stopEvent(event, callback) {
   callback();
 }
 
+function buildProjectDetailLocation(projectId) {
+  return {
+    pathname: `/pm/projects/${projectId}`,
+    state: { pmView: "plan" },
+  };
+}
+
 export default function PMSimpleSchedulePage() {
   const navigate = useNavigate();
   const timelineHeaderRef = useRef(null);
@@ -490,6 +496,13 @@ export default function PMSimpleSchedulePage() {
 
   function closeDetailModal() {
     setDetailModalOpen(false);
+  }
+
+  function openProjectGantt(row) {
+    if (!row?.proyecto_id) {
+      return;
+    }
+    navigate(buildProjectDetailLocation(row.proyecto_id));
   }
 
   function openProgressModal(row) {
@@ -771,7 +784,7 @@ export default function PMSimpleSchedulePage() {
           <div>
             <h2>Cronograma de trabajos</h2>
             <p className="table-note">
-              La barra usa fecha de inicio del trabajo cuando existe. Si no, usa la fecha de alta como inicio visual.
+              Vista general para ubicar cada trabajo y abrir su Gantt real por tareas y etapas.
             </p>
           </div>
           <div className="inventory-actions inventory-actions-wrap">
@@ -798,15 +811,9 @@ export default function PMSimpleSchedulePage() {
                 <div className="pm-schedule-left-head">
                   <span>Trabajo</span>
                   <span>Cliente</span>
-                  <span>Responsable</span>
-                  <span>Estado</span>
                   <span>Avance</span>
-                  <span>Fecha inicio</span>
                   <span>Fecha compromiso</span>
-                  <span>Proximo paso</span>
-                  <span>Bloqueo</span>
-                  <span>Importe</span>
-                  <span>Pendiente de cobro</span>
+                  <span>Semaforo</span>
                   <span>Acciones</span>
                 </div>
 
@@ -843,65 +850,38 @@ export default function PMSimpleSchedulePage() {
                       >
                         <div className="pm-schedule-cell">
                           <strong>{safeDisplayText(row.nombre, "Trabajo sin nombre")}</strong>
-                          <span>{safeDisplayText(row.codigo, "Sin codigo")}</span>
+                          <span>{safeDisplayText(row.codigo, "Sin codigo")} · {safeDisplayText(row.responsable_nombre, "Sin responsable")}</span>
                         </div>
                         <div className="pm-schedule-cell">
                           <strong>{safeDisplayText(row.cliente_nombre, "Sin cliente")}</strong>
                         </div>
                         <div className="pm-schedule-cell">
-                          <strong>{safeDisplayText(row.responsable_nombre, "Sin responsable")}</strong>
-                        </div>
-                        <div className="pm-schedule-cell">
-                          <StatusBadge tone={getOperationalStatusTone(row.estado_operativo)}>
-                            {getOperationalStatusLabel(row.estado_operativo)}
-                          </StatusBadge>
-                        </div>
-                        <div className="pm-schedule-cell">
                           <strong>{formatPercentValue(row.avance_porcentaje)}</strong>
-                          <span>{trafficMeta.label}</span>
-                        </div>
-                        <div className="pm-schedule-cell">
-                          <strong>{getVisualStartLabel(row)}</strong>
+                          <span>{getOperationalStatusLabel(row.estado_operativo)}</span>
                         </div>
                         <div className="pm-schedule-cell">
                           <strong>{formatDate(row.fecha_compromiso)}</strong>
+                          <span>{formatOptionalMoney(row.saldo_pendiente)} pendiente</span>
                         </div>
                         <div className="pm-schedule-cell">
-                          <strong>{safeDisplayText(row.proximo_paso, "Sin siguiente paso")}</strong>
-                        </div>
-                        <div className="pm-schedule-cell">
-                          <strong>{safeDisplayText(row.bloqueo_actual, "Sin bloqueo")}</strong>
-                        </div>
-                        <div className="pm-schedule-cell">
-                          <strong>{formatOptionalMoney(row.presupuesto_estimado)}</strong>
-                        </div>
-                        <div className="pm-schedule-cell">
-                          <strong>{formatOptionalMoney(row.saldo_pendiente)}</strong>
+                          <StatusBadge tone={trafficMeta.tone}>{trafficMeta.label}</StatusBadge>
+                          {row.bloqueo_actual ? <span>{safeDisplayText(row.bloqueo_actual)}</span> : null}
                         </div>
                         <div className="pm-schedule-cell pm-schedule-actions">
                           <ActionButton
-                            disabled={!canEditProgress}
-                            onClick={(event) => stopEvent(event, () => openProgressModal(row))}
+                            onClick={(event) => stopEvent(event, () => openProjectGantt(row))}
                             size="sm"
                             tone="primary"
                             type="button"
                           >
-                            Actualizar avance
+                            Ver Gantt del trabajo
                           </ActionButton>
                           <ActionButton
-                            icon={<History size={14} strokeWidth={1.9} />}
-                            onClick={(event) => stopEvent(event, () => openHistoryModal(row))}
+                            onClick={(event) => stopEvent(event, () => openDetailModal(row))}
                             size="sm"
                             type="button"
                           >
-                            Ver historial
-                          </ActionButton>
-                          <ActionButton
-                            onClick={(event) => stopEvent(event, () => handleDownloadProgressReport(row))}
-                            size="sm"
-                            type="button"
-                          >
-                            Descargar reporte
+                            Ver detalle
                           </ActionButton>
                         </div>
                       </div>
@@ -941,10 +921,7 @@ export default function PMSimpleSchedulePage() {
                                 className="pm-gantt-bar-progress"
                                 style={{ width: `${Math.max(0, Math.min(100, Number(row.avance_porcentaje ?? 0)))}%` }}
                               />
-                              <div className="pm-schedule-bar-label">
-                                <strong>{safeDisplayText(row.nombre, "Trabajo")}</strong>
-                                <span>{formatPercentValue(row.avance_porcentaje)}</span>
-                              </div>
+                              <div className="pm-schedule-bar-label">{formatPercentValue(row.avance_porcentaje)}</div>
                             </div>
                           ) : (
                             <div className="pm-schedule-no-dates">Sin fechas para dibujar el cronograma.</div>
@@ -965,6 +942,14 @@ export default function PMSimpleSchedulePage() {
       <ModalShell
         footer={
           <div className="inventory-actions inventory-actions-wrap">
+            <ActionButton
+              disabled={!selectedRow}
+              onClick={() => selectedRow && openProjectGantt(selectedRow)}
+              tone="primary"
+              type="button"
+            >
+              Ver Gantt del trabajo
+            </ActionButton>
             <ActionButton
               disabled={!selectedRow}
               onClick={() => selectedRow && handleDownloadProgressReport(selectedRow)}
@@ -1003,7 +988,7 @@ export default function PMSimpleSchedulePage() {
         onClose={closeDetailModal}
         open={detailModalOpen}
         size="wide"
-        subtitle="Resumen rapido del trabajo y acciones operativas del cronograma."
+        subtitle="Resumen rapido del trabajo y acceso al Gantt real del proyecto."
         title="Detalle del trabajo"
       >
         {selectedRow ? (
@@ -1016,10 +1001,6 @@ export default function PMSimpleSchedulePage() {
             <div className="pm-schedule-detail-card">
               <span>Cliente</span>
               <strong>{safeDisplayText(selectedRow.cliente_nombre, "Sin cliente")}</strong>
-            </div>
-            <div className="pm-schedule-detail-card">
-              <span>Responsable</span>
-              <strong>{safeDisplayText(selectedRow.responsable_nombre, "Sin responsable")}</strong>
             </div>
             <div className="pm-schedule-detail-card">
               <span>Estado</span>
@@ -1037,8 +1018,8 @@ export default function PMSimpleSchedulePage() {
               <strong>{formatPercentValue(selectedRow.avance_porcentaje)}</strong>
             </div>
             <div className="pm-schedule-detail-card">
-              <span>Fecha inicio</span>
-              <strong>{getVisualStartLabel(selectedRow)}</strong>
+              <span>Responsable</span>
+              <strong>{safeDisplayText(selectedRow.responsable_nombre, "Sin responsable")}</strong>
             </div>
             <div className="pm-schedule-detail-card">
               <span>Fecha compromiso</span>
