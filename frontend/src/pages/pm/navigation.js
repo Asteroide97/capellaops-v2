@@ -1,4 +1,11 @@
-import { BarChart3, ClipboardList, FolderKanban, LayoutDashboard } from "lucide-react";
+import {
+  BarChart3,
+  CalendarRange,
+  ClipboardList,
+  FolderKanban,
+  LayoutDashboard,
+  Rows3,
+} from "lucide-react";
 
 
 export const pmModuleIcon = FolderKanban;
@@ -6,15 +13,15 @@ export const pmModuleIcon = FolderKanban;
 
 export const pmNavItems = [
   {
-    key: "projects",
-    label: "Proyectos",
-    path: "/pm/projects",
-    icon: FolderKanban,
+    key: "schedule",
+    label: "Cronograma",
+    path: "/pm",
+    icon: CalendarRange,
   },
   {
     key: "dashboard",
-    label: "Dashboard PM",
-    path: "/pm",
+    label: "Resumen",
+    path: "/pm/dashboard",
     icon: LayoutDashboard,
   },
   {
@@ -24,8 +31,14 @@ export const pmNavItems = [
     icon: ClipboardList,
   },
   {
+    key: "projects",
+    label: "Lista de trabajos",
+    path: "/pm/projects",
+    icon: Rows3,
+  },
+  {
     key: "executive",
-    label: "Reporte ejecutivo",
+    label: "Reporte de trabajos",
     path: "/pm/reports/executive",
     icon: BarChart3,
   },
@@ -58,9 +71,13 @@ export function resolvePmNavKey(pathname = "") {
     return "projects";
   }
 
-  if (pathname === "/pm" || pathname.startsWith("/pm/dashboard")) {
+  if (pathname.startsWith("/pm/dashboard")) {
     return "dashboard";
   }
 
-  return "projects";
+  if (pathname === "/pm") {
+    return "schedule";
+  }
+
+  return "schedule";
 }

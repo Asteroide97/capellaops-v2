@@ -239,12 +239,12 @@ export default function PMProjectsPage() {
     <div className="inventory-shell inventory-screen pm-screen">
       <PageHeader
         eyebrow="PM Core"
-        title="Proyectos"
-        subtitle="Portafolio base de proyectos, responsables y avance operativo."
+        title="Lista de trabajos"
+        subtitle="Base operativa de trabajos, responsables y avance general."
         actions={
           <div className="inventory-actions">
             <ActionButton onClick={() => navigate("/pm")} type="button">
-              Dashboard PM
+              Cronograma
             </ActionButton>
             {canManagePmUi ? (
               <ActionButton icon={<Plus size={16} strokeWidth={1.9} />} onClick={openCreateModal} tone="primary" type="button">

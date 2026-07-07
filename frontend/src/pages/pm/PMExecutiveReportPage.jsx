@@ -200,7 +200,7 @@ export default function PMExecutiveReportPage() {
     <div className="inventory-shell inventory-screen pm-screen pm-executive-screen">
       <PageHeader
         eyebrow="PM"
-        title="Reporte ejecutivo PM"
+        title="Reporte de trabajos"
         subtitle="Vista consolidada de avance, riesgos, costos, estimaciones y cobros."
         actions={(
           <div className="inventory-actions">
@@ -208,7 +208,7 @@ export default function PMExecutiveReportPage() {
               {refreshing ? "Actualizando..." : "Actualizar"}
             </ActionButton>
             <ActionButton onClick={() => navigate("/pm/projects")} type="button">
-              Ir a proyectos
+              Ir a lista de trabajos
             </ActionButton>
           </div>
         )}

@@ -373,12 +373,15 @@ export default function PMSimpleWorkProgressPage() {
         title="Avance de trabajos"
         subtitle="Seguimiento simple de cotizaciones, trabajos y entregas."
         actions={
-          <div className="inventory-actions">
-            <ActionButton onClick={() => navigate("/pm/projects")} type="button">
-              Proyectos
-            </ActionButton>
+          <div className="inventory-actions inventory-actions-wrap">
             <ActionButton onClick={() => navigate("/pm")} type="button">
-              Dashboard PM
+              Cronograma
+            </ActionButton>
+            <ActionButton onClick={() => navigate("/pm/projects")} type="button">
+              Lista de trabajos
+            </ActionButton>
+            <ActionButton onClick={() => navigate("/pm/dashboard")} type="button">
+              Resumen
             </ActionButton>
           </div>
         }

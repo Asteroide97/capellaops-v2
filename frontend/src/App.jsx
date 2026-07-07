@@ -20,6 +20,7 @@ import PMProjectDetailPage from "./pages/pm/PMProjectDetailPage";
 import PMPublicPortalPage from "./pages/pm/PMPublicPortalPage";
 import PMProjectsPage from "./pages/pm/PMProjectsPage";
 import PMRatesPage from "./pages/pm/PMRatesPage";
+import PMSimpleSchedulePage from "./pages/pm/PMSimpleSchedulePage";
 import PMSimpleWorkProgressPage from "./pages/pm/PMSimpleWorkProgressPage";
 import AssetsPage from "./pages/inventory/AssetsPage";
 import InventoryLayout from "./pages/inventory/InventoryLayout";
@@ -179,6 +180,14 @@ export default function App() {
           />
           <Route
             path="/pm"
+            element={
+              <ModuleRoute moduleName="pm">
+                <PMSimpleSchedulePage />
+              </ModuleRoute>
+            }
+          />
+          <Route
+            path="/pm/dashboard"
             element={
               <ModuleRoute moduleName="pm">
                 <PMDashboardPage />

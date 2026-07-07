@@ -95,8 +95,8 @@ export default function PMDashboardPage() {
     <div className="inventory-shell inventory-screen pm-screen">
       <PageHeader
         eyebrow="PM Core"
-        title="Gestión de Proyectos"
-        subtitle="Dashboard operativo para proyectos, tareas y seguimiento básico."
+        title="Resumen"
+        subtitle="Lectura general de trabajos, tareas, riesgos y seguimiento operativo."
         actions={(
           <div className="inventory-actions">
             <ActionButton
@@ -104,7 +104,7 @@ export default function PMDashboardPage() {
               onClick={() => navigate("/pm/reports/executive")}
               type="button"
             >
-              Reporte ejecutivo
+              Reporte de trabajos
             </ActionButton>
             {canManagePmUi ? (
               <ActionButton onClick={() => navigate("/pm/rates")} type="button">

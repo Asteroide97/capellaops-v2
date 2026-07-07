@@ -211,9 +211,11 @@ class PMSimpleWorkProgressRowOut(BaseModel):
     responsable_nombre: str | None = None
     estado_operativo: str
     avance_porcentaje: Decimal = Decimal("0")
+    fecha_inicio: date | None = None
     fecha_compromiso: date | None = None
     proximo_paso: str | None = None
     bloqueo_actual: str | None = None
+    created_at: datetime | None = None
     ultima_actualizacion_avance_at: datetime | None = None
     presupuesto_estimado: Decimal | None = None
     costo_real: Decimal | None = None
