@@ -208,6 +208,8 @@ export default function PMProjectWorkPlanView({
   onDismissAlert,
   onEditTask,
   onEditTaskDates,
+  onGanttNotice,
+  onPreviewReschedule,
   onRefresh,
   onRecalculatePlanning,
   onResolveAlert,
@@ -495,15 +497,17 @@ export default function PMProjectWorkPlanView({
           countLabel={tasksCountLabel}
           defaultOpen
           storageKey={`pm.workplan.timeline.expanded.${projectId}`}
-          subtitle="Gantt simple conectado a las tareas reales del trabajo."
+          subtitle="Cronograma conectado a tareas reales, con selección y ajuste visual de fechas."
           title="Gantt del trabajo"
         >
           <PMProjectGanttLite
             canEditTask={canEditTasks}
             embedded
             onApplySuggestedDates={onApplySuggestedDates}
+            onGanttNotice={onGanttNotice}
             onEditTask={onEditTask}
             onEditTaskDates={onEditTaskDates}
+            onPreviewReschedule={onPreviewReschedule}
             onSelectTask={onSelectTask}
             onViewTaskDetail={openTaskDetail}
             selectedTaskId={selectedTaskId}

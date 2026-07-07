@@ -3944,7 +3944,64 @@ textarea {
 
 .pm-project-gantt-shell {
   display: grid;
+  gap: 0.85rem;
+}
+
+.pm-project-gantt-summary {
+  display: grid;
+  gap: 0.7rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(20, 92, 67, 0.16);
+  background: linear-gradient(180deg, rgba(248, 252, 250, 0.96), rgba(255, 255, 255, 0.98));
+}
+
+.pm-project-gantt-summary-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 1rem;
+}
+
+.pm-project-gantt-summary-main > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.pm-project-gantt-summary-main strong {
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.pm-project-gantt-summary-eyebrow {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pm-project-gantt-summary-badges,
+.pm-project-gantt-summary-actions,
+.pm-project-gantt-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.pm-project-gantt-summary-meta {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.pm-project-gantt-help {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
 }
 
 .pm-project-gantt-board {
@@ -3971,7 +4028,7 @@ textarea {
   padding: 0.65rem 0.8rem;
   border-radius: 0.95rem;
   border: 1px solid var(--border);
-  background: var(--surface-muted);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(243, 244, 246, 0.98));
 }
 
 .pm-project-gantt-left-head span {
@@ -3988,7 +4045,7 @@ textarea {
 }
 
 .pm-project-gantt-left-row {
-  min-height: 5.6rem;
+  min-height: 5.1rem;
   padding: 0.75rem 0.8rem;
   border-radius: 0.95rem;
   border: 1px solid var(--border);
@@ -4006,7 +4063,7 @@ textarea {
 .pm-project-gantt-left-row.is-selected,
 .pm-project-gantt-track-row.is-selected {
   border-color: rgba(20, 92, 67, 0.24);
-  background: var(--brand-soft);
+  background: linear-gradient(180deg, rgba(232, 245, 239, 0.9), rgba(255, 255, 255, 0.98));
 }
 
 .pm-project-gantt-cell {
@@ -4068,7 +4125,7 @@ textarea {
   overflow-y: hidden;
   border-radius: 0.95rem;
   border: 1px solid var(--border);
-  background: var(--surface-muted);
+  background: linear-gradient(180deg, rgba(249, 250, 251, 0.98), rgba(255, 255, 255, 0.98));
 }
 
 .pm-project-gantt-markers {
@@ -4113,7 +4170,7 @@ textarea {
 
 .pm-project-gantt-track-row {
   position: relative;
-  min-height: 5.6rem;
+  min-height: 5.1rem;
   border-bottom: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(255, 255, 255, 0.76);
   cursor: pointer;
@@ -4125,17 +4182,21 @@ textarea {
 
 .pm-project-gantt-gridline {
   display: flex;
-  min-height: 5.6rem;
+  min-height: 5.1rem;
 }
 
 .pm-project-gantt-track-row .pm-gantt-bar {
-  top: 1.45rem;
-  bottom: 1.45rem;
+  top: 1.4rem;
+  bottom: 1.4rem;
 }
 
 .pm-project-gantt-grid-segment {
   flex: 0 0 auto;
   border-right: 1px solid var(--border-soft);
+}
+
+.pm-project-gantt-grid-segment:nth-child(5n) {
+  border-right-color: rgba(75, 85, 99, 0.12);
 }
 
 .pm-project-gantt-bar-label {
@@ -4152,6 +4213,46 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pm-project-gantt-track-row .pm-gantt-bar.is-draggable {
+  cursor: grab;
+}
+
+.pm-project-gantt-track-row .pm-gantt-bar.is-dragging {
+  cursor: grabbing;
+  box-shadow: 0 0 0 2px rgba(20, 92, 67, 0.16), var(--shadow-md);
+}
+
+.pm-project-gantt-handle {
+  position: absolute;
+  top: 0.18rem;
+  bottom: 0.18rem;
+  width: 0.5rem;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  cursor: ew-resize;
+  opacity: 0;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.pm-project-gantt-handle.is-start {
+  left: 0.16rem;
+}
+
+.pm-project-gantt-handle.is-end {
+  right: 0.16rem;
+}
+
+.pm-project-gantt-track-row:hover .pm-project-gantt-handle,
+.pm-project-gantt-track-row.is-selected .pm-project-gantt-handle,
+.pm-project-gantt-track-row .pm-gantt-bar.is-dragging .pm-project-gantt-handle {
+  opacity: 1;
+}
+
+.pm-project-gantt-handle:hover {
+  transform: scaleX(1.15);
 }
 
 .pm-project-gantt-missing {
@@ -5801,6 +5902,10 @@ body.pm-is-dragging {
   .pm-simple-history-badges {
     justify-content: flex-start;
   }
+
+  .pm-project-gantt-summary-main {
+    flex-direction: column;
+  }
 }
 
 @media (max-width: 1080px) {
@@ -5858,6 +5963,10 @@ body.pm-is-dragging {
   .pm-project-gantt-left-row {
     grid-template-columns: 1fr;
     gap: 0.85rem;
+  }
+
+  .pm-project-gantt-summary-actions .action-button {
+    width: 100%;
   }
 
   .pm-task-table-compact .pm-task-table-cell::before {

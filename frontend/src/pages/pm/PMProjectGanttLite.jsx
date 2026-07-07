@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   CalendarRange,
@@ -51,6 +51,17 @@ function addDays(date, days) {
   const nextDate = new Date(date);
   nextDate.setDate(nextDate.getDate() + days);
   return nextDate;
+}
+
+function toIsoDate(value) {
+  if (!value) {
+    return null;
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 
 function startOfWeek(date) {
@@ -261,17 +272,44 @@ function buildBarLayout(task, timelineRange) {
   };
 }
 
+function buildBarLayoutFromDates(startDate, endDate, timelineRange) {
+  if (!startDate || !endDate) {
+    return {
+      hasDates: false,
+      left: 0,
+      width: timelineRange.pxPerDay,
+    };
+  }
+
+  const visualStart = startDate < endDate ? startDate : endDate;
+  const visualEnd = startDate < endDate ? endDate : startDate;
+  const left = Math.max(0, diffDays(timelineRange.rangeStart, visualStart)) * timelineRange.pxPerDay;
+  const width = Math.max(
+    timelineRange.pxPerDay,
+    (diffDays(visualStart, visualEnd) + 1) * timelineRange.pxPerDay,
+  );
+
+  return {
+    hasDates: true,
+    left,
+    width,
+  };
+}
+
 function GanttBody({
   canEditTask = true,
   onApplySuggestedDates,
+  onGanttNotice,
   onEditTask,
   onEditTaskDates,
+  onPreviewReschedule,
   onSelectTask,
   onViewTaskDetail,
   selectedTaskId,
   taskActionLoading = {},
   tasks = [],
 }) {
+  const [interaction, setInteraction] = useState(null);
   const sortedTasks = useMemo(
     () =>
       [...tasks].sort((left, right) => {
@@ -297,6 +335,121 @@ function GanttBody({
     () => buildTimelineMarkers(timelineRange),
     [timelineRange],
   );
+  const selectedTask = useMemo(
+    () => sortedTasks.find((task) => task.id === selectedTaskId) ?? null,
+    [selectedTaskId, sortedTasks],
+  );
+
+  useEffect(() => {
+    if (!interaction) {
+      return undefined;
+    }
+
+    function handleMouseMove(event) {
+      setInteraction((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const deltaPx = event.clientX - current.startClientX;
+        const deltaDays = Math.round(deltaPx / current.pxPerDay);
+        if (deltaDays === current.deltaDays) {
+          return current;
+        }
+
+        if (current.kind === "move") {
+          return {
+            ...current,
+            deltaDays,
+            nextStart: addDays(current.originalStart, deltaDays),
+            nextEnd: addDays(current.originalEnd, deltaDays),
+          };
+        }
+
+        if (current.kind === "resize-start") {
+          const candidateStart = addDays(current.originalStart, deltaDays);
+          const clampedStart = candidateStart > current.originalEnd ? current.originalEnd : candidateStart;
+          return {
+            ...current,
+            deltaDays,
+            nextStart: clampedStart,
+            nextEnd: current.originalEnd,
+          };
+        }
+
+        const candidateEnd = addDays(current.originalEnd, deltaDays);
+        const clampedEnd = candidateEnd < current.originalStart ? current.originalStart : candidateEnd;
+        return {
+          ...current,
+          deltaDays,
+          nextStart: current.originalStart,
+          nextEnd: clampedEnd,
+        };
+      });
+    }
+
+    function handleMouseUp() {
+      setInteraction((current) => {
+        if (!current) {
+          return null;
+        }
+
+        const startChanged = toIsoDate(current.nextStart) !== toIsoDate(current.originalStart);
+        const endChanged = toIsoDate(current.nextEnd) !== toIsoDate(current.originalEnd);
+
+        if ((startChanged || endChanged) && onPreviewReschedule) {
+          onPreviewReschedule(current.taskId, {
+            proposedStart: toIsoDate(current.nextStart),
+            proposedEnd: toIsoDate(current.nextEnd),
+            source: current.kind,
+          });
+        }
+
+        return null;
+      });
+    }
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [interaction, onPreviewReschedule]);
+
+  function handleTaskSelect(taskId) {
+    onSelectTask?.(taskId);
+  }
+
+  function startInteraction(event, task, kind) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!canEditTask) {
+      onGanttNotice?.("No tienes permiso para editar fechas en este trabajo.");
+      return;
+    }
+
+    const { startDate, endDate, hasDates } = getTaskVisualDates(task);
+    if (!hasDates || !startDate || !endDate) {
+      onGanttNotice?.("Agrega inicio y fecha compromiso antes de mover esta tarea.");
+      return;
+    }
+
+    onSelectTask?.(task.id);
+    setInteraction({
+      taskId: task.id,
+      kind,
+      startClientX: event.clientX,
+      deltaDays: 0,
+      originalStart: startDate,
+      originalEnd: endDate,
+      nextStart: startDate,
+      nextEnd: endDate,
+      pxPerDay: timelineRange.pxPerDay,
+    });
+  }
 
   if (tasks.length === 0) {
     return <EmptyState compact note="Crea la primera etapa o tarea para ver el cronograma del trabajo." title="Sin tareas" />;
@@ -304,6 +457,73 @@ function GanttBody({
 
   return (
     <div className="pm-project-gantt-shell" style={{ "--pm-project-gantt-columns": projectGanttColumns }}>
+      {selectedTask ? (
+        <div className="pm-project-gantt-summary">
+          <div className="pm-project-gantt-summary-main">
+            <div>
+              <span className="pm-project-gantt-summary-eyebrow">Tarea seleccionada</span>
+              <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo, "Tarea sin nombre"))}</strong>
+            </div>
+            <div className="pm-project-gantt-summary-badges">
+              <StatusBadge tone={getTaskStatusTone(selectedTask.estatus)}>{getTaskStatusLabel(selectedTask.estatus)}</StatusBadge>
+              <StatusBadge tone="info">{formatPercent(selectedTask.porcentaje_avance)}</StatusBadge>
+              {selectedTask?.es_critica ? <StatusBadge tone="danger">Ruta critica</StatusBadge> : null}
+              {selectedTask?.dependency_state?.is_blocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
+              {selectedTask?.schedule_suggestion?.fuera_de_secuencia ? <StatusBadge tone="warning">Fuera de secuencia</StatusBadge> : null}
+            </div>
+          </div>
+          <div className="pm-project-gantt-summary-meta">
+            <span>Responsable: {safeDisplayText(selectedTask.asignado_nombre_snapshot, "Sin responsable")}</span>
+            <span>Inicio: {safeDisplayText(formatDate(selectedTask.fecha_inicio), "Sin fecha")}</span>
+            <span>Fin: {safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "Sin fecha")}</span>
+          </div>
+          <div className="pm-project-gantt-summary-actions">
+            <ActionButton
+              icon={<Eye size={14} strokeWidth={1.9} />}
+              onClick={() => onViewTaskDetail?.(selectedTask.id)}
+              size="sm"
+              type="button"
+            >
+              Ver detalle
+            </ActionButton>
+            <ActionButton
+              icon={<Gauge size={14} strokeWidth={1.9} />}
+              disabled={!canEditTask}
+              onClick={() => onEditTask?.(selectedTask.id)}
+              size="sm"
+              type="button"
+            >
+              Editar tarea
+            </ActionButton>
+            <ActionButton
+              icon={<Pencil size={14} strokeWidth={1.9} />}
+              disabled={!canEditTask}
+              onClick={() => onEditTaskDates?.(selectedTask.id)}
+              size="sm"
+              type="button"
+            >
+              Editar fechas
+            </ActionButton>
+            {selectedTask?.schedule_suggestion?.fuera_de_secuencia && canEditTask ? (
+              <ActionButton
+                icon={<Sparkles size={14} strokeWidth={1.9} />}
+                onClick={() => onApplySuggestedDates?.(selectedTask.id)}
+                size="sm"
+                tone="primary"
+                type="button"
+              >
+                Aplicar sugerida
+              </ActionButton>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="pm-project-gantt-help">
+        <span>Vista Gantt estilo tabla + cronograma.</span>
+        {canEditTask ? <span>Arrastra la barra para mover fechas y usa los extremos para ajustar inicio o fin.</span> : null}
+      </div>
+
       <div className="pm-project-gantt-board">
         <div className="pm-project-gantt-head">
           <div className="pm-project-gantt-left-head">
@@ -344,12 +564,13 @@ function GanttBody({
                 <div
                   className={`pm-project-gantt-left-row ${selected ? "is-selected" : ""}`}
                   key={`left-${task.id}`}
-                  onClick={() => {
-                    if (onViewTaskDetail) {
-                      onViewTaskDetail(task.id);
-                      return;
+                  onClick={() => handleTaskSelect(task.id)}
+                  onDoubleClick={() => onViewTaskDetail?.(task.id)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      handleTaskSelect(task.id);
                     }
-                    onSelectTask?.(task.id);
                   }}
                   role="button"
                   tabIndex={0}
@@ -377,60 +598,13 @@ function GanttBody({
                         </StatusBadge>
                       ) : null}
                     </div>
-                    <div className="pm-project-gantt-row-actions">
-                      <ActionButton
-                        icon={<Eye size={14} strokeWidth={1.9} />}
-                        onClick={(event) =>
-                          stopEvent(event, () => {
-                            if (onViewTaskDetail) {
-                              onViewTaskDetail(task.id);
-                              return;
-                            }
-                            onSelectTask?.(task.id);
-                          })
-                        }
-                        size="sm"
-                        title="Ver detalle"
-                        type="button"
-                      >
-                        Ver
-                      </ActionButton>
-                      <ActionButton
-                        icon={<Gauge size={14} strokeWidth={1.9} />}
-                        disabled={!canEditTask}
-                        onClick={(event) => stopEvent(event, () => onEditTask?.(task.id))}
-                        size="sm"
-                        title="Actualizar avance"
-                        type="button"
-                      >
-                        Avance
-                      </ActionButton>
-                      <ActionButton
-                        className={editingDates ? "pm-button-loading" : ""}
-                        disabled={editingDates || !canEditTask}
-                        icon={<Pencil size={14} strokeWidth={1.9} />}
-                        onClick={(event) => stopEvent(event, () => onEditTaskDates?.(task.id))}
-                        size="sm"
-                        title="Editar fechas"
-                        type="button"
-                      >
-                        {editingDates ? "Guardando..." : "Fechas"}
-                      </ActionButton>
-                      {visualMeta.outOfSequence && canEditTask ? (
-                        <ActionButton
-                          className={applyingSuggestion ? "pm-button-loading" : ""}
-                          disabled={editingDates || applyingSuggestion}
-                          icon={<Sparkles size={14} strokeWidth={1.9} />}
-                          onClick={(event) => stopEvent(event, () => onApplySuggestedDates?.(task.id))}
-                          size="sm"
-                          tone="primary"
-                          title="Aplicar fecha sugerida"
-                          type="button"
-                        >
-                          {applyingSuggestion ? "Aplicando..." : "Sugerida"}
-                        </ActionButton>
-                      ) : null}
-                    </div>
+                    {selected ? (
+                      <div className="pm-project-gantt-row-actions">
+                        <StatusBadge tone="info">Seleccionada</StatusBadge>
+                        {editingDates ? <StatusBadge tone="warning">Editando fechas...</StatusBadge> : null}
+                        {applyingSuggestion ? <StatusBadge tone="warning">Aplicando sugerencia...</StatusBadge> : null}
+                      </div>
+                    ) : null}
                   </div>
                   <div className="pm-project-gantt-cell">
                     <strong>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</strong>
@@ -457,7 +631,10 @@ function GanttBody({
               {tasksWithDates.map((task) => {
                 const selected = selectedTaskId === task.id;
                 const visualMeta = getTaskVisualMeta(task);
-                const barLayout = buildBarLayout(task, timelineRange);
+                const activeInteraction = interaction?.taskId === task.id ? interaction : null;
+                const barLayout = activeInteraction
+                  ? buildBarLayoutFromDates(activeInteraction.nextStart, activeInteraction.nextEnd, timelineRange)
+                  : buildBarLayout(task, timelineRange);
                 const barLabel = barLayout.width >= 220
                   ? `${formatPercent(task.porcentaje_avance)} - ${normalizePmCopy(safeDisplayText(task.titulo, "Tarea"))}`
                   : formatPercent(task.porcentaje_avance);
@@ -466,12 +643,13 @@ function GanttBody({
                   <div
                     className={`pm-project-gantt-track-row ${selected ? "is-selected" : ""}`}
                     key={`right-${task.id}`}
-                    onClick={() => {
-                      if (onViewTaskDetail) {
-                        onViewTaskDetail(task.id);
-                        return;
+                    onClick={() => handleTaskSelect(task.id)}
+                    onDoubleClick={() => onViewTaskDetail?.(task.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleTaskSelect(task.id);
                       }
-                      onSelectTask?.(task.id);
                     }}
                     role="button"
                     tabIndex={0}
@@ -486,14 +664,29 @@ function GanttBody({
                       ))}
                     </div>
                     <div
-                      className={`pm-gantt-bar ${visualMeta.tone} ${visualMeta.blocked ? "is-blocked" : ""} ${task?.es_critica ? "is-critical" : ""} ${visualMeta.outOfSequence ? "is-out-of-sequence" : ""}`}
+                      className={`pm-gantt-bar ${visualMeta.tone} ${visualMeta.blocked ? "is-blocked" : ""} ${task?.es_critica ? "is-critical" : ""} ${visualMeta.outOfSequence ? "is-out-of-sequence" : ""} ${canEditTask ? "is-draggable" : ""} ${activeInteraction ? "is-dragging" : ""}`}
+                      onMouseDown={(event) => startInteraction(event, task, "move")}
                       style={{ left: `${barLayout.left}px`, width: `${barLayout.width}px` }}
                     >
+                      {canEditTask ? (
+                        <button
+                          className="pm-project-gantt-handle is-start"
+                          onMouseDown={(event) => startInteraction(event, task, "resize-start")}
+                          type="button"
+                        />
+                      ) : null}
                       <div
                         className="pm-gantt-bar-progress"
                         style={{ width: `${Math.max(0, Math.min(100, Number(task.porcentaje_avance ?? 0)))}%` }}
                       />
                       <div className="pm-project-gantt-bar-label">{barLabel}</div>
+                      {canEditTask ? (
+                        <button
+                          className="pm-project-gantt-handle is-end"
+                          onMouseDown={(event) => startInteraction(event, task, "resize-end")}
+                          type="button"
+                        />
+                      ) : null}
                     </div>
                   </div>
                 );
@@ -547,10 +740,10 @@ function GanttBody({
                       disabled={!canEditTask}
                       onClick={() => onEditTask?.(task.id)}
                       size="sm"
-                      title="Actualizar avance"
+                      title="Editar tarea"
                       type="button"
                     >
-                      Avance
+                      Editar
                     </ActionButton>
                     <ActionButton
                       icon={<Pencil size={14} strokeWidth={1.9} />}
@@ -583,7 +776,7 @@ export default function PMProjectGanttLite(props) {
   return (
     <DataCard
       className="pm-workplan-gantt-wide"
-      subtitle="Vista Gantt simple conectada a las tareas reales, con fechas, avance y bloqueos."
+      subtitle="Vista Gantt conectada a tareas reales. Selecciona una tarea o arrastra su barra para ajustar fechas."
       title="Gantt del trabajo"
     >
       <GanttBody {...props} />
