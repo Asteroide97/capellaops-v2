@@ -26,7 +26,7 @@ import {
   normalizePmCopy,
 } from "./shared";
 
-const projectGanttColumns = "2.2fr 1.1fr 0.9fr 0.75fr 0.8fr 0.8fr";
+const projectGanttColumns = "2.55fr 1fr 0.85fr 0.7fr 0.75fr 0.75fr";
 
 function parseDateValue(value) {
   if (!value) {
@@ -390,18 +390,20 @@ function GanttBody({
                           })
                         }
                         size="sm"
+                        title="Ver detalle"
                         type="button"
                       >
-                        Ver detalle
+                        Ver
                       </ActionButton>
                       <ActionButton
                         icon={<Gauge size={14} strokeWidth={1.9} />}
                         disabled={!canEditTask}
                         onClick={(event) => stopEvent(event, () => onEditTask?.(task.id))}
                         size="sm"
+                        title="Actualizar avance"
                         type="button"
                       >
-                        Actualizar avance
+                        Avance
                       </ActionButton>
                       <ActionButton
                         className={editingDates ? "pm-button-loading" : ""}
@@ -409,9 +411,10 @@ function GanttBody({
                         icon={<Pencil size={14} strokeWidth={1.9} />}
                         onClick={(event) => stopEvent(event, () => onEditTaskDates?.(task.id))}
                         size="sm"
+                        title="Editar fechas"
                         type="button"
                       >
-                        {editingDates ? "Guardando..." : "Editar fechas"}
+                        {editingDates ? "Guardando..." : "Fechas"}
                       </ActionButton>
                       {visualMeta.outOfSequence && canEditTask ? (
                         <ActionButton
@@ -421,9 +424,10 @@ function GanttBody({
                           onClick={(event) => stopEvent(event, () => onApplySuggestedDates?.(task.id))}
                           size="sm"
                           tone="primary"
+                          title="Aplicar fecha sugerida"
                           type="button"
                         >
-                          {applyingSuggestion ? "Aplicando..." : "Aplicar sugerida"}
+                          {applyingSuggestion ? "Aplicando..." : "Sugerida"}
                         </ActionButton>
                       ) : null}
                     </div>
@@ -454,8 +458,8 @@ function GanttBody({
                 const selected = selectedTaskId === task.id;
                 const visualMeta = getTaskVisualMeta(task);
                 const barLayout = buildBarLayout(task, timelineRange);
-                const barLabel = barLayout.width >= 190
-                  ? `${formatPercent(task.porcentaje_avance)} · ${normalizePmCopy(safeDisplayText(task.titulo, "Tarea"))}`
+                const barLabel = barLayout.width >= 220
+                  ? `${formatPercent(task.porcentaje_avance)} - ${normalizePmCopy(safeDisplayText(task.titulo, "Tarea"))}`
                   : formatPercent(task.porcentaje_avance);
 
                 return (
@@ -502,8 +506,8 @@ function GanttBody({
       {tasksWithoutDates.length > 0 ? (
         <section className="pm-project-gantt-missing">
           <div className="pm-project-gantt-missing-head">
-            <strong>Sin fechas</strong>
-            <span>{tasksWithoutDates.length} tarea{tasksWithoutDates.length === 1 ? "" : "s"} pendientes de calendarizar</span>
+            <strong>Tareas sin fechas</strong>
+            <span>Agrega inicio y fecha compromiso para verlas en el cronograma.</span>
           </div>
           <div className="pm-project-gantt-missing-list">
             {tasksWithoutDates.map((task) => {
@@ -513,7 +517,7 @@ function GanttBody({
                   <div>
                     <strong>{normalizePmCopy(safeDisplayText(task.titulo, "Tarea sin nombre"))}</strong>
                     <p className="table-note">
-                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} · {getTaskDependencySummary(task)}
+                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} - {getTaskDependencySummary(task)}
                     </p>
                   </div>
                   <div className="pm-project-gantt-missing-badges">
@@ -533,27 +537,30 @@ function GanttBody({
                         onSelectTask?.(task.id);
                       }}
                       size="sm"
+                      title="Ver detalle"
                       type="button"
                     >
-                      Ver detalle
+                      Ver
                     </ActionButton>
                     <ActionButton
                       icon={<Gauge size={14} strokeWidth={1.9} />}
                       disabled={!canEditTask}
                       onClick={() => onEditTask?.(task.id)}
                       size="sm"
+                      title="Actualizar avance"
                       type="button"
                     >
-                      Actualizar avance
+                      Avance
                     </ActionButton>
                     <ActionButton
                       icon={<Pencil size={14} strokeWidth={1.9} />}
                       disabled={!canEditTask}
                       onClick={() => onEditTaskDates?.(task.id)}
                       size="sm"
+                      title="Editar fechas"
                       type="button"
                     >
-                      Editar fechas
+                      Fechas
                     </ActionButton>
                   </div>
                 </article>

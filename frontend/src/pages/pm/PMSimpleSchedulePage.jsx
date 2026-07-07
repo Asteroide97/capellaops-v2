@@ -850,7 +850,7 @@ export default function PMSimpleSchedulePage() {
                       >
                         <div className="pm-schedule-cell">
                           <strong>{safeDisplayText(row.nombre, "Trabajo sin nombre")}</strong>
-                          <span>{safeDisplayText(row.codigo, "Sin codigo")} · {safeDisplayText(row.responsable_nombre, "Sin responsable")}</span>
+                          <span>{safeDisplayText(row.codigo, "Sin codigo")} - {safeDisplayText(row.responsable_nombre, "Sin responsable")}</span>
                         </div>
                         <div className="pm-schedule-cell">
                           <strong>{safeDisplayText(row.cliente_nombre, "Sin cliente")}</strong>
@@ -874,7 +874,7 @@ export default function PMSimpleSchedulePage() {
                             tone="primary"
                             type="button"
                           >
-                            Ver Gantt del trabajo
+                            Ver Gantt
                           </ActionButton>
                           <ActionButton
                             onClick={(event) => stopEvent(event, () => openDetailModal(row))}
@@ -924,7 +924,7 @@ export default function PMSimpleSchedulePage() {
                               <div className="pm-schedule-bar-label">{formatPercentValue(row.avance_porcentaje)}</div>
                             </div>
                           ) : (
-                            <div className="pm-schedule-no-dates">Sin fechas para dibujar el cronograma.</div>
+                            <div className="pm-schedule-no-dates">Agrega fechas para ver el cronograma.</div>
                           )}
                         </div>
                       );
@@ -948,7 +948,7 @@ export default function PMSimpleSchedulePage() {
               tone="primary"
               type="button"
             >
-              Ver Gantt del trabajo
+              Ver Gantt
             </ActionButton>
             <ActionButton
               disabled={!selectedRow}
