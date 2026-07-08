@@ -31,27 +31,34 @@ function AlertsPanelBody({
         const resolving = isPending(actionLoading, alert.id, "resolve");
         const dismissing = isPending(actionLoading, alert.id, "dismiss");
         const busy = resolving || dismissing;
+        const tone = getAlertSeverityTone(alert.severidad);
+        const alertType = getAlertTypeLabel(alert.tipo);
+        const title = normalizePmCopy(safeDisplayText(alert.tarea_titulo, "Proyecto"));
+        const description = normalizePmCopy(safeDisplayText(alert.descripcion, "Sin detalle adicional."));
 
         return (
-          <div className={`pm-alert-card pm-alert-card-${getAlertSeverityTone(alert.severidad)}`} key={alert.id}>
-            <div className="pm-alert-card-head">
-              <div className="pm-alert-card-copy">
-                <div className="pm-inline-metadata">
-                  <StatusBadge tone={getAlertSeverityTone(alert.severidad)}>
-                    <BellRing size={12} strokeWidth={1.9} />
-                    {normalizePmCopy(safeDisplayText(alert.titulo))}
-                  </StatusBadge>
-                  <StatusBadge tone="neutral">{getAlertTypeLabel(alert.tipo)}</StatusBadge>
-                </div>
-                <strong>{normalizePmCopy(safeDisplayText(alert.tarea_titulo, "Proyecto"))}</strong>
-                <p className="table-note">{normalizePmCopy(safeDisplayText(alert.descripcion, "Sin detalle adicional."))}</p>
+          <div className={`pm-alert-row pm-alert-row-${tone}`} key={alert.id}>
+            <div className="pm-alert-row-main">
+              <div className="pm-alert-row-badges">
+                <StatusBadge tone={tone}>
+                  <BellRing size={12} strokeWidth={1.9} />
+                  {normalizePmCopy(safeDisplayText(alert.titulo, "Alerta"))}
+                </StatusBadge>
               </div>
-              <div className="pm-alert-card-meta">
-                <span>{safeDisplayText(formatDate(alert.updated_at), "—")}</span>
+              <div className="pm-alert-row-copy" title={`${alertType} · ${title} · ${description}`}>
+                <strong>{alertType}</strong>
+                <span className="pm-alert-row-bullet">·</span>
+                <span className="pm-alert-row-title">{title}</span>
+                <span className="pm-alert-row-bullet">·</span>
+                <span className="pm-alert-row-description">{description}</span>
               </div>
             </div>
 
-            <div className="pm-alert-card-actions">
+            <div className="pm-alert-row-meta">
+              <span>{safeDisplayText(formatDate(alert.updated_at), "-")}</span>
+            </div>
+
+            <div className="pm-alert-row-actions">
               <ActionButton
                 className={resolving ? "pm-button-loading" : ""}
                 disabled={busy}
@@ -92,7 +99,7 @@ export default function PMProjectAlertsPanel(props) {
   return (
     <DataCard
       className={compact ? "pm-alerts-panel pm-alerts-panel-compact" : "pm-alerts-panel"}
-      subtitle="Señales operativas del proyecto deduplicadas por tipo y tarea."
+      subtitle="Senales operativas del proyecto deduplicadas por tipo y tarea."
       title="Alertas activas"
     >
       <AlertsPanelBody {...props} />

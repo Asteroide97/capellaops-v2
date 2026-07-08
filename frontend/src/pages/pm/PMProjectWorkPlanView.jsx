@@ -21,7 +21,6 @@ import {
   MetricCard,
   StatusBadge,
   formatDate,
-  formatMoney,
   formatNumber,
   safeDisplayText,
 } from "../inventory/shared";
@@ -58,11 +57,18 @@ function getPlanningDetail(task) {
   const dependencyState = task?.dependency_state ?? null;
   const scheduleSuggestion = task?.schedule_suggestion ?? null;
   const badges = [];
+  const blockerTitles =
+    dependencyState?.blockers?.map((item) => normalizePmCopy(safeDisplayText(item?.titulo))).filter(Boolean) ?? [];
+  const dependencyTitles =
+    dependencyState?.dependencies
+      ?.map((item) => normalizePmCopy(safeDisplayText(item?.resolved_title ?? item?.depende_de_tarea_titulo)))
+      .filter(Boolean) ?? [];
+  const firstDependency = blockerTitles[0] ?? dependencyTitles[0] ?? "";
 
   if (task?.es_critica) {
     badges.push(
       <StatusBadge key="critical" tone="danger">
-        En ruta crítica
+        En ruta critica
       </StatusBadge>,
     );
   }
@@ -99,7 +105,24 @@ function getPlanningDetail(task) {
     note = `Prerrequisitos completados: ${dependencyState.detail}`;
   }
 
-  return { badges, note };
+  if (note === "Sin riesgos inmediatos." && firstDependency) {
+    note = `Depende de: ${firstDependency}`;
+  } else if (note === "Sin riesgos inmediatos." && isTaskOverdue(task)) {
+    note = "Revisar fecha compromiso.";
+  }
+
+  let label = "En ruta";
+  if (task?.es_critica) {
+    label = "En ruta critica";
+  } else if (dependencyState?.is_blocked) {
+    label = "Bloqueada";
+  } else if (scheduleSuggestion?.fuera_de_secuencia) {
+    label = "Fuera de secuencia";
+  } else if (isTaskOverdue(task)) {
+    label = "Atrasada";
+  }
+
+  return { badges, label, note };
 }
 
 function isTaskActionPending(taskActionLoading, taskId, action) {
@@ -230,21 +253,6 @@ export default function PMProjectWorkPlanView({
   const detailSectionRef = useRef(null);
   const [isDetailExpanded, setIsDetailExpanded] = useStoredExpandedState(`pm.workplan.detail.expanded.${projectId}`, false);
 
-  const taskTimeMetrics = useMemo(
-    () =>
-      (timeEntries ?? []).reduce((accumulator, entry) => {
-        if (!entry.tarea_id) {
-          return accumulator;
-        }
-        const current = accumulator[entry.tarea_id] ?? { horas: 0, costo: 0 };
-        current.horas += Number(entry.horas || 0);
-        current.costo += Number(entry.costo_total_snapshot || 0);
-        accumulator[entry.tarea_id] = current;
-        return accumulator;
-      }, {}),
-    [timeEntries],
-  );
-
   const outOfSequenceTasks = useMemo(
     () => tasks.filter((task) => task?.schedule_suggestion?.fuera_de_secuencia),
     [tasks],
@@ -296,7 +304,7 @@ export default function PMProjectWorkPlanView({
           onClick={onRecalculatePlanning}
           type="button"
         >
-          {planningRefreshing ? "Recalculando..." : "Recalcular planeación"}
+          {planningRefreshing ? "Recalculando..." : "Recalcular planeacion"}
         </ActionButton>
       ) : null}
       {canEditTasks ? (
@@ -327,7 +335,7 @@ export default function PMProjectWorkPlanView({
                 </ActionButton>
               ) : null
             )}
-            note="Agrega tareas con fechas para visualizar el plan, las dependencias y la ruta crítica."
+            note="Agrega tareas con fechas para visualizar el plan, las dependencias y la ruta critica."
             title="Sin tareas"
           />
         </DataCard>
@@ -348,27 +356,12 @@ export default function PMProjectWorkPlanView({
     <EmptyState compact note="Selecciona una tarea para ver su detalle." title="Sin tarea seleccionada" />
   ) : (
     <div className="pm-task-detail-collapsed">
-      <div className="pm-task-detail-collapsed-head">
-        <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo, "Tarea seleccionada"))}</strong>
+      <div className="pm-task-detail-collapsed-row">
+        <strong className="pm-task-detail-collapsed-title">{normalizePmCopy(safeDisplayText(selectedTask.titulo, "Tarea seleccionada"))}</strong>
+        <span>Inicio: {safeDisplayText(formatDate(selectedTask.fecha_inicio), "-")}</span>
+        <span>Fin: {safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "-")}</span>
+        <span>Avance: {formatPercent(selectedTask.porcentaje_avance)}</span>
         <StatusBadge tone={getTaskStatusTone(selectedTask.estatus)}>{getTaskStatusLabel(selectedTask.estatus)}</StatusBadge>
-      </div>
-      <div className="pm-task-detail-collapsed-summary">
-        <div>
-          <span>Tarea seleccionada</span>
-          <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo))}</strong>
-        </div>
-        <div>
-          <span>Inicio</span>
-          <strong>{safeDisplayText(formatDate(selectedTask.fecha_inicio), "—")}</strong>
-        </div>
-        <div>
-          <span>Fin</span>
-          <strong>{safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "—")}</strong>
-        </div>
-        <div>
-          <span>Avance</span>
-          <strong>{formatPercent(selectedTask.porcentaje_avance)}</strong>
-        </div>
       </div>
     </div>
   );
@@ -386,7 +379,7 @@ export default function PMProjectWorkPlanView({
       <section className="inventory-metric-grid inventory-metric-grid-4">
         <MetricCard
           icon={<Route size={18} strokeWidth={1.9} />}
-          label="En ruta crítica"
+          label="En ruta critica"
           meta="Afectan la fecha final"
           tone="danger"
           value={planningSummary?.tareas_criticas ?? 0}
@@ -416,9 +409,9 @@ export default function PMProjectWorkPlanView({
 
       {hasBaselineComparison ? (
         <div className="inventory-form-note">
-          <strong>Comparado con línea base</strong>
+          <strong>Comparado con linea base</strong>
           <p className="table-note">
-            El plan actual se compara contra {safeDisplayText(baselineComparison?.baseline?.nombre, "la línea base principal")} para detectar desviaciones.
+            El plan actual se compara contra {safeDisplayText(baselineComparison?.baseline?.nombre, "la linea base principal")} para detectar desviaciones.
           </p>
         </div>
       ) : null}
@@ -432,13 +425,13 @@ export default function PMProjectWorkPlanView({
               </ActionButton>
             ) : null
           )}
-          subtitle="Días laborales que usa la planeación para sugerir fechas."
+          subtitle="Dias laborales que usa la planeacion para sugerir fechas."
           title="Calendario laboral"
         >
           <div className="inventory-form-note">
-            <strong>{safeDisplayText(workCalendar?.nombre, "Calendario estándar")}</strong>
+            <strong>{safeDisplayText(workCalendar?.nombre, "Calendario estandar")}</strong>
             <p className="table-note">{formatWorkCalendarSummary(workCalendar)}</p>
-            <p className="table-note">Usa Editar fechas o Aplicar sugerencia para reprogramar tareas con confirmación guiada.</p>
+            <p className="table-note">Usa Editar fechas o Aplicar sugerencia para reprogramar tareas con confirmacion guiada.</p>
           </div>
         </DataCard>
 
@@ -457,18 +450,18 @@ export default function PMProjectWorkPlanView({
               <p className="table-note">Aplica las fechas sugeridas o edita manualmente las tareas afectadas.</p>
             </div>
           ) : (
-            <EmptyState compact note="La secuencia del proyecto está alineada con sus prerrequisitos." title="Sin conflictos" />
+            <EmptyState compact note="La secuencia del proyecto esta alineada con sus prerrequisitos." title="Sin conflictos" />
           )}
         </DataCard>
       </div>
 
       {planningCriticalPath?.critical_path?.length ? (
-        <DataCard subtitle="Cadena principal que afecta la fecha final del proyecto." title="Ruta crítica">
+        <DataCard subtitle="Cadena principal que afecta la fecha final del proyecto." title="Ruta critica">
           <div className="pm-critical-path-strip">
             {planningCriticalPath.critical_path.map((item) => (
               <div className="pm-critical-path-step" key={item.task_id}>
                 <strong>{normalizePmCopy(safeDisplayText(item.titulo))}</strong>
-                <span>{item.duracion_dias} d · Holgura {item.holgura_dias ?? 0} d</span>
+                <span>{item.duracion_dias} d - Holgura {item.holgura_dias ?? 0} d</span>
               </div>
             ))}
           </div>
@@ -480,7 +473,7 @@ export default function PMProjectWorkPlanView({
           countLabel={alertsCountLabel}
           defaultOpen={alerts.length > 0}
           storageKey={`pm.workplan.alerts.expanded.${projectId}`}
-          subtitle="Señales operativas del proyecto deduplicadas por tipo y tarea."
+          subtitle="Senales operativas del proyecto deduplicadas por tipo y tarea."
           title="Alertas activas"
         >
           <PMProjectAlertsPanel
@@ -497,7 +490,7 @@ export default function PMProjectWorkPlanView({
           countLabel={tasksCountLabel}
           defaultOpen
           storageKey={`pm.workplan.timeline.expanded.${projectId}`}
-          subtitle="Cronograma conectado a tareas reales, con selección y ajuste visual de fechas."
+          subtitle="Cronograma conectado a tareas reales, con seleccion y ajuste visual de fechas."
           title="Gantt del trabajo"
         >
           <PMProjectGanttLite
@@ -530,25 +523,27 @@ export default function PMProjectWorkPlanView({
               <span>Estado</span>
               <span>Inicio</span>
               <span>Fin</span>
-              <span>Sugerido / alerta</span>
+              <span>Alerta</span>
               <span>Acciones</span>
             </div>
 
             {tasks.map((task) => {
-              const taskMetrics = taskTimeMetrics[task.id] ?? { horas: 0, costo: 0 };
               const baselineTaskComparison = baselineTaskComparisonMap[task.id] ?? null;
               const selected = selectedTaskId === task.id;
               const dependencyState = taskDependencyContextMap?.[task.id] ?? task.dependency_state ?? null;
               const blocked = Boolean(dependencyState?.is_blocked ?? dependencyState?.blocked ?? task.is_blocked);
               const planningDetail = getPlanningDetail({ ...task, dependency_state: dependencyState });
               const editingDates = isTaskActionPending(taskActionLoading, task.id, "dates");
-              const suggestionCopy = task?.schedule_suggestion?.fecha_inicio_sugerida
-                ? `${safeDisplayText(formatDate(task.schedule_suggestion.fecha_inicio_sugerida), "—")} → ${safeDisplayText(formatDate(task.schedule_suggestion.fecha_fin_sugerida), "—")}`
-                : "—";
               const deviationCopy =
                 baselineTaskComparison?.has_change && Number(baselineTaskComparison?.desviacion_dias_fin ?? 0) !== 0
-                  ? `Fin actual ${baselineTaskComparison.desviacion_dias_fin > 0 ? "+" : ""}${formatNumber(baselineTaskComparison.desviacion_dias_fin)} días vs línea base`
+                  ? `Fin actual ${baselineTaskComparison.desviacion_dias_fin > 0 ? "+" : ""}${formatNumber(baselineTaskComparison.desviacion_dias_fin)} dias vs linea base`
                   : "";
+              const planningCopy =
+                (task?.schedule_suggestion?.fuera_de_secuencia
+                  ? normalizePmCopy(safeDisplayText(task.schedule_suggestion?.razon))
+                  : "") ||
+                deviationCopy ||
+                planningDetail.note;
 
               return (
                 <div
@@ -567,7 +562,7 @@ export default function PMProjectWorkPlanView({
                   <div className="pm-task-table-cell is-primary" data-label="Tarea">
                     <div className="inventory-cell-main">{normalizePmCopy(safeDisplayText(task.titulo))}</div>
                     <div className="pm-task-row-secondary">
-                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} · {getDurationLabel(task)} · {formatNumber(taskMetrics.horas)} h reales · {formatMoney(taskMetrics.costo)}
+                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} - {getDurationLabel(task)}
                     </div>
                   </div>
 
@@ -576,26 +571,17 @@ export default function PMProjectWorkPlanView({
                   </div>
 
                   <div className="pm-task-table-cell" data-label="Inicio">
-                    {safeDisplayText(formatDate(task.fecha_inicio), "—")}
+                    {safeDisplayText(formatDate(task.fecha_inicio), "-")}
                   </div>
 
                   <div className="pm-task-table-cell" data-label="Fin">
-                    {safeDisplayText(formatDate(task.fecha_vencimiento), "—")}
+                    {safeDisplayText(formatDate(task.fecha_vencimiento), "-")}
                   </div>
 
-                  <div className="pm-task-table-cell" data-label="Sugerido / alerta">
+                  <div className="pm-task-table-cell" data-label="Alerta">
                     <div className="pm-workplan-planning-stack">
-                      <div className="pm-workplan-planning-badges">
-                        {planningDetail.badges}
-                        {baselineTaskComparison?.has_change ? <StatusBadge tone="warning">Desviada</StatusBadge> : null}
-                      </div>
-                      <div className="pm-workplan-planning-copy">
-                        {task?.schedule_suggestion?.fuera_de_secuencia ? suggestionCopy : planningDetail.note}
-                      </div>
-                      {task?.schedule_suggestion?.fuera_de_secuencia && task.schedule_suggestion?.razon ? (
-                        <div className="pm-workplan-planning-copy">{safeDisplayText(task.schedule_suggestion.razon)}</div>
-                      ) : null}
-                      {deviationCopy ? <div className="pm-workplan-planning-copy">{deviationCopy}</div> : null}
+                      <strong className="pm-workplan-planning-title">{planningDetail.label}</strong>
+                      <div className="pm-workplan-planning-copy">{planningCopy}</div>
                     </div>
                   </div>
 
@@ -610,7 +596,7 @@ export default function PMProjectWorkPlanView({
                         size="sm"
                         type="button"
                       >
-                        Ver detalle
+                        Ver
                       </ActionButton>
                       <ActionButton
                         className={editingDates ? "pm-button-loading" : ""}
@@ -623,7 +609,7 @@ export default function PMProjectWorkPlanView({
                         size="sm"
                         type="button"
                       >
-                        {editingDates ? "Guardando..." : "Editar fechas"}
+                        {editingDates ? "Guardando..." : "Fechas"}
                       </ActionButton>
                     </div>
                   </div>
@@ -651,7 +637,7 @@ export default function PMProjectWorkPlanView({
               </>
             ) : null}
             storageKey={`pm.workplan.detail.expanded.${projectId}`}
-            subtitle="Información completa de la tarea seleccionada."
+            subtitle="Informacion completa de la tarea seleccionada."
             title="Detalle de etapa o tarea"
           >
             {!selectedTask ? (

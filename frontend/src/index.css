@@ -3774,7 +3774,7 @@ textarea {
 
 .pm-workplan-stack {
   display: grid;
-  gap: 1rem;
+  gap: 0.75rem;
 }
 
 .pm-baseline-stack,
@@ -3891,7 +3891,7 @@ textarea {
 
 .pm-workplan-layout-vertical {
   display: grid;
-  gap: 1rem;
+  gap: 0.8rem;
 }
 
 .pm-workplan-layout-vertical > * {
@@ -3916,7 +3916,7 @@ textarea {
 
 .pm-collapsible-body {
   display: grid;
-  gap: 0.9rem;
+  gap: 0.65rem;
   min-width: 0;
 }
 
@@ -3944,38 +3944,43 @@ textarea {
 
 .pm-project-gantt-shell {
   display: grid;
-  gap: 0.85rem;
+  gap: 0.65rem;
 }
 
 .pm-project-gantt-summary {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 0.7rem;
-  padding: 0.95rem 1rem;
-  border-radius: 1rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.85rem;
   border: 1px solid rgba(20, 92, 67, 0.16);
   background: linear-gradient(180deg, rgba(248, 252, 250, 0.96), rgba(255, 255, 255, 0.98));
 }
 
 .pm-project-gantt-summary-main {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 0.7rem;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
 }
 
-.pm-project-gantt-summary-main > div {
+.pm-project-gantt-summary-copy {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.12rem;
+  min-width: 0;
 }
 
 .pm-project-gantt-summary-main strong {
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: 0.96rem;
+  line-height: 1.2;
 }
 
 .pm-project-gantt-summary-eyebrow {
   color: var(--text-secondary);
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3992,21 +3997,13 @@ textarea {
 
 .pm-project-gantt-summary-meta {
   color: var(--text-secondary);
-  font-size: 0.84rem;
-}
-
-.pm-project-gantt-help {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.65rem;
-  align-items: center;
-  color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: 0.76rem;
+  flex: 1 1 340px;
 }
 
 .pm-project-gantt-board {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.55rem;
 }
 
 .pm-project-gantt-head,
@@ -4020,13 +4017,13 @@ textarea {
 .pm-project-gantt-left-row {
   display: grid;
   grid-template-columns: var(--pm-project-gantt-columns);
-  gap: 0.7rem;
+  gap: 0.55rem;
   align-items: start;
 }
 
 .pm-project-gantt-left-head {
-  padding: 0.65rem 0.8rem;
-  border-radius: 0.95rem;
+  padding: 0.52rem 0.7rem;
+  border-radius: 0.8rem;
   border: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(248, 250, 252, 0.98), rgba(243, 244, 246, 0.98));
 }
@@ -4041,13 +4038,13 @@ textarea {
 
 .pm-project-gantt-left-body {
   display: grid;
-  gap: 0.65rem;
+  gap: 0.45rem;
 }
 
 .pm-project-gantt-left-row {
-  min-height: 5.1rem;
-  padding: 0.75rem 0.8rem;
-  border-radius: 0.95rem;
+  min-height: 3.8rem;
+  padding: 0.5rem 0.7rem;
+  border-radius: 0.8rem;
   border: 1px solid var(--border);
   background: var(--surface);
   cursor: pointer;
@@ -4068,29 +4065,30 @@ textarea {
 
 .pm-project-gantt-cell {
   display: grid;
-  gap: 0.3rem;
+  gap: 0.18rem;
   min-width: 0;
 }
 
 .pm-project-gantt-cell strong,
 .pm-project-gantt-cell span {
-  line-height: 1.35;
+  line-height: 1.25;
 }
 
 .pm-project-gantt-cell strong {
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: 0.84rem;
 }
 
 .pm-project-gantt-cell span {
   color: var(--text-secondary);
-  font-size: 0.78rem;
+  font-size: 0.74rem;
 }
 
-.pm-project-gantt-mini-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
+.pm-project-gantt-secondary-line {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .pm-project-gantt-row-actions {
@@ -4170,7 +4168,7 @@ textarea {
 
 .pm-project-gantt-track-row {
   position: relative;
-  min-height: 5.1rem;
+  min-height: 3.8rem;
   border-bottom: 1px solid rgba(148, 163, 184, 0.18);
   background: rgba(255, 255, 255, 0.76);
   cursor: pointer;
@@ -4182,12 +4180,12 @@ textarea {
 
 .pm-project-gantt-gridline {
   display: flex;
-  min-height: 5.1rem;
+  min-height: 3.8rem;
 }
 
 .pm-project-gantt-track-row .pm-gantt-bar {
-  top: 1.4rem;
-  bottom: 1.4rem;
+  top: 0.95rem;
+  bottom: 0.95rem;
 }
 
 .pm-project-gantt-grid-segment {
@@ -4208,7 +4206,7 @@ textarea {
   width: 100%;
   height: 100%;
   padding: 0 0.55rem;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 700;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4257,7 +4255,7 @@ textarea {
 
 .pm-project-gantt-missing {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.45rem;
 }
 
 .pm-project-gantt-missing-head {
@@ -4270,23 +4268,23 @@ textarea {
 
 .pm-project-gantt-missing-head strong {
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: 0.92rem;
 }
 
 .pm-project-gantt-missing-head span {
   color: var(--text-secondary);
-  font-size: 0.84rem;
+  font-size: 0.8rem;
 }
 
 .pm-project-gantt-missing-list {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .pm-project-gantt-missing-item {
   display: grid;
-  gap: 0.65rem;
-  padding: 0.9rem 1rem;
+  gap: 0.45rem;
+  padding: 0.65rem 0.8rem;
 }
 
 .pm-project-gantt-missing-item p {
@@ -4302,55 +4300,99 @@ textarea {
 .pm-alerts-panel,
 .pm-alert-list {
   display: grid;
-  gap: 0.85rem;
+  gap: 0.45rem;
 }
 
-.pm-alert-card {
+.pm-alert-row {
   display: grid;
-  gap: 0.85rem;
-  padding: 1rem;
-  border-radius: 1rem;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.55rem 0.7rem;
+  border-radius: 0.8rem;
   border: 1px solid var(--border);
   background: var(--surface);
 }
 
-.pm-alert-card-info {
+.pm-alert-row-info {
   border-color: rgba(37, 99, 235, 0.18);
-  background: rgba(239, 246, 255, 0.9);
+  background: rgba(239, 246, 255, 0.72);
 }
 
-.pm-alert-card-warning {
+.pm-alert-row-warning {
   border-color: rgba(217, 119, 6, 0.2);
-  background: rgba(255, 247, 237, 0.96);
+  background: rgba(255, 247, 237, 0.82);
 }
 
-.pm-alert-card-danger {
+.pm-alert-row-danger {
   border-color: rgba(220, 38, 38, 0.18);
-  background: rgba(254, 242, 242, 0.96);
+  background: rgba(254, 242, 242, 0.82);
 }
 
-.pm-alert-card-head,
-.pm-alert-card-copy,
-.pm-alert-card-meta,
-.pm-alert-card-actions {
-  display: grid;
-  gap: 0.45rem;
+.pm-alert-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
 }
 
-.pm-alert-card-head {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+.pm-alert-row-badges,
+.pm-alert-row-copy,
+.pm-alert-row-actions,
+.pm-alert-row-meta {
+  min-width: 0;
 }
 
-.pm-alert-card-meta {
-  color: var(--text-secondary);
+.pm-alert-row-copy {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.pm-alert-row-copy strong,
+.pm-alert-row-title,
+.pm-alert-row-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pm-alert-row-copy strong {
   font-size: 0.82rem;
-  text-align: right;
+  color: var(--text-primary);
 }
 
-.pm-alert-card-actions {
-  grid-auto-flow: column;
-  justify-content: start;
+.pm-alert-row-title,
+.pm-alert-row-description,
+.pm-alert-row-bullet,
+.pm-alert-row-meta {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.pm-alert-row-title {
+  font-weight: 600;
+}
+
+.pm-alert-row-meta {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.pm-alert-row-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+  justify-content: flex-end;
+}
+
+.pm-alert-row-actions .action-button,
+.pm-task-table-actions .action-button,
+.pm-project-gantt-summary-actions .action-button,
+.pm-project-gantt-row-actions .action-button {
+  white-space: nowrap;
 }
 
 .pm-critical-path-strip {
@@ -4379,7 +4421,7 @@ textarea {
 
 .pm-workplan-table {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.4rem;
 }
 
 .pm-workplan-row {
@@ -4395,10 +4437,10 @@ textarea {
     minmax(220px, 1fr)
     7rem
     minmax(250px, 1.05fr);
-  gap: 0.75rem;
+  gap: 0.6rem;
   align-items: start;
-  padding: 0.9rem 1rem;
-  border-radius: 1rem;
+  padding: 0.62rem 0.82rem;
+  border-radius: 0.82rem;
   border: 1px solid var(--border);
   background: var(--surface);
 }
@@ -4419,12 +4461,12 @@ textarea {
 .pm-workplan-row-compact,
 .pm-workplan-row-compact-head {
   grid-template-columns:
-    minmax(250px, 1.65fr)
+    minmax(250px, 1.8fr)
     minmax(108px, 0.72fr)
     minmax(96px, 0.68fr)
     minmax(96px, 0.68fr)
-    minmax(240px, 1.35fr)
-    minmax(180px, 0.9fr);
+    minmax(220px, 1.1fr)
+    minmax(150px, 0.78fr);
 }
 
 .pm-workplan-row[role="button"] {
@@ -4469,25 +4511,28 @@ textarea {
 
 .pm-task-table-cell {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.2rem;
   min-width: 0;
 }
 
 .pm-task-table-cell.is-primary .inventory-cell-main {
-  font-size: 0.96rem;
-  line-height: 1.35;
+  font-size: 0.9rem;
+  line-height: 1.25;
 }
 
 .pm-task-row-secondary {
   color: var(--text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.45;
+  font-size: 0.76rem;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pm-task-table-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
   align-items: center;
 }
 
@@ -4508,7 +4553,13 @@ textarea {
 .pm-workplan-planning-stack,
 .pm-workplan-planning-badges {
   display: grid;
-  gap: 0.4rem;
+  gap: 0.18rem;
+}
+
+.pm-workplan-planning-title {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  line-height: 1.2;
 }
 
 .pm-workplan-planning-badges {
@@ -4522,8 +4573,11 @@ textarea {
 .pm-workplan-suggestion-copy,
 .pm-gantt-suggestion-copy {
   color: var(--text-secondary);
-  font-size: 0.82rem;
-  line-height: 1.4;
+  font-size: 0.76rem;
+  line-height: 1.25;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pm-workplan-suggestion-stack {
@@ -4817,35 +4871,33 @@ body.pm-is-dragging {
 
 .pm-task-detail-shell {
   display: grid;
-  gap: 1rem;
+  gap: 0.55rem;
 }
 
 .pm-task-detail-collapsed {
   display: grid;
-  gap: 0.85rem;
+  gap: 0.35rem;
 }
 
-.pm-task-detail-collapsed-head {
+.pm-task-detail-collapsed-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.65rem;
   flex-wrap: wrap;
 }
 
-.pm-task-detail-collapsed-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-  gap: 0.75rem;
+.pm-task-detail-collapsed-title {
+  color: var(--text-primary);
+  font-size: 0.88rem;
 }
 
-.pm-task-detail-collapsed-summary > div {
-  display: grid;
-  gap: 0.2rem;
-  padding: 0.85rem 0.95rem;
-  border-radius: 0.95rem;
-  border: 1px solid var(--border);
-  background: var(--surface-muted);
+.pm-task-detail-collapsed-row span {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.pm-task-detail-collapsed-summary {
+  display: none;
 }
 
 .pm-task-detail-toggle {
@@ -5912,12 +5964,12 @@ body.pm-is-dragging {
   .pm-workplan-row-compact,
   .pm-workplan-row-compact-head {
     grid-template-columns:
-      minmax(220px, 1.45fr)
+      minmax(220px, 1.5fr)
       minmax(104px, 0.72fr)
       minmax(88px, 0.65fr)
       minmax(88px, 0.65fr)
-      minmax(210px, 1.15fr)
-      minmax(170px, 0.9fr);
+      minmax(190px, 1fr)
+      minmax(148px, 0.85fr);
   }
 }
 
@@ -5962,11 +6014,11 @@ body.pm-is-dragging {
 
   .pm-project-gantt-left-row {
     grid-template-columns: 1fr;
-    gap: 0.85rem;
+    gap: 0.55rem;
   }
 
   .pm-project-gantt-summary-actions .action-button {
-    width: 100%;
+    width: auto;
   }
 
   .pm-task-table-compact .pm-task-table-cell::before {
@@ -5983,6 +6035,15 @@ body.pm-is-dragging {
   }
 
   .pm-task-table-compact .pm-task-table-actions {
+    justify-content: flex-start;
+  }
+
+  .pm-alert-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .pm-alert-row-actions {
     justify-content: flex-start;
   }
 }

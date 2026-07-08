@@ -1,12 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  AlertTriangle,
   CalendarRange,
   Eye,
   Gauge,
-  Lock,
   Pencil,
-  Route,
   Sparkles,
 } from "lucide-react";
 
@@ -157,6 +154,28 @@ function getTaskVisualMeta(task) {
     overdue,
     tone,
   };
+}
+
+function getTaskCompactAlert(task, visualMeta) {
+  const dependencySummary = getTaskDependencySummary(task);
+  const dependencyDetail = normalizePmCopy(safeDisplayText(task?.dependency_state?.detail));
+  const sequenceReason = normalizePmCopy(safeDisplayText(task?.schedule_suggestion?.razon));
+
+  if (visualMeta.blocked) {
+    return dependencyDetail ? `Bloqueada - ${dependencyDetail}` : `Bloqueada - ${dependencySummary}`;
+  }
+  if (visualMeta.outOfSequence) {
+    return sequenceReason ? `Fuera de secuencia - ${sequenceReason}` : "Fuera de secuencia";
+  }
+  if (task?.es_critica) {
+    return dependencySummary !== "Sin dependencias registradas"
+      ? `En ruta critica - ${dependencySummary}`
+      : "En ruta critica";
+  }
+  if (visualMeta.overdue) {
+    return "Atrasada - Revisar fecha compromiso";
+  }
+  return dependencySummary !== "Sin dependencias registradas" ? dependencySummary : "Sin alertas";
 }
 
 function getTaskSortValue(task) {
@@ -460,9 +479,15 @@ function GanttBody({
       {selectedTask ? (
         <div className="pm-project-gantt-summary">
           <div className="pm-project-gantt-summary-main">
-            <div>
+            <div className="pm-project-gantt-summary-copy">
               <span className="pm-project-gantt-summary-eyebrow">Tarea seleccionada</span>
               <strong>{normalizePmCopy(safeDisplayText(selectedTask.titulo, "Tarea sin nombre"))}</strong>
+            </div>
+            <div className="pm-project-gantt-summary-meta">
+              <span>Responsable: {safeDisplayText(selectedTask.asignado_nombre_snapshot, "Sin responsable")}</span>
+              <span>Inicio: {safeDisplayText(formatDate(selectedTask.fecha_inicio), "Sin fecha")}</span>
+              <span>Fin: {safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "Sin fecha")}</span>
+              <span>{getTaskCompactAlert(selectedTask, getTaskVisualMeta(selectedTask))}</span>
             </div>
             <div className="pm-project-gantt-summary-badges">
               <StatusBadge tone={getTaskStatusTone(selectedTask.estatus)}>{getTaskStatusLabel(selectedTask.estatus)}</StatusBadge>
@@ -471,58 +496,48 @@ function GanttBody({
               {selectedTask?.dependency_state?.is_blocked ? <StatusBadge tone="warning">Bloqueada</StatusBadge> : null}
               {selectedTask?.schedule_suggestion?.fuera_de_secuencia ? <StatusBadge tone="warning">Fuera de secuencia</StatusBadge> : null}
             </div>
-          </div>
-          <div className="pm-project-gantt-summary-meta">
-            <span>Responsable: {safeDisplayText(selectedTask.asignado_nombre_snapshot, "Sin responsable")}</span>
-            <span>Inicio: {safeDisplayText(formatDate(selectedTask.fecha_inicio), "Sin fecha")}</span>
-            <span>Fin: {safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "Sin fecha")}</span>
-          </div>
-          <div className="pm-project-gantt-summary-actions">
-            <ActionButton
-              icon={<Eye size={14} strokeWidth={1.9} />}
-              onClick={() => onViewTaskDetail?.(selectedTask.id)}
-              size="sm"
-              type="button"
-            >
-              Ver detalle
-            </ActionButton>
-            <ActionButton
-              icon={<Gauge size={14} strokeWidth={1.9} />}
-              disabled={!canEditTask}
-              onClick={() => onEditTask?.(selectedTask.id)}
-              size="sm"
-              type="button"
-            >
-              Editar tarea
-            </ActionButton>
-            <ActionButton
-              icon={<Pencil size={14} strokeWidth={1.9} />}
-              disabled={!canEditTask}
-              onClick={() => onEditTaskDates?.(selectedTask.id)}
-              size="sm"
-              type="button"
-            >
-              Editar fechas
-            </ActionButton>
-            {selectedTask?.schedule_suggestion?.fuera_de_secuencia && canEditTask ? (
+            <div className="pm-project-gantt-summary-actions">
               <ActionButton
-                icon={<Sparkles size={14} strokeWidth={1.9} />}
-                onClick={() => onApplySuggestedDates?.(selectedTask.id)}
+                icon={<Eye size={14} strokeWidth={1.9} />}
+                onClick={() => onViewTaskDetail?.(selectedTask.id)}
                 size="sm"
-                tone="primary"
                 type="button"
               >
-                Aplicar sugerida
+                Ver
               </ActionButton>
-            ) : null}
+              <ActionButton
+                icon={<Gauge size={14} strokeWidth={1.9} />}
+                disabled={!canEditTask}
+                onClick={() => onEditTask?.(selectedTask.id)}
+                size="sm"
+                type="button"
+              >
+                Avance
+              </ActionButton>
+              <ActionButton
+                icon={<Pencil size={14} strokeWidth={1.9} />}
+                disabled={!canEditTask}
+                onClick={() => onEditTaskDates?.(selectedTask.id)}
+                size="sm"
+                type="button"
+              >
+                Fechas
+              </ActionButton>
+              {selectedTask?.schedule_suggestion?.fuera_de_secuencia && canEditTask ? (
+                <ActionButton
+                  icon={<Sparkles size={14} strokeWidth={1.9} />}
+                  onClick={() => onApplySuggestedDates?.(selectedTask.id)}
+                  size="sm"
+                  tone="primary"
+                  type="button"
+                >
+                  Sugerida
+                </ActionButton>
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}
-
-      <div className="pm-project-gantt-help">
-        <span>Vista Gantt estilo tabla + cronograma.</span>
-        {canEditTask ? <span>Arrastra la barra para mover fechas y usa los extremos para ajustar inicio o fin.</span> : null}
-      </div>
 
       <div className="pm-project-gantt-board">
         <div className="pm-project-gantt-head">
@@ -557,8 +572,6 @@ function GanttBody({
             {tasksWithDates.map((task) => {
               const visualMeta = getTaskVisualMeta(task);
               const selected = selectedTaskId === task.id;
-              const editingDates = Boolean(taskActionLoading?.[`${task.id}:dates`]);
-              const applyingSuggestion = Boolean(taskActionLoading?.[`${task.id}:apply-suggestion`]);
 
               return (
                 <div
@@ -577,34 +590,7 @@ function GanttBody({
                 >
                   <div className="pm-project-gantt-cell is-primary">
                     <strong>{normalizePmCopy(safeDisplayText(task.titulo, "Tarea sin nombre"))}</strong>
-                    <span>{getTaskDependencySummary(task)}</span>
-                    <div className="pm-project-gantt-mini-badges">
-                      {task?.es_critica ? (
-                        <StatusBadge tone="danger">
-                          <Route size={12} strokeWidth={1.9} />
-                          En ruta critica
-                        </StatusBadge>
-                      ) : null}
-                      {visualMeta.blocked ? (
-                        <StatusBadge tone="danger">
-                          <Lock size={12} strokeWidth={1.9} />
-                          Bloqueada
-                        </StatusBadge>
-                      ) : null}
-                      {visualMeta.outOfSequence ? (
-                        <StatusBadge tone="warning">
-                          <AlertTriangle size={12} strokeWidth={1.9} />
-                          Fuera de secuencia
-                        </StatusBadge>
-                      ) : null}
-                    </div>
-                    {selected ? (
-                      <div className="pm-project-gantt-row-actions">
-                        <StatusBadge tone="info">Seleccionada</StatusBadge>
-                        {editingDates ? <StatusBadge tone="warning">Editando fechas...</StatusBadge> : null}
-                        {applyingSuggestion ? <StatusBadge tone="warning">Aplicando sugerencia...</StatusBadge> : null}
-                      </div>
-                    ) : null}
+                    <span className="pm-project-gantt-secondary-line">{getTaskCompactAlert(task, visualMeta)}</span>
                   </div>
                   <div className="pm-project-gantt-cell">
                     <strong>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</strong>
@@ -635,9 +621,11 @@ function GanttBody({
                 const barLayout = activeInteraction
                   ? buildBarLayoutFromDates(activeInteraction.nextStart, activeInteraction.nextEnd, timelineRange)
                   : buildBarLayout(task, timelineRange);
-                const barLabel = barLayout.width >= 220
-                  ? `${formatPercent(task.porcentaje_avance)} - ${normalizePmCopy(safeDisplayText(task.titulo, "Tarea"))}`
-                  : formatPercent(task.porcentaje_avance);
+                const barLabel = barLayout.width >= 170
+                  ? normalizePmCopy(safeDisplayText(task.titulo, "Tarea"))
+                  : barLayout.width >= 96
+                    ? formatPercent(task.porcentaje_avance)
+                    : "";
 
                 return (
                   <div
@@ -710,7 +698,7 @@ function GanttBody({
                   <div>
                     <strong>{normalizePmCopy(safeDisplayText(task.titulo, "Tarea sin nombre"))}</strong>
                     <p className="table-note">
-                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} - {getTaskDependencySummary(task)}
+                      {safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} - {getTaskCompactAlert(task, visualMeta)}
                     </p>
                   </div>
                   <div className="pm-project-gantt-missing-badges">
@@ -740,10 +728,10 @@ function GanttBody({
                       disabled={!canEditTask}
                       onClick={() => onEditTask?.(task.id)}
                       size="sm"
-                      title="Editar tarea"
+                      title="Actualizar avance"
                       type="button"
                     >
-                      Editar
+                      Avance
                     </ActionButton>
                     <ActionButton
                       icon={<Pencil size={14} strokeWidth={1.9} />}
