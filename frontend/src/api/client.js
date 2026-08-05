@@ -1440,6 +1440,15 @@ export function refreshPmProjectBudget({ projectId, token, empresaId }) {
 }
 
 
+export function previewPmBudgetPlan({ budgetId, token, empresaId }) {
+  return apiRequest(`/pm/budgets/${budgetId}/plan-preview`, {
+    method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
 export function getPmProjectBudgetVsActual({ projectId, token, empresaId }) {
   return apiRequest(`/pm/projects/${projectId}/budget-vs-actual`, { token, empresaId });
 }

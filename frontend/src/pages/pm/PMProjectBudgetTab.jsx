@@ -46,6 +46,7 @@ import {
   safeDisplayText,
 } from "../inventory/shared";
 import { formatPercent, pmRateRoleOptions } from "./shared";
+import PMBudgetPlanPreviewModal from "./PMBudgetPlanPreviewModal";
 
 
 const defaultBudgetForm = {
@@ -310,6 +311,7 @@ export default function PMProjectBudgetTab({
   const [bundle, setBundle] = useState(null);
   const [materialsCatalog, setMaterialsCatalog] = useState([]);
   const [activeBudgetModal, setActiveBudgetModal] = useState("");
+  const [isPlanPreviewOpen, setIsPlanPreviewOpen] = useState(false);
 
   const [editingBudget, setEditingBudget] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
@@ -496,6 +498,17 @@ export default function PMProjectBudgetTab({
 
   function openEditBudgetModal(event) {
     openBudgetModal("budget", budget, event);
+  }
+
+  function openPlanPreview() {
+    if (!budget?.id) {
+      return;
+    }
+    setIsPlanPreviewOpen(true);
+  }
+
+  function closePlanPreview() {
+    setIsPlanPreviewOpen(false);
   }
 
   function openCreateItemModal(type = "partida", event = null) {
@@ -986,6 +999,9 @@ export default function PMProjectBudgetTab({
               </>
             ) : (
               <>
+                <ActionButton disabled={saving || !budget} icon={<ClipboardList size={16} strokeWidth={1.9} />} onClick={openPlanPreview} type="button">
+                  Revisar estructura del proyecto
+                </ActionButton>
                 <ActionButton disabled={!canEditBudget} onClick={openEditBudgetModal} type="button">
                   Editar
                 </ActionButton>
@@ -1028,7 +1044,8 @@ export default function PMProjectBudgetTab({
             title="Este proyecto aún no tiene presupuesto detallado"
           />
         ) : (
-          <div className="pm-budget-header-grid">
+          <div className="pm-budget-header-stack">
+            <div className="pm-budget-header-grid">
             <div className="pm-project-header-item">
               <span>Nombre</span>
               <strong>{safeDisplayText(budget.nombre)}</strong>
@@ -1057,6 +1074,13 @@ export default function PMProjectBudgetTab({
               <span>Aprobación</span>
               <strong>{budget.aprobado_at ? "Aprobado" : "Pendiente"}</strong>
             </div>
+            </div>
+
+            {budget.estatus === "borrador" ? (
+              <p className="table-note pm-budget-preview-entry-note">
+                Puedes revisar la estructura ahora, pero todavia puede cambiar mientras el presupuesto siga en borrador.
+              </p>
+            ) : null}
           </div>
         )}
       </DataCard>
@@ -1693,6 +1717,15 @@ export default function PMProjectBudgetTab({
           </FormGrid>
         </form>
       </ModalShell>
+
+      <PMBudgetPlanPreviewModal
+        budgetId={budget?.id ?? ""}
+        budgetStatus={budget?.estatus ?? ""}
+        empresaId={empresaId}
+        onClose={closePlanPreview}
+        open={isPlanPreviewOpen}
+        token={token}
+      />
     </div>
   );
 }
