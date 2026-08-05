@@ -1284,17 +1284,17 @@ export default function PMProjectDetailPage() {
 
   async function handleTaskStatusChange(task, nextStatus) {
     if (!task?.id) {
-      return;
+      return false;
     }
 
     const currentTask = resolvedTasks.find((item) => item.id === task.id) ?? task;
     const action = nextStatus === "completada" ? "complete" : nextStatus === "en_progreso" ? "start" : "update";
     if (currentTask.is_blocked) {
       handleBlockedTaskAttempt(currentTask);
-      return;
+      return false;
     }
     if (isTaskActionPending(task.id, action)) {
-      return;
+      return false;
     }
 
     const rollbackTask = {
@@ -1319,15 +1319,66 @@ export default function PMProjectDetailPage() {
       });
       setSuccess(`Tarea "${safeDisplayText(task.titulo)}" actualizada.`);
       await refreshPmWorkPlanLight({ background: true });
+      return true;
     } catch (requestError) {
       patchLocalTask(task.id, (current) => ({
         ...current,
         estatus: rollbackTask.estatus,
         porcentaje_avance: rollbackTask.porcentaje_avance,
       }));
-      setError(requestError.message || "No se pudo actualizar el estatus de la tarea.");
+      setError(getPmUiError(requestError, "No se pudo actualizar el estatus de la tarea."));
+      return false;
     } finally {
       setTaskLoading(task.id, action, false);
+    }
+  }
+
+  async function handleInlineTaskUpdate(taskId, payload, options = {}) {
+    if (!taskId || !payload || typeof payload !== "object") {
+      return null;
+    }
+
+    const {
+      action = "inline",
+      successMessage = "Tarea actualizada.",
+      errorMessage = "No se pudo actualizar la tarea.",
+      optimisticPatch = payload,
+    } = options;
+
+    if (isTaskActionPending(taskId, action)) {
+      return null;
+    }
+
+    const currentTask = resolvedTasks.find((item) => item.id === taskId);
+    if (!currentTask) {
+      return null;
+    }
+
+    const rollbackTask = { ...currentTask };
+    setError("");
+    setSuccess("");
+    setTaskLoading(taskId, action, true);
+    patchLocalTask(taskId, (task) => ({
+      ...task,
+      ...optimisticPatch,
+    }));
+
+    try {
+      const response = await updatePmTask({
+        taskId,
+        token,
+        empresaId,
+        payload,
+      });
+      setSuccess(successMessage);
+      await refreshPmWorkPlanLight({ background: true });
+      return response ?? {};
+    } catch (requestError) {
+      patchLocalTask(taskId, () => rollbackTask);
+      setError(getPmUiError(requestError, errorMessage));
+      return null;
+    } finally {
+      setTaskLoading(taskId, action, false);
     }
   }
 
@@ -1830,6 +1881,7 @@ export default function PMProjectDetailPage() {
           onEditTaskDates={(taskId) => openTaskDatesModal(taskId, "edit")}
           onEditTask={openExistingTaskModal}
           onGanttNotice={handleGanttInteractionNotice}
+          onInlineTaskUpdate={handleInlineTaskUpdate}
           onPreviewReschedule={(taskId, draft) =>
             openTaskDatesModal(taskId, "drag", {
               proposedStart: draft?.proposedStart ?? null,
@@ -1846,6 +1898,7 @@ export default function PMProjectDetailPage() {
           planningSummary={planningSummary}
           canConfigureCalendar={canManageActiveProjectUi}
           canEditTasks={canEditActiveProjectUi}
+          memberOptions={activeMembers}
           projectId={id}
           refreshing={refreshing}
           selectedTaskId={selectedTaskId}

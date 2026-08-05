@@ -221,6 +221,7 @@ export default function PMProjectWorkPlanView({
   canConfigureCalendar = false,
   canEditTasks = false,
   empresaId,
+  memberOptions = [],
   materialConsumptions,
   materialPlans,
   onApplyAllSuggestions,
@@ -232,11 +233,13 @@ export default function PMProjectWorkPlanView({
   onEditTask,
   onEditTaskDates,
   onGanttNotice,
+  onInlineTaskUpdate,
   onPreviewReschedule,
   onRefresh,
   onRecalculatePlanning,
   onResolveAlert,
   onSelectTask,
+  onSetTaskStatus,
   planningCriticalPath,
   planningSummary,
   projectId,
@@ -496,12 +499,15 @@ export default function PMProjectWorkPlanView({
           <PMProjectGanttLite
             canEditTask={canEditTasks}
             embedded
+            memberOptions={memberOptions}
             onApplySuggestedDates={onApplySuggestedDates}
             onGanttNotice={onGanttNotice}
             onEditTask={onEditTask}
             onEditTaskDates={onEditTaskDates}
+            onInlineTaskUpdate={onInlineTaskUpdate}
             onPreviewReschedule={onPreviewReschedule}
             onSelectTask={onSelectTask}
+            onSetTaskStatus={onSetTaskStatus}
             onViewTaskDetail={openTaskDetail}
             selectedTaskId={selectedTaskId}
             taskActionLoading={taskActionLoading}

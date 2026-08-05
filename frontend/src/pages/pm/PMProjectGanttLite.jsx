@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarRange,
+  Check,
   Eye,
   Gauge,
   Pencil,
   Sparkles,
+  X,
 } from "lucide-react";
 
 import {
@@ -21,9 +23,30 @@ import {
   getTaskStatusTone,
   isTaskOverdue,
   normalizePmCopy,
+  taskStatusOptions,
 } from "./shared";
 
-const projectGanttColumns = "2.55fr 1fr 0.85fr 0.7fr 0.75fr 0.75fr";
+const projectGanttColumns = "2.45fr 1fr 0.95fr 0.82fr 0.8fr 0.8fr";
+const inlineEditableTaskStatuses = taskStatusOptions.filter(
+  (option) => !["cancelada"].includes(String(option?.value ?? "").toLowerCase()),
+);
+
+function clampProgressValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function getMemberDisplayName(member) {
+  return safeDisplayText(member?.nombre_snapshot || member?.email || member?.usuario_id, "Sin responsable");
+}
+
+function getTaskAssigneeLabel(task, members = []) {
+  const assignedMember = members.find((member) => String(member?.usuario_id ?? "") === String(task?.asignado_user_id ?? ""));
+  return safeDisplayText(task?.asignado_nombre_snapshot || getMemberDisplayName(assignedMember), "Sin responsable");
+}
 
 function parseDateValue(value) {
   if (!value) {
@@ -317,18 +340,25 @@ function buildBarLayoutFromDates(startDate, endDate, timelineRange) {
 
 function GanttBody({
   canEditTask = true,
+  memberOptions = [],
   onApplySuggestedDates,
   onGanttNotice,
   onEditTask,
   onEditTaskDates,
+  onInlineTaskUpdate,
   onPreviewReschedule,
   onSelectTask,
+  onSetTaskStatus,
   onViewTaskDetail,
   selectedTaskId,
   taskActionLoading = {},
   tasks = [],
 }) {
   const [interaction, setInteraction] = useState(null);
+  const [editingCell, setEditingCell] = useState(null);
+  const [draftValues, setDraftValues] = useState({});
+  const [inlineFeedback, setInlineFeedback] = useState({});
+  const feedbackTimersRef = useRef({});
   const sortedTasks = useMemo(
     () =>
       [...tasks].sort((left, right) => {
@@ -358,6 +388,200 @@ function GanttBody({
     () => sortedTasks.find((task) => task.id === selectedTaskId) ?? null,
     [selectedTaskId, sortedTasks],
   );
+  const availableMembers = useMemo(
+    () => (memberOptions ?? []).filter((member) => member?.activo !== false && member?.usuario_id),
+    [memberOptions],
+  );
+
+  useEffect(() => () => {
+    Object.values(feedbackTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
+  }, []);
+
+  useEffect(() => {
+    if (!editingCell) {
+      return;
+    }
+    const taskStillExists = sortedTasks.some((task) => task.id === editingCell.taskId);
+    if (!taskStillExists) {
+      setEditingCell(null);
+    }
+  }, [editingCell, sortedTasks]);
+
+  function getCellKey(taskId, field) {
+    return `${taskId}:${field}`;
+  }
+
+  function getDraftValue(task, field, fallback = "") {
+    const key = getCellKey(task.id, field);
+    if (draftValues[key] !== undefined) {
+      return draftValues[key];
+    }
+    if (field === "progress") {
+      return String(clampProgressValue(task?.porcentaje_avance ?? 0));
+    }
+    if (field === "status") {
+      return String(task?.estatus ?? "pendiente");
+    }
+    if (field === "assignee") {
+      return String(task?.asignado_user_id ?? "");
+    }
+    return fallback;
+  }
+
+  function clearInlineFeedback(taskId, field) {
+    const key = getCellKey(taskId, field);
+    if (feedbackTimersRef.current[key]) {
+      window.clearTimeout(feedbackTimersRef.current[key]);
+      delete feedbackTimersRef.current[key];
+    }
+    setInlineFeedback((current) => {
+      if (!current[key]) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function setInlineFeedbackState(taskId, field, status, message, { autoClear = status === "saved" } = {}) {
+    const key = getCellKey(taskId, field);
+    if (feedbackTimersRef.current[key]) {
+      window.clearTimeout(feedbackTimersRef.current[key]);
+      delete feedbackTimersRef.current[key];
+    }
+    setInlineFeedback((current) => ({
+      ...current,
+      [key]: { status, message },
+    }));
+    if (autoClear) {
+      feedbackTimersRef.current[key] = window.setTimeout(() => {
+        setInlineFeedback((current) => {
+          if (!current[key]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+        delete feedbackTimersRef.current[key];
+      }, 1600);
+    }
+  }
+
+  function openInlineEditor(task, field) {
+    if (!canEditTask) {
+      return;
+    }
+    const key = getCellKey(task.id, field);
+    setEditingCell({ taskId: task.id, field });
+    clearInlineFeedback(task.id, field);
+    setDraftValues((current) => ({
+      ...current,
+      [key]: getDraftValue(task, field),
+    }));
+  }
+
+  function closeInlineEditor(taskId, field) {
+    const key = getCellKey(taskId, field);
+    setEditingCell((current) => {
+      if (current?.taskId === taskId && current?.field === field) {
+        return null;
+      }
+      return current;
+    });
+    setDraftValues((current) => {
+      if (current[key] === undefined) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
+
+  async function commitStatusUpdate(task, nextStatus) {
+    if (!task?.id) {
+      return;
+    }
+    if (String(task?.estatus ?? "") === String(nextStatus ?? "")) {
+      closeInlineEditor(task.id, "status");
+      return;
+    }
+
+    setInlineFeedbackState(task.id, "status", "saving", "Guardando...", { autoClear: false });
+    const saved = await onSetTaskStatus?.(task, nextStatus);
+    if (saved) {
+      closeInlineEditor(task.id, "status");
+      setInlineFeedbackState(task.id, "status", "saved", "Guardado");
+      return;
+    }
+    setInlineFeedbackState(task.id, "status", "error", "Error al actualizar", { autoClear: false });
+  }
+
+  async function commitProgressUpdate(task) {
+    if (!task?.id) {
+      return;
+    }
+    const nextProgress = clampProgressValue(getDraftValue(task, "progress", "0"));
+    if (nextProgress === clampProgressValue(task?.porcentaje_avance ?? 0)) {
+      closeInlineEditor(task.id, "progress");
+      return;
+    }
+
+    setInlineFeedbackState(task.id, "progress", "saving", "Guardando...", { autoClear: false });
+    const saved = await onInlineTaskUpdate?.(
+      task.id,
+      { porcentaje_avance: nextProgress },
+      {
+        action: "inline-progress",
+        successMessage: "Avance actualizado.",
+        errorMessage: "No se pudo actualizar el avance.",
+        optimisticPatch: { porcentaje_avance: nextProgress },
+      },
+    );
+    if (saved) {
+      closeInlineEditor(task.id, "progress");
+      setInlineFeedbackState(task.id, "progress", "saved", "Guardado");
+      return;
+    }
+    setInlineFeedbackState(task.id, "progress", "error", "Error al actualizar", { autoClear: false });
+  }
+
+  async function commitAssigneeUpdate(task, nextAssigneeId) {
+    if (!task?.id) {
+      return;
+    }
+    if (String(task?.asignado_user_id ?? "") === String(nextAssigneeId ?? "")) {
+      closeInlineEditor(task.id, "assignee");
+      return;
+    }
+
+    const selectedMember = availableMembers.find((member) => String(member.usuario_id) === String(nextAssigneeId));
+    setInlineFeedbackState(task.id, "assignee", "saving", "Guardando...", { autoClear: false });
+    const saved = await onInlineTaskUpdate?.(
+      task.id,
+      {
+        asignado_user_id: nextAssigneeId || null,
+        asignado_nombre_snapshot: nextAssigneeId ? null : null,
+      },
+      {
+        action: "inline-assignee",
+        successMessage: "Responsable actualizado.",
+        errorMessage: "No se pudo actualizar el responsable.",
+        optimisticPatch: {
+          asignado_user_id: nextAssigneeId || null,
+          asignado_nombre_snapshot: nextAssigneeId ? getMemberDisplayName(selectedMember) : null,
+        },
+      },
+    );
+    if (saved) {
+      closeInlineEditor(task.id, "assignee");
+      setInlineFeedbackState(task.id, "assignee", "saved", "Guardado");
+      return;
+    }
+    setInlineFeedbackState(task.id, "assignee", "error", "Error al actualizar", { autoClear: false });
+  }
 
   useEffect(() => {
     if (!interaction) {
@@ -468,6 +692,234 @@ function GanttBody({
       nextEnd: endDate,
       pxPerDay: timelineRange.pxPerDay,
     });
+  }
+
+  function renderInlineFeedback(taskId, field) {
+    const feedback = inlineFeedback[getCellKey(taskId, field)];
+    if (!feedback?.message) {
+      return null;
+    }
+    return <span className={`pm-project-gantt-inline-feedback is-${feedback.status}`}>{feedback.message}</span>;
+  }
+
+  function renderStatusCell(task) {
+    const isEditing = editingCell?.taskId === task.id && editingCell?.field === "status";
+    const draftValue = getDraftValue(task, "status");
+
+    if (isEditing && canEditTask) {
+      return (
+        <div
+          className="pm-project-gantt-inline-editor"
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <select
+            autoFocus
+            className="pm-project-gantt-inline-select"
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setDraftValues((current) => ({
+                ...current,
+                [getCellKey(task.id, "status")]: nextValue,
+              }));
+              void commitStatusUpdate(task, nextValue);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeInlineEditor(task.id, "status");
+              }
+            }}
+            value={draftValue}
+          >
+            {inlineEditableTaskStatuses.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <button
+            aria-label="Cancelar edición de estado"
+            className="pm-project-gantt-inline-icon"
+            onClick={(event) => stopEvent(event, () => closeInlineEditor(task.id, "status"))}
+            type="button"
+          >
+            <X size={12} strokeWidth={2} />
+          </button>
+          {renderInlineFeedback(task.id, "status")}
+        </div>
+      );
+    }
+
+    return (
+      <button
+        className="pm-project-gantt-inline-trigger"
+        disabled={!canEditTask}
+        onClick={(event) => stopEvent(event, () => openInlineEditor(task, "status"))}
+        type="button"
+      >
+        <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
+        {renderInlineFeedback(task.id, "status")}
+      </button>
+    );
+  }
+
+  function renderProgressCell(task) {
+    const isEditing = editingCell?.taskId === task.id && editingCell?.field === "progress";
+    const draftValue = getDraftValue(task, "progress");
+
+    if (isEditing && canEditTask) {
+      return (
+        <div
+          className="pm-project-gantt-inline-editor"
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <input
+            autoFocus
+            className="pm-project-gantt-inline-input"
+            max="100"
+            min="0"
+            onChange={(event) =>
+              setDraftValues((current) => ({
+                ...current,
+                [getCellKey(task.id, "progress")]: event.target.value,
+              }))
+            }
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                void commitProgressUpdate(task);
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeInlineEditor(task.id, "progress");
+              }
+            }}
+            step="1"
+            type="number"
+            value={draftValue}
+          />
+          <div className="pm-project-gantt-inline-actions">
+            <button
+              aria-label="Guardar avance"
+              className="pm-project-gantt-inline-icon is-primary"
+              onClick={(event) => stopEvent(event, () => void commitProgressUpdate(task))}
+              type="button"
+            >
+              <Check size={12} strokeWidth={2} />
+            </button>
+            <button
+              aria-label="Cancelar edición de avance"
+              className="pm-project-gantt-inline-icon"
+              onClick={(event) => stopEvent(event, () => closeInlineEditor(task.id, "progress"))}
+              type="button"
+            >
+              <X size={12} strokeWidth={2} />
+            </button>
+          </div>
+          {renderInlineFeedback(task.id, "progress")}
+        </div>
+      );
+    }
+
+    return (
+      <button
+        className="pm-project-gantt-inline-trigger"
+        disabled={!canEditTask}
+        onClick={(event) => stopEvent(event, () => openInlineEditor(task, "progress"))}
+        type="button"
+      >
+        <strong>{formatPercent(task.porcentaje_avance)}</strong>
+        {renderInlineFeedback(task.id, "progress")}
+      </button>
+    );
+  }
+
+  function renderAssigneeCell(task) {
+    const canEditAssignee = canEditTask && availableMembers.length > 0;
+    const isEditing = editingCell?.taskId === task.id && editingCell?.field === "assignee";
+    const draftValue = getDraftValue(task, "assignee");
+
+    if (isEditing && canEditAssignee) {
+      return (
+        <div
+          className="pm-project-gantt-inline-editor"
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <select
+            autoFocus
+            className="pm-project-gantt-inline-select"
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setDraftValues((current) => ({
+                ...current,
+                [getCellKey(task.id, "assignee")]: nextValue,
+              }));
+              void commitAssigneeUpdate(task, nextValue);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeInlineEditor(task.id, "assignee");
+              }
+            }}
+            value={draftValue}
+          >
+            <option value="">Sin responsable</option>
+            {availableMembers.map((member) => (
+              <option key={member.usuario_id} value={member.usuario_id}>
+                {getMemberDisplayName(member)}
+              </option>
+            ))}
+          </select>
+          <button
+            aria-label="Cancelar edición de responsable"
+            className="pm-project-gantt-inline-icon"
+            onClick={(event) => stopEvent(event, () => closeInlineEditor(task.id, "assignee"))}
+            type="button"
+          >
+            <X size={12} strokeWidth={2} />
+          </button>
+          {renderInlineFeedback(task.id, "assignee")}
+        </div>
+      );
+    }
+
+    if (!canEditAssignee) {
+      return <strong>{getTaskAssigneeLabel(task, availableMembers)}</strong>;
+    }
+
+    return (
+      <button
+        className="pm-project-gantt-inline-trigger"
+        disabled={!canEditAssignee}
+        onClick={(event) => stopEvent(event, () => openInlineEditor(task, "assignee"))}
+        type="button"
+      >
+        <strong>{getTaskAssigneeLabel(task, availableMembers)}</strong>
+        {renderInlineFeedback(task.id, "assignee")}
+      </button>
+    );
+  }
+
+  function renderDateCell(task, field) {
+    const value = field === "start" ? task?.fecha_inicio : task?.fecha_vencimiento;
+    const label = safeDisplayText(formatDate(value), "Sin fecha");
+    const title = field === "start" ? "Editar inicio" : "Editar fecha compromiso";
+
+    return (
+      <button
+        className="pm-project-gantt-date-trigger"
+        disabled={!canEditTask}
+        onClick={(event) => stopEvent(event, () => onEditTaskDates?.(task.id))}
+        title={title}
+        type="button"
+      >
+        <strong>{label}</strong>
+      </button>
+    );
   }
 
   if (tasks.length === 0) {
@@ -593,19 +1045,19 @@ function GanttBody({
                     <span className="pm-project-gantt-secondary-line">{getTaskCompactAlert(task, visualMeta)}</span>
                   </div>
                   <div className="pm-project-gantt-cell">
-                    <strong>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")}</strong>
+                    {renderAssigneeCell(task)}
                   </div>
                   <div className="pm-project-gantt-cell">
-                    <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
+                    {renderStatusCell(task)}
                   </div>
                   <div className="pm-project-gantt-cell">
-                    <strong>{formatPercent(task.porcentaje_avance)}</strong>
+                    {renderProgressCell(task)}
                   </div>
                   <div className="pm-project-gantt-cell">
-                    <strong>{safeDisplayText(formatDate(task.fecha_inicio), "Sin fecha")}</strong>
+                    {renderDateCell(task, "start")}
                   </div>
                   <div className="pm-project-gantt-cell">
-                    <strong>{safeDisplayText(formatDate(task.fecha_vencimiento), "Sin fecha")}</strong>
+                    {renderDateCell(task, "end")}
                   </div>
                 </div>
               );
