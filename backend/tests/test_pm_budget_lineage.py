@@ -15,10 +15,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Empresa, EmpresaUsuario, Plan, Usuario
-from app.models.pm import EmpresaPMConfig, PMPresupuesto, PMPresupuestoTaskLink, PMProyecto, PMTarea
+from app.models.pm import EmpresaPMConfig, PMPresupuesto, PMPresupuestoPartida, PMPresupuestoTaskLink, PMProyecto, PMTarea
 from app.services.pm import (
     PMContext,
     build_budget_item_record,
+    build_budget_item_source_hash,
     create_budget_item,
     create_budget_task_link,
     create_project_budget,
@@ -165,6 +166,11 @@ class PMBudgetLineageTestCase(unittest.TestCase):
         self.db.add(task)
         self.db.flush()
         return task
+
+    def _persist_item(self, item: PMPresupuestoPartida) -> PMPresupuestoPartida:
+        self.db.add(item)
+        self.db.flush()
+        return item
 
     def test_create_budget_item_generates_lineage_for_chapter_and_partida(self) -> None:
         project = self._create_project(self.company_a, name="Proyecto Uno", user=self.user_a)
@@ -719,6 +725,178 @@ class PMBudgetLineageTestCase(unittest.TestCase):
                 sync_status="linked",
             )
         self.assertIn(exc_company.exception.status_code, {400, 404})
+
+    def test_source_hash_stays_equal_across_versions_with_same_parent_lineage(self) -> None:
+        project = self._create_project(self.company_a, name="Proyecto Hash V1/V2", user=self.user_a)
+        budget_v1 = self._create_budget(project, name="V1")
+        budget_v2 = PMPresupuesto(
+            empresa_id=self.company_a.id,
+            proyecto_id=project.id,
+            nombre="V2",
+            version=2,
+            estatus="borrador",
+            moneda="MXN",
+            activo=True,
+        )
+        self.db.add(budget_v2)
+        self.db.flush()
+        chapter_lineage = "chapter-lineage-shared"
+        part_lineage = "part-lineage-shared"
+        chapter_v1 = self._persist_item(
+            build_budget_item_record(
+                empresa_id=self.company_a.id,
+                presupuesto_id=budget_v1.id,
+                proyecto_id=project.id,
+                parent_id=None,
+                codigo="01",
+                nombre="Capitulo",
+                descripcion=None,
+                tipo="capitulo",
+                unidad=None,
+                cantidad=Decimal("1"),
+                margen_pct=Decimal("0"),
+                precio_unitario_manual=None,
+                orden=1,
+                lineage_id=chapter_lineage,
+            )
+        )
+        chapter_v2 = self._persist_item(
+            build_budget_item_record(
+                empresa_id=self.company_a.id,
+                presupuesto_id=budget_v2.id,
+                proyecto_id=project.id,
+                parent_id=None,
+                codigo="01",
+                nombre="Capitulo",
+                descripcion=None,
+                tipo="capitulo",
+                unidad=None,
+                cantidad=Decimal("1"),
+                margen_pct=Decimal("0"),
+                precio_unitario_manual=None,
+                orden=1,
+                lineage_id=chapter_lineage,
+            )
+        )
+        part_v1 = self._persist_item(
+            build_budget_item_record(
+                empresa_id=self.company_a.id,
+                presupuesto_id=budget_v1.id,
+                proyecto_id=project.id,
+                parent_id=chapter_v1.id,
+                codigo="01.01",
+                nombre="Partida",
+                descripcion="Mismo contenido",
+                tipo="partida",
+                unidad="pieza",
+                cantidad=Decimal("2"),
+                margen_pct=Decimal("10"),
+                precio_unitario_manual=Decimal("150"),
+                orden=2,
+                lineage_id=part_lineage,
+            )
+        )
+        part_v2 = self._persist_item(
+            build_budget_item_record(
+                empresa_id=self.company_a.id,
+                presupuesto_id=budget_v2.id,
+                proyecto_id=project.id,
+                parent_id=chapter_v2.id,
+                codigo="01.01",
+                nombre="Partida",
+                descripcion="Mismo contenido",
+                tipo="partida",
+                unidad="pieza",
+                cantidad=Decimal("2"),
+                margen_pct=Decimal("10"),
+                precio_unitario_manual=Decimal("150"),
+                orden=2,
+                lineage_id=part_lineage,
+            )
+        )
+
+        hash_v1 = build_budget_item_source_hash(part_v1, parent_lineage_id=chapter_v1.lineage_id)
+        hash_v2 = build_budget_item_source_hash(part_v2, parent_lineage_id=chapter_v2.lineage_id)
+
+        self.assertNotEqual(chapter_v1.id, chapter_v2.id)
+        self.assertEqual(hash_v1, hash_v2)
+
+    def test_source_hash_changes_when_parent_lineage_changes(self) -> None:
+        project = self._create_project(self.company_a, name="Proyecto Hash Parent Change", user=self.user_a)
+        budget = self._create_budget(project)
+        part = build_budget_item_record(
+            empresa_id=self.company_a.id,
+            presupuesto_id=budget.id,
+            proyecto_id=project.id,
+            parent_id="physical-parent-id",
+            codigo="02.01",
+            nombre="Partida movable",
+            descripcion="Cambio logico",
+            tipo="partida",
+            unidad="m2",
+            cantidad=Decimal("5"),
+            margen_pct=Decimal("8"),
+            precio_unitario_manual=Decimal("200"),
+            orden=3,
+            lineage_id="partida-parent-lineage-change",
+        )
+
+        hash_a = build_budget_item_source_hash(part, parent_lineage_id="chapter-A")
+        hash_b = build_budget_item_source_hash(part, parent_lineage_id="chapter-B")
+
+        self.assertNotEqual(hash_a, hash_b)
+
+    def test_source_hash_without_parent_lineage_ignores_parent_id_changes(self) -> None:
+        project = self._create_project(self.company_a, name="Proyecto Hash Sin Capitulo", user=self.user_a)
+        budget_v1 = self._create_budget(project, name="Libre V1")
+        budget_v2 = PMPresupuesto(
+            empresa_id=self.company_a.id,
+            proyecto_id=project.id,
+            nombre="Libre V2",
+            version=2,
+            estatus="borrador",
+            moneda="MXN",
+            activo=True,
+        )
+        self.db.add(budget_v2)
+        self.db.flush()
+        item_a = build_budget_item_record(
+            empresa_id=self.company_a.id,
+            presupuesto_id=budget_v1.id,
+            proyecto_id=project.id,
+            parent_id=None,
+            codigo="03.01",
+            nombre="Partida libre",
+            descripcion=None,
+            tipo="partida",
+            unidad="srv",
+            cantidad=Decimal("1"),
+            margen_pct=Decimal("0"),
+            precio_unitario_manual=Decimal("999"),
+            orden=1,
+            lineage_id="free-part-lineage",
+        )
+        item_b = build_budget_item_record(
+            empresa_id=self.company_a.id,
+            presupuesto_id=budget_v2.id,
+            proyecto_id=project.id,
+            parent_id="different-physical-parent-id",
+            codigo="03.01",
+            nombre="Partida libre",
+            descripcion=None,
+            tipo="partida",
+            unidad="srv",
+            cantidad=Decimal("1"),
+            margen_pct=Decimal("0"),
+            precio_unitario_manual=Decimal("999"),
+            orden=1,
+            lineage_id="free-part-lineage",
+        )
+
+        hash_a = build_budget_item_source_hash(item_a, parent_lineage_id=None)
+        hash_b = build_budget_item_source_hash(item_b, parent_lineage_id=None)
+
+        self.assertEqual(hash_a, hash_b)
 
     def test_manual_tasks_without_link_still_work_in_planning(self) -> None:
         project = self._create_project(self.company_a, name="Proyecto Nueve", user=self.user_a)

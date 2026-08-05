@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
 
@@ -1609,6 +1610,83 @@ class PMPresupuestoTaskLinkOut(BaseModel):
     last_synced_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class PMBudgetPlanPreviewNoticeOut(BaseModel):
+    code: str
+    message: str
+
+
+class PMBudgetPlanPreviewChangeOut(BaseModel):
+    field: str
+    label: str | None = None
+    current_value: Any = None
+    proposed_value: Any = None
+
+
+class PMBudgetPlanPreviewChapterOut(BaseModel):
+    id: str
+    lineage_id: str
+    code: str | None = None
+    name: str
+    description: str | None = None
+    order: int = 0
+    child_parts_count: int = 0
+
+
+class PMBudgetPlanPreviewItemOut(BaseModel):
+    item_id: str | None = None
+    lineage_id: str
+    chapter_id: str | None = None
+    chapter_lineage_id: str | None = None
+    code: str | None = None
+    name: str
+    action: str
+    reason_code: str
+    reason: str
+    task_id: str | None = None
+    task_title: str | None = None
+    generated_from_budget: bool | None = None
+    sync_status: str | None = None
+    current_source_hash: str | None = None
+    linked_source_hash: str | None = None
+    source_changed: bool = False
+    proposed_changes: list[PMBudgetPlanPreviewChangeOut] = Field(default_factory=list)
+    economic_changes: list[PMBudgetPlanPreviewChangeOut] = Field(default_factory=list)
+    blocking: list[PMBudgetPlanPreviewNoticeOut] = Field(default_factory=list)
+
+
+class PMBudgetPlanPreviewChapterGroupOut(BaseModel):
+    chapter: PMBudgetPlanPreviewChapterOut
+    items: list[PMBudgetPlanPreviewItemOut] = Field(default_factory=list)
+
+
+class PMBudgetPlanPreviewSummaryOut(BaseModel):
+    chapters: int = 0
+    parts: int = 0
+    create: int = 0
+    update: int = 0
+    no_change: int = 0
+    orphan: int = 0
+    conflict: int = 0
+    skip: int = 0
+
+
+class PMBudgetPlanPreviewOut(BaseModel):
+    project_id: str
+    budget_id: str
+    budget_version: int
+    budget_status: str
+    generated_at: datetime
+    is_approved: bool = False
+    warning: str | None = None
+    source_hash_fields: list[str] = Field(default_factory=list)
+    summary: PMBudgetPlanPreviewSummaryOut
+    chapters: list[PMBudgetPlanPreviewChapterGroupOut] = Field(default_factory=list)
+    unassigned_items: list[PMBudgetPlanPreviewItemOut] = Field(default_factory=list)
+    orphans: list[PMBudgetPlanPreviewItemOut] = Field(default_factory=list)
+    conflicts: list[PMBudgetPlanPreviewItemOut] = Field(default_factory=list)
+    warnings: list[PMBudgetPlanPreviewNoticeOut] = Field(default_factory=list)
 
 
 class PMPresupuestoIndirectoCreate(BaseModel):

@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
@@ -58,6 +59,13 @@ from app.schemas.pm import (
     PMBaselineDeviationOut,
     PMBaselineTaskComparisonOut,
     PMBaselineVsActualOut,
+    PMBudgetPlanPreviewChapterGroupOut,
+    PMBudgetPlanPreviewChapterOut,
+    PMBudgetPlanPreviewChangeOut,
+    PMBudgetPlanPreviewItemOut,
+    PMBudgetPlanPreviewNoticeOut,
+    PMBudgetPlanPreviewOut,
+    PMBudgetPlanPreviewSummaryOut,
     PMBudgetVsActualOut,
     PMCambioProyectoOut,
     PMCommentOut,
@@ -160,6 +168,35 @@ PM_EDIT_PROJECT_ROLES = {"owner", "admin", "user"}
 PM_BUDGET_STATUS = {"borrador", "aprobado", "sustituido", "cancelado"}
 PM_BUDGET_ITEM_TYPES = {"capitulo", "partida"}
 PM_BUDGET_TASK_LINK_STATUS = {"linked", "detached", "orphaned", "conflict"}
+PM_BUDGET_PREVIEW_ACTIONS = {"create", "update", "no_change", "orphan", "conflict", "skip"}
+PM_BUDGET_SOURCE_HASH_FIELDS = (
+    "lineage_id",
+    "codigo",
+    "nombre",
+    "descripcion",
+    "tipo",
+    "unidad",
+    "cantidad",
+    "costo_unitario",
+    "precio_unitario",
+    "precio_unitario_manual",
+    "subtotal_costo",
+    "subtotal_venta",
+    "margen_pct",
+    "orden",
+    "activo",
+    "parent_lineage_id",
+)
+PM_BUDGET_PREVIEW_ECONOMIC_FIELD_LABELS = {
+    "unidad": "Unidad",
+    "cantidad": "Cantidad",
+    "costo_unitario": "Costo unitario",
+    "precio_unitario": "Precio unitario",
+    "precio_unitario_manual": "Precio unitario manual",
+    "subtotal_costo": "Subtotal costo",
+    "subtotal_venta": "Subtotal venta",
+    "margen_pct": "Margen",
+}
 PM_BUDGET_INDIRECT_TYPES = {"porcentaje", "monto"}
 PM_TASK_DEPENDENCY_TYPES = {"finish_to_start"}
 PM_DOCUMENT_TYPES = {"contrato", "alcance", "minuta", "cambio_alcance", "entrega", "evidencia", "cierre", "otro"}
@@ -500,8 +537,29 @@ def normalize_budget_task_link_status(value: str | None) -> str:
     return normalized
 
 
-def build_budget_item_source_hash(item: PMPresupuestoPartida) -> str:
-    payload = {
+_AUTO_PARENT_LINEAGE = object()
+
+
+def resolve_budget_item_parent_lineage(
+    item: PMPresupuestoPartida,
+    *,
+    parent_lineage_id: str | None | object = _AUTO_PARENT_LINEAGE,
+) -> str | None:
+    if parent_lineage_id is not _AUTO_PARENT_LINEAGE:
+        return normalize_optional_text(parent_lineage_id)
+    parent = getattr(item, "parent", None)
+    if parent is not None:
+        return normalize_optional_text(parent.lineage_id)
+    return None
+
+
+def build_budget_item_source_payload(
+    item: PMPresupuestoPartida,
+    *,
+    parent_lineage_id: str | None | object = _AUTO_PARENT_LINEAGE,
+) -> dict[str, str | int | bool | None]:
+    resolved_parent_lineage_id = resolve_budget_item_parent_lineage(item, parent_lineage_id=parent_lineage_id)
+    return {
         "lineage_id": item.lineage_id,
         "codigo": item.codigo,
         "nombre": item.nombre,
@@ -517,8 +575,16 @@ def build_budget_item_source_hash(item: PMPresupuestoPartida) -> str:
         "margen_pct": str(decimal_or_zero(item.margen_pct)),
         "orden": int(item.orden or 0),
         "activo": bool(item.activo),
-        "parent_id": item.parent_id,
+        "parent_lineage_id": resolved_parent_lineage_id,
     }
+
+
+def build_budget_item_source_hash(
+    item: PMPresupuestoPartida,
+    *,
+    parent_lineage_id: str | None | object = _AUTO_PARENT_LINEAGE,
+) -> str:
+    payload = build_budget_item_source_payload(item, parent_lineage_id=parent_lineage_id)
     return hashlib.sha256(json_dumps_safe(payload).encode("utf-8")).hexdigest()
 
 
@@ -1128,7 +1194,14 @@ def create_budget_task_link(
         source_capitulo_id=capitulo.id if capitulo else None,
         generated_from_budget=bool(generated_from_budget),
         sync_status=normalize_budget_task_link_status(sync_status),
-        source_hash=source_hash or (build_budget_item_source_hash(partida) if partida else None),
+        source_hash=source_hash or (
+            build_budget_item_source_hash(
+                partida,
+                parent_lineage_id=capitulo.lineage_id if capitulo else _AUTO_PARENT_LINEAGE,
+            )
+            if partida
+            else None
+        ),
         last_synced_at=last_synced_at,
     )
     db.add(link)
@@ -1195,7 +1268,14 @@ def update_budget_task_link_sources(
         link.generated_from_budget = bool(generated_from_budget)
     if sync_status is not None:
         link.sync_status = normalize_budget_task_link_status(sync_status)
-    link.source_hash = source_hash or (build_budget_item_source_hash(partida) if partida else None)
+    link.source_hash = source_hash or (
+        build_budget_item_source_hash(
+            partida,
+            parent_lineage_id=capitulo.lineage_id if capitulo else _AUTO_PARENT_LINEAGE,
+        )
+        if partida
+        else None
+    )
     link.last_synced_at = last_synced_at
     try:
         db.flush()
@@ -1205,6 +1285,918 @@ def update_budget_task_link_sources(
             detail="No se pudo actualizar el vinculo presupuesto-tarea.",
         ) from exc
     return link
+
+
+def build_budget_generated_task_title(item: PMPresupuestoPartida) -> str:
+    item_name = normalize_optional_text(item.nombre) or normalize_optional_text(item.descripcion) or "Partida sin nombre"
+    item_code = normalize_optional_text(item.codigo)
+    return f"{item_code} - {item_name}" if item_code else item_name
+
+
+def build_budget_preview_notice(code: str, message: str) -> PMBudgetPlanPreviewNoticeOut:
+    return PMBudgetPlanPreviewNoticeOut(code=code, message=message)
+
+
+def build_budget_preview_change(
+    field: str,
+    *,
+    label: str | None = None,
+    current_value: object | None = None,
+    proposed_value: object | None = None,
+) -> PMBudgetPlanPreviewChangeOut:
+    return PMBudgetPlanPreviewChangeOut(
+        field=field,
+        label=label,
+        current_value=current_value,
+        proposed_value=proposed_value,
+    )
+
+
+def build_budget_preview_economic_changes(
+    current_item: PMPresupuestoPartida,
+    linked_item: PMPresupuestoPartida | None,
+    *,
+    current_parent_lineage_id: str | None = None,
+    linked_parent_lineage_id: str | None = None,
+    source_changed: bool,
+) -> list[PMBudgetPlanPreviewChangeOut]:
+    if linked_item is None:
+        return [
+            build_budget_preview_change(
+                "source_hash",
+                label="Fuente economica",
+                current_value=None,
+                proposed_value="Presupuesto actual",
+            )
+        ] if source_changed else []
+
+    current_payload = build_budget_item_source_payload(current_item, parent_lineage_id=current_parent_lineage_id)
+    linked_payload = build_budget_item_source_payload(linked_item, parent_lineage_id=linked_parent_lineage_id)
+    changes: list[PMBudgetPlanPreviewChangeOut] = []
+    for field_name, label in PM_BUDGET_PREVIEW_ECONOMIC_FIELD_LABELS.items():
+        if current_payload.get(field_name) == linked_payload.get(field_name):
+            continue
+        changes.append(
+            build_budget_preview_change(
+                field_name,
+                label=label,
+                current_value=linked_payload.get(field_name),
+                proposed_value=current_payload.get(field_name),
+            )
+        )
+    if changes or not source_changed:
+        return changes
+    return [
+        build_budget_preview_change(
+            "source_hash",
+            label="Fuente economica",
+            current_value="Version previa",
+            proposed_value="Presupuesto actual",
+        )
+    ]
+
+
+def build_budget_preview_chapter_change(
+    current_chapter: PMPresupuestoPartida | None,
+    linked_chapter: PMPresupuestoPartida | None,
+    *,
+    linked_parent_lineage_id: str | None = None,
+) -> PMBudgetPlanPreviewChangeOut | None:
+    current_lineage = current_chapter.lineage_id if current_chapter else None
+    linked_lineage = linked_chapter.lineage_id if linked_chapter else linked_parent_lineage_id
+    if current_lineage == linked_lineage:
+        return None
+    return build_budget_preview_change(
+        "chapter_group",
+        label="Capitulo",
+        current_value=linked_chapter.nombre if linked_chapter else None,
+        proposed_value=current_chapter.nombre if current_chapter else None,
+    )
+
+
+def build_budget_preview_item_name(item: PMPresupuestoPartida | None, *, fallback: str | None = None) -> str:
+    if item is not None:
+        item_name = normalize_optional_text(item.nombre) or normalize_optional_text(item.descripcion)
+        if item_name:
+            return item_name
+    return normalize_optional_text(fallback) or "Partida sin nombre"
+
+
+def build_budget_preview_synthetic_item(
+    *,
+    link: PMPresupuestoTaskLink,
+    action: str,
+    reason_code: str,
+    reason: str,
+    current_source_hash: str | None,
+    linked_source_hash: str | None,
+    source_changed: bool,
+    blocking: list[PMBudgetPlanPreviewNoticeOut] | None = None,
+) -> PMBudgetPlanPreviewItemOut:
+    source_item = link.source_partida
+    source_chapter = link.source_capitulo
+    return PMBudgetPlanPreviewItemOut(
+        item_id=source_item.id if source_item else None,
+        lineage_id=link.lineage_id,
+        chapter_id=source_chapter.id if source_chapter else None,
+        chapter_lineage_id=source_chapter.lineage_id if source_chapter else None,
+        code=source_item.codigo if source_item else None,
+        name=build_budget_preview_item_name(source_item, fallback=link.tarea.titulo if link.tarea else None),
+        action=action,
+        reason_code=reason_code,
+        reason=reason,
+        task_id=link.tarea_id,
+        task_title=link.tarea.titulo if link.tarea else None,
+        generated_from_budget=bool(link.generated_from_budget),
+        sync_status=link.sync_status,
+        current_source_hash=current_source_hash,
+        linked_source_hash=linked_source_hash,
+        source_changed=source_changed,
+        proposed_changes=[],
+        economic_changes=[],
+        blocking=list(blocking or []),
+    )
+
+
+def get_budget_plan_preview(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    budget_id: str,
+) -> PMBudgetPlanPreviewOut:
+    ensure_pm_tasks_enabled(pm_context)
+    with db.no_autoflush:
+        budget = get_budget_for_company(db, pm_context.empresa_id, budget_id)
+        if str(budget.estatus or "").lower() not in {"borrador", "aprobado"}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Solo puedes previsualizar presupuestos en borrador o aprobados.",
+            )
+        project = get_project_for_company(db, pm_context.empresa_id, budget.proyecto_id)
+        items = db.scalars(
+            select(PMPresupuestoPartida)
+            .where(
+                PMPresupuestoPartida.empresa_id == pm_context.empresa_id,
+                PMPresupuestoPartida.presupuesto_id == budget.id,
+                PMPresupuestoPartida.activo == True,
+            )
+            .order_by(PMPresupuestoPartida.orden.asc(), PMPresupuestoPartida.created_at.asc(), PMPresupuestoPartida.id.asc())
+        ).all()
+        links = db.scalars(
+            select(PMPresupuestoTaskLink)
+            .options(
+                selectinload(PMPresupuestoTaskLink.tarea),
+                selectinload(PMPresupuestoTaskLink.source_partida),
+                selectinload(PMPresupuestoTaskLink.source_capitulo),
+                selectinload(PMPresupuestoTaskLink.source_presupuesto),
+            )
+            .where(
+                PMPresupuestoTaskLink.empresa_id == pm_context.empresa_id,
+                PMPresupuestoTaskLink.proyecto_id == project.id,
+            )
+            .order_by(PMPresupuestoTaskLink.created_at.asc(), PMPresupuestoTaskLink.id.asc())
+        ).all()
+        linked_parent_ids_to_load = {
+            link.source_partida.parent_id
+            for link in links
+            if link.source_partida is not None and link.source_capitulo is None and link.source_partida.parent_id
+        }
+        linked_parent_lineage_map = {}
+        if linked_parent_ids_to_load:
+            linked_parent_lineage_map = {
+                parent_id: lineage_id
+                for parent_id, lineage_id in db.execute(
+                    select(PMPresupuestoPartida.id, PMPresupuestoPartida.lineage_id).where(
+                        PMPresupuestoPartida.empresa_id == pm_context.empresa_id,
+                        PMPresupuestoPartida.id.in_(linked_parent_ids_to_load),
+                    )
+                ).all()
+            }
+
+    chapter_items = [item for item in items if item.tipo == "capitulo"]
+    part_items = [item for item in items if item.tipo == "partida"]
+    chapters_by_id = {item.id: item for item in chapter_items}
+    child_count_by_chapter: dict[str, int] = defaultdict(int)
+    links_by_lineage: dict[str, list[PMPresupuestoTaskLink]] = defaultdict(list)
+    for link in links:
+        links_by_lineage[link.lineage_id].append(link)
+    for item in part_items:
+        if item.parent_id and item.parent_id in chapters_by_id:
+            child_count_by_chapter[item.parent_id] += 1
+
+    chapter_groups: list[PMBudgetPlanPreviewChapterGroupOut] = []
+    chapter_group_map: dict[str, PMBudgetPlanPreviewChapterGroupOut] = {}
+    for chapter in chapter_items:
+        group = PMBudgetPlanPreviewChapterGroupOut(
+            chapter=PMBudgetPlanPreviewChapterOut(
+                id=chapter.id,
+                lineage_id=chapter.lineage_id,
+                code=chapter.codigo,
+                name=build_budget_preview_item_name(chapter),
+                description=normalize_optional_text(chapter.descripcion),
+                order=int(chapter.orden or 0),
+                child_parts_count=child_count_by_chapter.get(chapter.id, 0),
+            ),
+            items=[],
+        )
+        chapter_groups.append(group)
+        chapter_group_map[chapter.id] = group
+
+    summary_counts = {action: 0 for action in PM_BUDGET_PREVIEW_ACTIONS}
+    unassigned_items: list[PMBudgetPlanPreviewItemOut] = []
+    orphans: list[PMBudgetPlanPreviewItemOut] = []
+    conflicts: list[PMBudgetPlanPreviewItemOut] = []
+    warnings: list[PMBudgetPlanPreviewNoticeOut] = []
+    budget_warning = None
+    if str(budget.estatus or "").lower() == "borrador":
+        budget_warning = "El presupuesto sigue en borrador. Revisa cambios antes de generar el plan."
+        warnings.append(build_budget_preview_notice("budget_in_draft", budget_warning))
+
+    seen_orphan_lineages: set[str] = set()
+
+    def register_preview_item(
+        preview_item: PMBudgetPlanPreviewItemOut,
+        *,
+        group_id: str | None,
+        force_unassigned: bool = False,
+    ) -> None:
+        summary_counts[preview_item.action] = summary_counts.get(preview_item.action, 0) + 1
+        if preview_item.action == "orphan" and preview_item.lineage_id not in seen_orphan_lineages:
+            orphans.append(preview_item)
+            seen_orphan_lineages.add(preview_item.lineage_id)
+        if preview_item.action == "conflict":
+            conflicts.append(preview_item)
+        if force_unassigned or not group_id or group_id not in chapter_group_map:
+            unassigned_items.append(preview_item)
+            return
+        chapter_group_map[group_id].items.append(preview_item)
+
+    for item in part_items:
+        item_name = normalize_optional_text(item.nombre) or normalize_optional_text(item.descripcion)
+        task_title = build_budget_generated_task_title(item)
+        current_chapter = chapters_by_id.get(item.parent_id) if item.parent_id else None
+        current_parent_lineage_id = current_chapter.lineage_id if current_chapter else None
+        current_source_hash = build_budget_item_source_hash(item, parent_lineage_id=current_parent_lineage_id)
+        group_id = current_chapter.id if current_chapter else None
+        force_unassigned = current_chapter is None
+
+        if not item_name:
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=item.parent_id,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name="Partida sin nombre",
+                    action="skip",
+                    reason_code="missing_item_name",
+                    reason="La partida no tiene un nombre o descripcion utilizable para generar una tarea.",
+                    task_id=None,
+                    task_title=None,
+                    generated_from_budget=None,
+                    sync_status=None,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=None,
+                    source_changed=False,
+                    proposed_changes=[],
+                    economic_changes=[],
+                    blocking=[build_budget_preview_notice("missing_item_name", "La partida requiere un nombre antes de generar el plan.")],
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if item.parent_id and current_chapter is None:
+            blocking = [build_budget_preview_notice("invalid_parent_chapter", "La partida apunta a un capitulo inexistente o invalido.")]
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=item.parent_id,
+                    chapter_lineage_id=None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="invalid_parent_chapter",
+                    reason="La partida no tiene un capitulo padre valido dentro del presupuesto seleccionado.",
+                    task_id=None,
+                    task_title=None,
+                    generated_from_budget=None,
+                    sync_status=None,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=None,
+                    source_changed=False,
+                    proposed_changes=[],
+                    economic_changes=[],
+                    blocking=blocking,
+                ),
+                group_id=None,
+                force_unassigned=True,
+            )
+            continue
+
+        matching_links = links_by_lineage.get(item.lineage_id, [])
+        if len(matching_links) > 1:
+            blocking = [build_budget_preview_notice("duplicate_lineage_link", "Hay mas de un vinculo para este lineage dentro del proyecto.")]
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="duplicate_lineage_link",
+                    reason="Existe mas de un vinculo activo para la misma partida dentro del proyecto.",
+                    task_id=None,
+                    task_title=None,
+                    generated_from_budget=None,
+                    sync_status="conflict",
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=None,
+                    source_changed=False,
+                    proposed_changes=[],
+                    economic_changes=[],
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if not matching_links:
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="create",
+                    reason_code="no_existing_link",
+                    reason="La partida todavia no tiene una tarea vinculada en el proyecto.",
+                    task_id=None,
+                    task_title=None,
+                    generated_from_budget=None,
+                    sync_status=None,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=None,
+                    source_changed=False,
+                    proposed_changes=[
+                        build_budget_preview_change(
+                            "task_title",
+                            label="Titulo de tarea",
+                            current_value=None,
+                            proposed_value=task_title,
+                        )
+                    ],
+                    economic_changes=[],
+                    blocking=[],
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        link = matching_links[0]
+        linked_source_hash = link.source_hash
+        source_changed = bool(linked_source_hash and linked_source_hash != current_source_hash)
+        blocking: list[PMBudgetPlanPreviewNoticeOut] = []
+        proposed_changes: list[PMBudgetPlanPreviewChangeOut] = []
+        linked_chapter = link.source_capitulo
+        linked_parent_lineage_id = (
+            linked_chapter.lineage_id
+            if linked_chapter is not None
+            else linked_parent_lineage_map.get(link.source_partida.parent_id if link.source_partida else None)
+        )
+        economic_changes = build_budget_preview_economic_changes(
+            item,
+            link.source_partida,
+            current_parent_lineage_id=current_parent_lineage_id,
+            linked_parent_lineage_id=linked_parent_lineage_id,
+            source_changed=source_changed,
+        )
+
+        if link.sync_status == "detached":
+            blocking.append(build_budget_preview_notice("detached_link", "El vinculo fue separado manualmente y requiere revision."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="detached_link",
+                    reason="La partida tiene un vinculo detached y no se puede sincronizar automaticamente.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo if link.tarea else None,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.sync_status == "orphaned":
+            blocking.append(build_budget_preview_notice("orphaned_link", "El vinculo ya esta marcado como huerfano."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="orphan",
+                    reason_code="orphaned_link",
+                    reason="La partida tiene un vinculo marcado previamente como huerfano.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo if link.tarea else None,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.sync_status == "conflict":
+            blocking.append(build_budget_preview_notice("existing_conflict", "El vinculo ya esta marcado en conflicto y requiere revision manual."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="existing_conflict",
+                    reason="La partida ya tiene un vinculo con conflicto operativo pendiente.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo if link.tarea else None,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.source_partida_id is None:
+            blocking.append(build_budget_preview_notice("missing_source_item", "El vinculo ya no conserva la partida origen."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="orphan",
+                    reason_code="missing_source_item",
+                    reason="El vinculo perdio la partida origen y requiere revision manual.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo if link.tarea else None,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.tarea_id is None:
+            blocking.append(build_budget_preview_notice("missing_task", "El vinculo ya no conserva la tarea asociada."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="orphan",
+                    reason_code="missing_task",
+                    reason="El vinculo perdio la tarea asociada y requiere revision manual.",
+                    task_id=None,
+                    task_title=None,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.tarea is None:
+            blocking.append(build_budget_preview_notice("missing_task", "La tarea vinculada ya no existe."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="missing_task",
+                    reason="La partida apunta a una tarea que ya no existe y no puede sincronizarse automaticamente.",
+                    task_id=link.tarea_id,
+                    task_title=None,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.tarea.empresa_id != pm_context.empresa_id:
+            blocking.append(build_budget_preview_notice("cross_company_link", "La tarea vinculada pertenece a otra empresa."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="cross_company_link",
+                    reason="La tarea vinculada pertenece a otra empresa.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.tarea.proyecto_id != project.id:
+            blocking.append(build_budget_preview_notice("cross_project_link", "La tarea vinculada pertenece a otro proyecto."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="cross_project_link",
+                    reason="La tarea vinculada pertenece a otro proyecto y no puede sincronizarse.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.source_partida and link.source_partida.empresa_id != pm_context.empresa_id:
+            blocking.append(build_budget_preview_notice("cross_company_link", "La partida origen vinculada pertenece a otra empresa."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="cross_company_link",
+                    reason="La partida origen vinculada pertenece a otra empresa.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.source_partida and link.source_partida.proyecto_id != project.id:
+            blocking.append(build_budget_preview_notice("cross_project_link", "La partida origen vinculada pertenece a otro proyecto."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="cross_project_link",
+                    reason="La partida origen vinculada pertenece a otro proyecto.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if link.source_partida and link.source_partida.lineage_id != item.lineage_id:
+            blocking.append(build_budget_preview_notice("lineage_mismatch", "La partida origen vinculada no coincide con el lineage actual."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="existing_conflict",
+                    reason="El lineage del vinculo no coincide con la partida del presupuesto seleccionado.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if linked_chapter and (
+            linked_chapter.empresa_id != pm_context.empresa_id
+            or linked_chapter.proyecto_id != project.id
+            or linked_chapter.tipo != "capitulo"
+        ):
+            blocking.append(build_budget_preview_notice("invalid_parent_chapter", "El capitulo origen vinculado ya no es valido."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="invalid_parent_chapter",
+                    reason="El capitulo origen vinculado ya no es valido para esta partida.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=[],
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        title_change = None
+        if link.tarea.titulo != task_title:
+            title_change = build_budget_preview_change(
+                "task_title",
+                label="Titulo de tarea",
+                current_value=link.tarea.titulo,
+                proposed_value=task_title,
+            )
+        chapter_change = build_budget_preview_chapter_change(
+            current_chapter,
+            linked_chapter,
+            linked_parent_lineage_id=linked_parent_lineage_id,
+        )
+        if title_change:
+            proposed_changes.append(title_change)
+        if chapter_change:
+            proposed_changes.append(chapter_change)
+
+        if not bool(link.generated_from_budget) and proposed_changes:
+            blocking.append(build_budget_preview_notice("manual_task_requires_review", "La tarea fue ajustada manualmente y requiere revision antes de resincronizarla."))
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="conflict",
+                    reason_code="manual_task_requires_review",
+                    reason="La tarea vinculada fue ajustada manualmente y no se actualizara automaticamente.",
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=proposed_changes,
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        if proposed_changes:
+            reason_code = "generated_task_title_changed" if title_change else "chapter_group_changed"
+            reason = (
+                "La tarea generada desde presupuesto propone actualizar su titulo."
+                if title_change
+                else "La partida cambio de agrupacion de capitulo dentro del presupuesto."
+            )
+            register_preview_item(
+                PMBudgetPlanPreviewItemOut(
+                    item_id=item.id,
+                    lineage_id=item.lineage_id,
+                    chapter_id=current_chapter.id if current_chapter else None,
+                    chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                    code=item.codigo,
+                    name=item_name,
+                    action="update",
+                    reason_code=reason_code,
+                    reason=reason,
+                    task_id=link.tarea_id,
+                    task_title=link.tarea.titulo,
+                    generated_from_budget=bool(link.generated_from_budget),
+                    sync_status=link.sync_status,
+                    current_source_hash=current_source_hash,
+                    linked_source_hash=linked_source_hash,
+                    source_changed=source_changed,
+                    proposed_changes=proposed_changes,
+                    economic_changes=economic_changes,
+                    blocking=blocking,
+                ),
+                group_id=group_id,
+                force_unassigned=force_unassigned,
+            )
+            continue
+
+        register_preview_item(
+            PMBudgetPlanPreviewItemOut(
+                item_id=item.id,
+                lineage_id=item.lineage_id,
+                chapter_id=current_chapter.id if current_chapter else None,
+                chapter_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                code=item.codigo,
+                name=item_name,
+                action="no_change",
+                reason_code="source_hash_changed" if source_changed else "linked_without_changes",
+                reason=(
+                    "La tarea operativa no cambiaria, pero la fuente economica del presupuesto si cambio."
+                    if source_changed
+                    else "La partida ya coincide con la tarea vinculada y no propone cambios operativos."
+                ),
+                task_id=link.tarea_id,
+                task_title=link.tarea.titulo,
+                generated_from_budget=bool(link.generated_from_budget),
+                sync_status=link.sync_status,
+                current_source_hash=current_source_hash,
+                linked_source_hash=linked_source_hash,
+                source_changed=source_changed,
+                proposed_changes=[],
+                economic_changes=economic_changes,
+                blocking=blocking,
+            ),
+            group_id=group_id,
+            force_unassigned=force_unassigned,
+        )
+
+    budget_lineages = {item.lineage_id for item in part_items}
+    for link in links:
+        if link.lineage_id in budget_lineages:
+            continue
+        linked_source_hash = link.source_hash
+        reason_code = "lineage_not_in_selected_budget"
+        reason = "El vinculo pertenece a una partida que ya no existe dentro del presupuesto seleccionado."
+        if link.source_partida_id is None:
+            reason_code = "missing_source_item"
+            reason = "El vinculo ya no conserva la partida origen."
+        elif link.tarea_id is None:
+            reason_code = "missing_task"
+            reason = "El vinculo ya no conserva la tarea asociada."
+        orphan_item = build_budget_preview_synthetic_item(
+            link=link,
+            action="orphan",
+            reason_code=reason_code,
+            reason=reason,
+            current_source_hash=None,
+            linked_source_hash=linked_source_hash,
+            source_changed=False,
+            blocking=[build_budget_preview_notice(reason_code, reason)],
+        )
+        summary_counts["orphan"] = summary_counts.get("orphan", 0) + 1
+        if link.lineage_id not in seen_orphan_lineages:
+            orphans.append(orphan_item)
+            seen_orphan_lineages.add(link.lineage_id)
+
+    return PMBudgetPlanPreviewOut(
+        project_id=project.id,
+        budget_id=budget.id,
+        budget_version=int(budget.version or 0),
+        budget_status=budget.estatus,
+        generated_at=utcnow(),
+        is_approved=str(budget.estatus or "").lower() == "aprobado",
+        warning=budget_warning,
+        source_hash_fields=list(PM_BUDGET_SOURCE_HASH_FIELDS),
+        summary=PMBudgetPlanPreviewSummaryOut(
+            chapters=len(chapter_groups),
+            parts=len(part_items),
+            create=summary_counts.get("create", 0),
+            update=summary_counts.get("update", 0),
+            no_change=summary_counts.get("no_change", 0),
+            orphan=summary_counts.get("orphan", 0),
+            conflict=summary_counts.get("conflict", 0),
+            skip=summary_counts.get("skip", 0),
+        ),
+        chapters=chapter_groups,
+        unassigned_items=unassigned_items,
+        orphans=orphans,
+        conflicts=conflicts,
+        warnings=warnings,
+    )
 
 
 def ensure_unique_project_code(db: Session, empresa_id: str, codigo: str | None, project_id: str | None = None) -> str | None:
