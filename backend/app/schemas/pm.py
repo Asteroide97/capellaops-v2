@@ -1573,6 +1573,7 @@ class PMPresupuestoPartidaOut(BaseModel):
     presupuesto_id: str
     proyecto_id: str
     parent_id: str | None = None
+    lineage_id: str
     codigo: str | None = None
     nombre: str
     descripcion: str | None = None
@@ -1589,6 +1590,23 @@ class PMPresupuestoPartidaOut(BaseModel):
     activo: bool
     materials: list[PMPresupuestoPartidaMaterialOut] = Field(default_factory=list)
     labor_components: list[PMPresupuestoPartidaManoObraOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class PMPresupuestoTaskLinkOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    lineage_id: str
+    tarea_id: str | None = None
+    source_presupuesto_id: str | None = None
+    source_partida_id: str | None = None
+    source_capitulo_id: str | None = None
+    generated_from_budget: bool
+    sync_status: str
+    source_hash: str | None = None
+    last_synced_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -1,6 +1,7 @@
 from datetime import date, datetime
+from uuid import uuid4
 
-from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, func, text
+from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -18,6 +19,13 @@ PM_SIMPLE_OPERATIONAL_STATUS = (
     "entregado",
     "cobrado",
     "cancelado",
+)
+
+PM_BUDGET_TASK_LINK_STATUS = (
+    "linked",
+    "detached",
+    "orphaned",
+    "conflict",
 )
 
 
@@ -110,6 +118,7 @@ class PMProyecto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="proyecto", cascade="all, delete-orphan")
     time_entries = relationship("PMTimeEntry", back_populates="proyecto", cascade="all, delete-orphan")
     budgets = relationship("PMPresupuesto", back_populates="proyecto", cascade="all, delete-orphan")
+    budget_task_links = relationship("PMPresupuestoTaskLink", back_populates="proyecto")
     material_cost_summary = relationship(
         "PMProyectoCostoResumen",
         back_populates="proyecto",
@@ -259,6 +268,7 @@ class PMTarea(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     material_plans = relationship("PMProyectoMaterialPlan", back_populates="tarea")
     material_consumptions = relationship("PMProyectoMaterialConsumo", back_populates="tarea")
     time_entries = relationship("PMTimeEntry", back_populates="tarea")
+    budget_link = relationship("PMPresupuestoTaskLink", back_populates="tarea", uselist=False)
 
 
 class PMTareaDependencia(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -540,15 +550,18 @@ class PMPresupuesto(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     items = relationship("PMPresupuestoPartida", back_populates="presupuesto", cascade="all, delete-orphan")
     indirects = relationship("PMPresupuestoIndirecto", back_populates="presupuesto", cascade="all, delete-orphan")
     estimations = relationship("PMEstimacion", back_populates="presupuesto")
+    task_links = relationship("PMPresupuestoTaskLink", back_populates="source_presupuesto")
 
 
 class PMPresupuestoPartida(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "pm_presupuesto_partidas"
     __table_args__ = (
+        UniqueConstraint("presupuesto_id", "lineage_id", name="uq_pm_presupuesto_partidas_presupuesto_lineage"),
         Index("ix_pm_presupuesto_partidas_empresa_id", "empresa_id"),
         Index("ix_pm_presupuesto_partidas_presupuesto_id", "presupuesto_id"),
         Index("ix_pm_presupuesto_partidas_proyecto_id", "proyecto_id"),
         Index("ix_pm_presupuesto_partidas_parent_id", "parent_id"),
+        Index("ix_pm_presupuesto_partidas_lineage_id", "lineage_id"),
         Index("ix_pm_presupuesto_partidas_activo", "activo"),
     )
 
@@ -556,6 +569,7 @@ class PMPresupuestoPartida(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     presupuesto_id: Mapped[str] = mapped_column(ForeignKey("pm_presupuestos.id"), nullable=False, index=True)
     proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
     parent_id: Mapped[str | None] = mapped_column(ForeignKey("pm_presupuesto_partidas.id"), nullable=True, index=True)
+    lineage_id: Mapped[str] = mapped_column(String(36), nullable=False, default=lambda: str(uuid4()))
     codigo: Mapped[str | None] = mapped_column(String(60), nullable=True)
     nombre: Mapped[str] = mapped_column(String(180), nullable=False)
     descripcion: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -576,6 +590,77 @@ class PMPresupuestoPartida(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     parent = relationship("PMPresupuestoPartida", remote_side="PMPresupuestoPartida.id")
     materials = relationship("PMPresupuestoPartidaMaterial", back_populates="partida", cascade="all, delete-orphan")
     labor_components = relationship("PMPresupuestoPartidaManoObra", back_populates="partida", cascade="all, delete-orphan")
+    task_links = relationship(
+        "PMPresupuestoTaskLink",
+        back_populates="source_partida",
+        foreign_keys="PMPresupuestoTaskLink.source_partida_id",
+    )
+    chapter_task_links = relationship(
+        "PMPresupuestoTaskLink",
+        back_populates="source_capitulo",
+        foreign_keys="PMPresupuestoTaskLink.source_capitulo_id",
+    )
+
+
+class PMPresupuestoTaskLink(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_presupuesto_task_links"
+    __table_args__ = (
+        UniqueConstraint("proyecto_id", "lineage_id", name="uq_pm_presupuesto_task_links_proyecto_lineage"),
+        CheckConstraint(
+            "sync_status IN ('linked', 'detached', 'orphaned', 'conflict')",
+            name="ck_pm_presupuesto_task_links_sync_status",
+        ),
+        Index("ix_pm_presupuesto_task_links_empresa_id", "empresa_id"),
+        Index("ix_pm_presupuesto_task_links_proyecto_id", "proyecto_id"),
+        Index("ix_pm_presupuesto_task_links_lineage_id", "lineage_id"),
+        Index(
+            "uq_pm_presupuesto_task_links_tarea_id_not_null",
+            "tarea_id",
+            unique=True,
+            sqlite_where=text("tarea_id IS NOT NULL"),
+            mssql_where=text("tarea_id IS NOT NULL"),
+        ),
+        Index("ix_pm_presupuesto_task_links_source_presupuesto_id", "source_presupuesto_id"),
+        Index("ix_pm_presupuesto_task_links_source_partida_id", "source_partida_id"),
+        Index("ix_pm_presupuesto_task_links_sync_status", "sync_status"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    lineage_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id", ondelete="SET NULL"), nullable=True, index=True)
+    source_presupuesto_id: Mapped[str | None] = mapped_column(
+        ForeignKey("pm_presupuestos.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_partida_id: Mapped[str | None] = mapped_column(
+        ForeignKey("pm_presupuesto_partidas.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_capitulo_id: Mapped[str | None] = mapped_column(
+        ForeignKey("pm_presupuesto_partidas.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    generated_from_budget: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    sync_status: Mapped[str] = mapped_column(String(20), nullable=False, default="linked", server_default="linked")
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    proyecto = relationship("PMProyecto", back_populates="budget_task_links")
+    tarea = relationship("PMTarea", back_populates="budget_link")
+    source_presupuesto = relationship("PMPresupuesto", back_populates="task_links")
+    source_partida = relationship(
+        "PMPresupuestoPartida",
+        back_populates="task_links",
+        foreign_keys=[source_partida_id],
+    )
+    source_capitulo = relationship(
+        "PMPresupuestoPartida",
+        back_populates="chapter_task_links",
+        foreign_keys=[source_capitulo_id],
+    )
 
 
 class PMPresupuestoPartidaMaterial(UUIDPrimaryKeyMixin, TimestampMixin, Base):

@@ -7,9 +7,11 @@ import hashlib
 import json
 import math
 import secrets
+from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import and_, case, desc, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import TenantContext
@@ -30,6 +32,7 @@ from app.models.pm import (
     PMPresupuesto,
     PMPresupuestoIndirecto,
     PMPresupuestoPartida,
+    PMPresupuestoTaskLink,
     PMPresupuestoPartidaManoObra,
     PMPresupuestoPartidaMaterial,
     PMProyectoLineaBase,
@@ -95,6 +98,7 @@ from app.schemas.pm import (
     PMPresupuestoPartidaManoObraOut,
     PMPresupuestoPartidaMaterialOut,
     PMPresupuestoPartidaOut,
+    PMPresupuestoTaskLinkOut,
     PMDocumentoOut,
     PMInvitadoExternoCreatedOut,
     PMInvitadoExternoOut,
@@ -155,6 +159,7 @@ PM_MANAGE_RATES_ROLES = {"owner", "admin"}
 PM_EDIT_PROJECT_ROLES = {"owner", "admin", "user"}
 PM_BUDGET_STATUS = {"borrador", "aprobado", "sustituido", "cancelado"}
 PM_BUDGET_ITEM_TYPES = {"capitulo", "partida"}
+PM_BUDGET_TASK_LINK_STATUS = {"linked", "detached", "orphaned", "conflict"}
 PM_BUDGET_INDIRECT_TYPES = {"porcentaje", "monto"}
 PM_TASK_DEPENDENCY_TYPES = {"finish_to_start"}
 PM_DOCUMENT_TYPES = {"contrato", "alcance", "minuta", "cambio_alcance", "entrega", "evidencia", "cierre", "otro"}
@@ -482,6 +487,39 @@ def hash_ip_address(ip_address: str | None) -> str | None:
 def build_status_counts(rows: list[tuple[str, int]], allowed_values: set[str]) -> list[PMStatusCount]:
     totals = {status_name: count for status_name, count in rows}
     return [PMStatusCount(estatus=value, total=totals.get(value, 0)) for value in sorted(allowed_values)]
+
+
+def generate_budget_item_lineage_id() -> str:
+    return str(uuid4())
+
+
+def normalize_budget_task_link_status(value: str | None) -> str:
+    normalized = normalize_required_text(value or "linked", "Estatus de sincronizacion").lower()
+    if normalized not in PM_BUDGET_TASK_LINK_STATUS:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Estatus de sincronizacion invalido.")
+    return normalized
+
+
+def build_budget_item_source_hash(item: PMPresupuestoPartida) -> str:
+    payload = {
+        "lineage_id": item.lineage_id,
+        "codigo": item.codigo,
+        "nombre": item.nombre,
+        "descripcion": item.descripcion,
+        "tipo": item.tipo,
+        "unidad": item.unidad,
+        "cantidad": str(decimal_or_zero(item.cantidad)),
+        "costo_unitario": str(decimal_or_zero(item.costo_unitario)),
+        "precio_unitario": str(decimal_or_zero(item.precio_unitario)),
+        "precio_unitario_manual": str(decimal_or_zero(item.precio_unitario_manual)),
+        "subtotal_costo": str(decimal_or_zero(item.subtotal_costo)),
+        "subtotal_venta": str(decimal_or_zero(item.subtotal_venta)),
+        "margen_pct": str(decimal_or_zero(item.margen_pct)),
+        "orden": int(item.orden or 0),
+        "activo": bool(item.activo),
+        "parent_id": item.parent_id,
+    }
+    return hashlib.sha256(json_dumps_safe(payload).encode("utf-8")).hexdigest()
 
 
 def get_or_create_pm_config(db: Session, empresa_id: str) -> tuple[EmpresaPMConfig, bool]:
@@ -870,6 +908,303 @@ def get_budget_indirect_for_company(db: Session, empresa_id: str, indirect_id: s
     if not indirect:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Indirecto de presupuesto no encontrado.")
     return indirect
+
+
+def get_budget_task_link_by_project_lineage(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    lineage_id: str,
+) -> PMPresupuestoTaskLink | None:
+    normalized_lineage_id = normalize_required_text(lineage_id, "Lineage").strip()
+    return db.scalar(
+        select(PMPresupuestoTaskLink).where(
+            PMPresupuestoTaskLink.empresa_id == empresa_id,
+            PMPresupuestoTaskLink.proyecto_id == project_id,
+            PMPresupuestoTaskLink.lineage_id == normalized_lineage_id,
+        )
+    )
+
+
+def get_budget_task_link_by_task(
+    db: Session,
+    *,
+    empresa_id: str,
+    task_id: str,
+) -> PMPresupuestoTaskLink | None:
+    return db.scalar(
+        select(PMPresupuestoTaskLink).where(
+            PMPresupuestoTaskLink.empresa_id == empresa_id,
+            PMPresupuestoTaskLink.tarea_id == task_id,
+        )
+    )
+
+
+def build_budget_item_record(
+    *,
+    empresa_id: str,
+    presupuesto_id: str,
+    proyecto_id: str,
+    parent_id: str | None,
+    codigo: str | None,
+    nombre: str,
+    descripcion: str | None,
+    tipo: str,
+    unidad: str | None,
+    cantidad: Decimal,
+    margen_pct: Decimal,
+    precio_unitario_manual: Decimal | None,
+    orden: int,
+    lineage_id: str | None = None,
+) -> PMPresupuestoPartida:
+    normalized_item_type = normalize_budget_item_type(tipo)
+    normalized_quantity = decimal_or_zero(cantidad)
+    return PMPresupuestoPartida(
+        empresa_id=empresa_id,
+        presupuesto_id=presupuesto_id,
+        proyecto_id=proyecto_id,
+        parent_id=normalize_optional_text(parent_id),
+        lineage_id=normalize_optional_text(lineage_id) or generate_budget_item_lineage_id(),
+        codigo=normalize_optional_text(codigo),
+        nombre=normalize_required_text(nombre, "Nombre"),
+        descripcion=normalize_optional_text(descripcion),
+        tipo=normalized_item_type,
+        unidad=normalize_optional_text(unidad),
+        cantidad=normalized_quantity,
+        margen_pct=decimal_or_zero(margen_pct),
+        precio_unitario_manual=decimal_or_zero(precio_unitario_manual) if precio_unitario_manual is not None else None,
+        orden=max(int(orden), 0),
+        activo=True,
+    )
+
+
+def validate_budget_task_link_consistency(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    lineage_id: str,
+    tarea_id: str | None,
+    source_presupuesto_id: str | None,
+    source_partida_id: str | None,
+    source_capitulo_id: str | None,
+) -> tuple[PMProyecto, PMPresupuesto | None, PMPresupuestoPartida | None, PMPresupuestoPartida | None, PMTarea | None]:
+    project = get_project_for_company(db, empresa_id, project_id)
+    normalized_lineage_id = normalize_required_text(lineage_id, "Lineage").strip()
+
+    budget = None
+    if source_presupuesto_id:
+        budget = get_budget_for_company(db, empresa_id, source_presupuesto_id)
+        if budget.proyecto_id != project.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El presupuesto no pertenece al proyecto indicado.",
+            )
+
+    partida = None
+    if source_partida_id:
+        partida = get_budget_item_for_company(db, empresa_id, source_partida_id)
+        if partida.proyecto_id != project.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La partida no pertenece al proyecto indicado.",
+            )
+        if budget and partida.presupuesto_id != budget.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La partida no pertenece al presupuesto indicado.",
+            )
+        if partida.tipo != "partida":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Solo puedes vincular tareas con partidas de presupuesto.",
+            )
+        if partida.lineage_id != normalized_lineage_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El lineage indicado no coincide con la partida origen.",
+            )
+        if budget is None:
+            budget = get_budget_for_company(db, empresa_id, partida.presupuesto_id)
+            if budget.proyecto_id != project.id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="La partida no pertenece al proyecto indicado.",
+                )
+
+    capitulo = None
+    if source_capitulo_id:
+        capitulo = get_budget_item_for_company(db, empresa_id, source_capitulo_id)
+        if capitulo.proyecto_id != project.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El capitulo no pertenece al proyecto indicado.",
+            )
+        if budget and capitulo.presupuesto_id != budget.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El capitulo no pertenece al presupuesto indicado.",
+            )
+        if capitulo.tipo != "capitulo":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El capitulo origen debe ser de tipo capitulo.",
+            )
+        if partida and partida.parent_id and partida.parent_id != capitulo.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="El capitulo indicado no corresponde a la partida origen.",
+            )
+
+    task = None
+    if tarea_id:
+        task = get_task_for_company(db, empresa_id, tarea_id)
+        if task.proyecto_id != project.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La tarea no pertenece al proyecto indicado.",
+            )
+
+    return project, budget, partida, capitulo, task
+
+
+def create_budget_task_link(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    lineage_id: str,
+    tarea_id: str | None,
+    source_presupuesto_id: str | None,
+    source_partida_id: str | None,
+    source_capitulo_id: str | None = None,
+    generated_from_budget: bool = False,
+    sync_status: str = "linked",
+    source_hash: str | None = None,
+    last_synced_at: datetime | None = None,
+) -> PMPresupuestoTaskLink:
+    if not normalize_optional_text(source_partida_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Se requiere una partida origen para crear el vinculo presupuesto-tarea.",
+        )
+    project, budget, partida, capitulo, task = validate_budget_task_link_consistency(
+        db,
+        empresa_id=empresa_id,
+        project_id=project_id,
+        lineage_id=lineage_id,
+        tarea_id=tarea_id,
+        source_presupuesto_id=source_presupuesto_id,
+        source_partida_id=source_partida_id,
+        source_capitulo_id=source_capitulo_id,
+    )
+    normalized_lineage_id = normalize_required_text(lineage_id, "Lineage").strip()
+    existing_by_lineage = get_budget_task_link_by_project_lineage(
+        db,
+        empresa_id=empresa_id,
+        project_id=project_id,
+        lineage_id=normalized_lineage_id,
+    )
+    if existing_by_lineage:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe un vinculo para este lineage dentro del proyecto.",
+        )
+    if task:
+        existing_by_task = get_budget_task_link_by_task(db, empresa_id=empresa_id, task_id=task.id)
+        if existing_by_task:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La tarea ya esta vinculada con una partida de presupuesto.",
+            )
+    link = PMPresupuestoTaskLink(
+        empresa_id=empresa_id,
+        proyecto_id=project.id,
+        lineage_id=normalized_lineage_id,
+        tarea_id=task.id if task else None,
+        source_presupuesto_id=budget.id if budget else None,
+        source_partida_id=partida.id if partida else None,
+        source_capitulo_id=capitulo.id if capitulo else None,
+        generated_from_budget=bool(generated_from_budget),
+        sync_status=normalize_budget_task_link_status(sync_status),
+        source_hash=source_hash or (build_budget_item_source_hash(partida) if partida else None),
+        last_synced_at=last_synced_at,
+    )
+    db.add(link)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se pudo crear el vinculo presupuesto-tarea.",
+        ) from exc
+    return link
+
+
+def update_budget_task_link_sources(
+    db: Session,
+    *,
+    link: PMPresupuestoTaskLink,
+    source_presupuesto_id: str | None,
+    source_partida_id: str | None,
+    source_capitulo_id: str | None = None,
+    tarea_id: str | None = None,
+    lineage_id: str | None = None,
+    generated_from_budget: bool | None = None,
+    sync_status: str | None = None,
+    source_hash: str | None = None,
+    last_synced_at: datetime | None = None,
+) -> PMPresupuestoTaskLink:
+    normalized_lineage_id = normalize_optional_text(lineage_id) or link.lineage_id
+    project, budget, partida, capitulo, task = validate_budget_task_link_consistency(
+        db,
+        empresa_id=link.empresa_id,
+        project_id=link.proyecto_id,
+        lineage_id=normalized_lineage_id,
+        tarea_id=tarea_id,
+        source_presupuesto_id=source_presupuesto_id,
+        source_partida_id=source_partida_id,
+        source_capitulo_id=source_capitulo_id,
+    )
+    existing_by_lineage = get_budget_task_link_by_project_lineage(
+        db,
+        empresa_id=link.empresa_id,
+        project_id=project.id,
+        lineage_id=normalized_lineage_id,
+    )
+    if existing_by_lineage and existing_by_lineage.id != link.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe un vinculo para este lineage dentro del proyecto.",
+        )
+    if task:
+        existing_by_task = get_budget_task_link_by_task(db, empresa_id=link.empresa_id, task_id=task.id)
+        if existing_by_task and existing_by_task.id != link.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="La tarea ya esta vinculada con una partida de presupuesto.",
+            )
+
+    link.lineage_id = normalized_lineage_id
+    link.tarea_id = task.id if task else None
+    link.source_presupuesto_id = budget.id if budget else None
+    link.source_partida_id = partida.id if partida else None
+    link.source_capitulo_id = capitulo.id if capitulo else None
+    if generated_from_budget is not None:
+        link.generated_from_budget = bool(generated_from_budget)
+    if sync_status is not None:
+        link.sync_status = normalize_budget_task_link_status(sync_status)
+    link.source_hash = source_hash or (build_budget_item_source_hash(partida) if partida else None)
+    link.last_synced_at = last_synced_at
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se pudo actualizar el vinculo presupuesto-tarea.",
+        ) from exc
+    return link
 
 
 def ensure_unique_project_code(db: Session, empresa_id: str, codigo: str | None, project_id: str | None = None) -> str | None:
@@ -6540,6 +6875,7 @@ def serialize_budget_item(db: Session, item: PMPresupuestoPartida) -> PMPresupue
         presupuesto_id=item.presupuesto_id,
         proyecto_id=item.proyecto_id,
         parent_id=item.parent_id,
+        lineage_id=item.lineage_id,
         codigo=item.codigo,
         nombre=item.nombre,
         descripcion=item.descripcion,
@@ -6558,6 +6894,25 @@ def serialize_budget_item(db: Session, item: PMPresupuestoPartida) -> PMPresupue
         labor_components=[serialize_budget_item_labor(component) for component in labor_components],
         created_at=item.created_at,
         updated_at=item.updated_at,
+    )
+
+
+def serialize_budget_task_link(link: PMPresupuestoTaskLink) -> PMPresupuestoTaskLinkOut:
+    return PMPresupuestoTaskLinkOut(
+        id=link.id,
+        empresa_id=link.empresa_id,
+        proyecto_id=link.proyecto_id,
+        lineage_id=link.lineage_id,
+        tarea_id=link.tarea_id,
+        source_presupuesto_id=link.source_presupuesto_id,
+        source_partida_id=link.source_partida_id,
+        source_capitulo_id=link.source_capitulo_id,
+        generated_from_budget=bool(link.generated_from_budget),
+        sync_status=link.sync_status,
+        source_hash=link.source_hash,
+        last_synced_at=link.last_synced_at,
+        created_at=link.created_at,
+        updated_at=link.updated_at,
     )
 
 
@@ -6896,21 +7251,20 @@ def create_budget_item(
     quantity = decimal_or_zero(cantidad)
     if item_type == "partida" and quantity <= ZERO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad de la partida debe ser mayor a 0.")
-    item = PMPresupuestoPartida(
+    item = build_budget_item_record(
         empresa_id=pm_context.empresa_id,
         presupuesto_id=budget.id,
         proyecto_id=budget.proyecto_id,
-        parent_id=normalize_optional_text(parent_id),
-        codigo=normalize_optional_text(codigo),
-        nombre=normalize_required_text(nombre, "Nombre"),
-        descripcion=normalize_optional_text(descripcion),
+        parent_id=parent_id,
+        codigo=codigo,
+        nombre=nombre,
+        descripcion=descripcion,
         tipo=item_type,
-        unidad=normalize_optional_text(unidad),
-        cantidad=quantity if item_type == "partida" else quantity,
-        margen_pct=decimal_or_zero(margen_pct),
-        precio_unitario_manual=decimal_or_zero(precio_unitario_manual) if precio_unitario_manual is not None else None,
-        orden=max(int(orden), 0),
-        activo=True,
+        unidad=unidad,
+        cantidad=quantity,
+        margen_pct=margen_pct,
+        precio_unitario_manual=precio_unitario_manual,
+        orden=orden,
     )
     db.add(item)
     db.flush()
