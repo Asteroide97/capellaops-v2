@@ -858,6 +858,18 @@ class PMEstimationCandidateOut(BaseModel):
     saldo_por_estimar: Decimal = Decimal("0")
 
 
+class PMProjectBudgetContextOut(BaseModel):
+    has_detailed_budget: bool = False
+    budget_id: str | None = None
+    budget_version: int | None = None
+    budget_status: str | None = None
+    is_approved: bool = False
+    budget_source: str = "none"
+    reference_budget: Decimal = Decimal("0")
+    detailed_budget_total: Decimal = Decimal("0")
+    has_active_items: bool = False
+
+
 class PMProyectoEstimacionesResumenOut(BaseModel):
     project_id: str
     presupuesto_id: str | None = None
@@ -867,6 +879,9 @@ class PMProyectoEstimacionesResumenOut(BaseModel):
     pendiente_por_cobrar: Decimal = Decimal("0")
     presupuesto_total: Decimal = Decimal("0")
     porcentaje_presupuesto_estimado: Decimal = Decimal("0")
+    budget_context: PMProjectBudgetContextOut = Field(default_factory=PMProjectBudgetContextOut)
+    estimation_state: str = "sin_presupuesto"
+    can_create_estimations: bool = False
 
 
 class PMAprobacionCreate(BaseModel):
@@ -1480,6 +1495,7 @@ class PMProjectCostsOut(BaseModel):
     variacion_vs_presupuesto_detallado: Decimal = Decimal("0")
     presupuesto_origen: str = "simple"
     margen_estimado: Decimal | None = None
+    budget_context: PMProjectBudgetContextOut = Field(default_factory=PMProjectBudgetContextOut)
 
 
 class PMPresupuestoCreate(BaseModel):
@@ -1841,6 +1857,8 @@ class PMBudgetVsActualOut(BaseModel):
     presupuesto_estatus: str | None = None
     presupuesto_origen: str = "simple"
     moneda: str = "MXN"
+    reference_budget: Decimal = Decimal("0")
+    comparison_budget: Decimal = Decimal("0")
     presupuesto_detallado_costo: Decimal = Decimal("0")
     presupuesto_detallado_venta: Decimal = Decimal("0")
     costo_materiales_real: Decimal = Decimal("0")
@@ -1849,6 +1867,7 @@ class PMBudgetVsActualOut(BaseModel):
     variacion: Decimal = Decimal("0")
     porcentaje_consumido: Decimal = Decimal("0")
     margen_estimado: Decimal | None = None
+    budget_context: PMProjectBudgetContextOut = Field(default_factory=PMProjectBudgetContextOut)
 
 
 class PMPresupuestoOut(BaseModel):
@@ -1884,6 +1903,7 @@ class PMProjectBudgetBundleOut(BaseModel):
     budget: PMPresupuestoOut | None = None
     summary: PMProjectCostsOut
     vs_actual: PMBudgetVsActualOut
+    budget_context: PMProjectBudgetContextOut = Field(default_factory=PMProjectBudgetContextOut)
 
 
 class PMTimeEntryCreate(BaseModel):

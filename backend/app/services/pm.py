@@ -101,6 +101,7 @@ from app.schemas.pm import (
     PMLineaBaseTareaOut,
     PMProjectMembersListResponse,
     PMProjectBudgetBundleOut,
+    PMProjectBudgetContextOut,
     PMProjectCostsOut,
     PMProjectPlanningOut,
     PMProyectoEstimacionesResumenOut,
@@ -7139,6 +7140,62 @@ def recalculate_project_cost_summary_totals(
     summary.variacion_vs_presupuesto_detallado = detailed_budget - decimal_or_zero(summary.costo_total_real)
 
 
+def budget_has_active_partidas(
+    db: Session,
+    *,
+    empresa_id: str,
+    budget_id: str | None,
+) -> bool:
+    if not budget_id:
+        return False
+    active_items = db.scalar(
+        select(func.count(PMPresupuestoPartida.id)).where(
+            PMPresupuestoPartida.empresa_id == empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget_id,
+            PMPresupuestoPartida.activo == True,
+            PMPresupuestoPartida.tipo == "partida",
+        )
+    ) or 0
+    return active_items > 0
+
+
+def build_project_budget_context(
+    db: Session,
+    *,
+    project: PMProyecto,
+    summary: PMProyectoCostoResumen,
+    budget: PMPresupuesto | None,
+) -> PMProjectBudgetContextOut:
+    reference_budget = quantize_money(decimal_or_zero(project.presupuesto_estimado))
+    detailed_budget_total = (
+        quantize_money(decimal_or_zero(summary.presupuesto_detallado_venta))
+        if budget is not None
+        else ZERO
+    )
+    budget_source = "detailed" if budget is not None else ("project_estimate" if reference_budget > ZERO else "none")
+    return PMProjectBudgetContextOut(
+        has_detailed_budget=budget is not None,
+        budget_id=budget.id if budget else None,
+        budget_version=int(budget.version or 0) if budget else None,
+        budget_status=budget.estatus if budget else None,
+        is_approved=str(budget.estatus or "").lower() == "aprobado" if budget else False,
+        budget_source=budget_source,
+        reference_budget=reference_budget,
+        detailed_budget_total=detailed_budget_total,
+        has_active_items=budget_has_active_partidas(db, empresa_id=project.empresa_id, budget_id=budget.id if budget else None),
+    )
+
+
+def resolve_project_estimation_state(budget_context: PMProjectBudgetContextOut) -> str:
+    if not budget_context.has_detailed_budget:
+        return "reference_only" if budget_context.budget_source == "project_estimate" else "sin_presupuesto"
+    if not budget_context.has_active_items:
+        return "sin_partidas"
+    if not budget_context.is_approved:
+        return "borrador"
+    return "listo"
+
+
 def refresh_project_material_costs(
     db: Session,
     *,
@@ -8132,6 +8189,7 @@ def refresh_project_labor_costs(
 def build_project_costs_response(
     project: PMProyecto,
     summary: PMProyectoCostoResumen,
+    budget_context: PMProjectBudgetContextOut,
 ) -> PMProjectCostsOut:
     return PMProjectCostsOut(
         costo_materiales_estimado=decimal_or_zero(summary.costo_materiales_estimado),
@@ -8149,6 +8207,7 @@ def build_project_costs_response(
         variacion_vs_presupuesto_detallado=decimal_or_zero(summary.variacion_vs_presupuesto_detallado),
         presupuesto_origen=summary.presupuesto_origen or "simple",
         margen_estimado=summary.margen_estimado,
+        budget_context=budget_context,
     )
 
 
@@ -8161,10 +8220,11 @@ def refresh_project_total_costs(
     project = get_project_for_company(db, empresa_id, project_id)
     refresh_project_material_costs(db, empresa_id=empresa_id, project_id=project_id)
     summary = refresh_project_labor_costs(db, empresa_id=empresa_id, project_id=project_id)
-    refresh_project_budget_totals(db, empresa_id=empresa_id, project_id=project_id)
+    budget = refresh_project_budget_totals(db, empresa_id=empresa_id, project_id=project_id)
     recalculate_project_cost_summary_totals(project, summary)
     db.flush()
-    return build_project_costs_response(project, summary)
+    budget_context = build_project_budget_context(db, project=project, summary=summary, budget=budget)
+    return build_project_costs_response(project, summary, budget_context)
 
 
 def list_project_time_entries(
@@ -8710,17 +8770,26 @@ def ensure_budget_editable(budget: PMPresupuesto) -> None:
         )
 
 
-def get_active_project_budget_row(db: Session, empresa_id: str, project_id: str) -> PMPresupuesto | None:
+def get_current_project_budget_row(db: Session, empresa_id: str, project_id: str) -> PMPresupuesto | None:
     return db.scalar(
         select(PMPresupuesto)
         .where(
             PMPresupuesto.empresa_id == empresa_id,
             PMPresupuesto.proyecto_id == project_id,
             PMPresupuesto.activo == True,
-            PMPresupuesto.estatus != "cancelado",
+            PMPresupuesto.estatus.in_(["aprobado", "borrador"]),
         )
-        .order_by(desc(PMPresupuesto.version), desc(PMPresupuesto.updated_at), desc(PMPresupuesto.created_at))
+        .order_by(
+            case((PMPresupuesto.estatus == "aprobado", 0), else_=1),
+            desc(PMPresupuesto.version),
+            desc(PMPresupuesto.updated_at),
+            desc(PMPresupuesto.created_at),
+        )
     )
+
+
+def get_active_project_budget_row(db: Session, empresa_id: str, project_id: str) -> PMPresupuesto | None:
+    return get_current_project_budget_row(db, empresa_id, project_id)
 
 
 def validate_budget_item_parent(
@@ -9231,12 +9300,15 @@ def build_budget_vs_actual_response(
     project: PMProyecto,
     summary: PMProyectoCostoResumen,
     budget: PMPresupuesto | None,
+    budget_context: PMProjectBudgetContextOut,
 ) -> PMBudgetVsActualOut:
-    budget_cost = decimal_or_zero(summary.presupuesto_detallado_costo or summary.presupuesto_estimado or project.presupuesto_estimado)
+    detailed_budget_cost = decimal_or_zero(summary.presupuesto_detallado_costo)
+    reference_budget = decimal_or_zero(project.presupuesto_estimado)
+    comparison_budget = detailed_budget_cost if detailed_budget_cost > ZERO else reference_budget
     total_real = decimal_or_zero(summary.costo_total_real)
     percentage_consumed = ZERO
-    if budget_cost > ZERO:
-        percentage_consumed = quantize_percentage((total_real / budget_cost) * Decimal("100"))
+    if comparison_budget > ZERO:
+        percentage_consumed = quantize_percentage((total_real / comparison_budget) * Decimal("100"))
     return PMBudgetVsActualOut(
         project_id=project.id,
         presupuesto_id=budget.id if budget else None,
@@ -9244,14 +9316,17 @@ def build_budget_vs_actual_response(
         presupuesto_estatus=budget.estatus if budget else None,
         presupuesto_origen=summary.presupuesto_origen or "simple",
         moneda=budget.moneda if budget else "MXN",
-        presupuesto_detallado_costo=budget_cost,
+        reference_budget=reference_budget,
+        comparison_budget=comparison_budget,
+        presupuesto_detallado_costo=detailed_budget_cost,
         presupuesto_detallado_venta=decimal_or_zero(summary.presupuesto_detallado_venta),
         costo_materiales_real=decimal_or_zero(summary.costo_materiales_real),
         costo_horas_real=decimal_or_zero(summary.costo_horas_real),
         costo_real_total=total_real,
-        variacion=budget_cost - total_real,
+        variacion=comparison_budget - total_real,
         porcentaje_consumido=percentage_consumed,
         margen_estimado=summary.margen_estimado,
+        budget_context=budget_context,
     )
 
 
@@ -9291,10 +9366,12 @@ def get_project_budget(
     budget = refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
     recalculate_project_cost_summary_totals(project, summary)
     db.flush()
+    budget_context = build_project_budget_context(db, project=project, summary=summary, budget=budget)
     return PMProjectBudgetBundleOut(
         budget=serialize_budget(db, budget) if budget else None,
-        summary=build_project_costs_response(project, summary),
-        vs_actual=build_budget_vs_actual_response(project, summary, budget),
+        summary=build_project_costs_response(project, summary, budget_context),
+        vs_actual=build_budget_vs_actual_response(project, summary, budget, budget_context),
+        budget_context=budget_context,
     )
 
 
@@ -10262,7 +10339,8 @@ def get_project_budget_vs_actual(
     budget = refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
     recalculate_project_cost_summary_totals(project, summary)
     db.flush()
-    return build_budget_vs_actual_response(project, summary, budget)
+    budget_context = build_project_budget_context(db, project=project, summary=summary, budget=budget)
+    return build_budget_vs_actual_response(project, summary, budget, budget_context)
 
 
 def get_project_costs(
@@ -10278,10 +10356,11 @@ def get_project_costs(
         if pm_context.config.pm_tiempo_enabled
         else get_or_create_project_cost_summary_row(db, empresa_id=pm_context.empresa_id, project_id=project.id)
     )
-    refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    budget = refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
     recalculate_project_cost_summary_totals(project, summary)
     db.flush()
-    return build_project_costs_response(project, summary)
+    budget_context = build_project_budget_context(db, project=project, summary=summary, budget=budget)
+    return build_project_costs_response(project, summary, budget_context)
 
 
 def get_pm_dashboard(db: Session, pm_context: PMContext) -> PMDashboardOut:
@@ -12740,8 +12819,14 @@ def get_project_estimations_summary(
 ) -> PMProyectoEstimacionesResumenOut:
     project = get_project_for_company(db, pm_context.empresa_id, project_id)
     budget = get_active_project_budget_row(db, pm_context.empresa_id, project.id)
+    summary = get_or_create_project_cost_summary_row(db, empresa_id=pm_context.empresa_id, project_id=project.id)
     if budget:
         budget = refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+        summary = get_or_create_project_cost_summary_row(db, empresa_id=pm_context.empresa_id, project_id=project.id)
+    else:
+        recalculate_project_cost_summary_totals(project, summary)
+        db.flush()
+    budget_context = build_project_budget_context(db, project=project, summary=summary, budget=budget)
     estimations = db.scalars(
         select(PMEstimacion).where(
             PMEstimacion.empresa_id == pm_context.empresa_id,
@@ -12773,6 +12858,9 @@ def get_project_estimations_summary(
         pendiente_por_cobrar=pendiente,
         presupuesto_total=presupuesto_total,
         porcentaje_presupuesto_estimado=porcentaje_estimado,
+        budget_context=budget_context,
+        estimation_state=resolve_project_estimation_state(budget_context),
+        can_create_estimations=budget_context.has_detailed_budget and budget_context.has_active_items,
     )
 
 
