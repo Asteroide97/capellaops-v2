@@ -36,6 +36,7 @@ def get_bind():
 
 
 def get_inspector():
+    # Always return a fresh Inspector after DDL so schema reads do not reuse stale reflection.
     return inspect(get_bind())
 
 
@@ -93,6 +94,55 @@ def normalize_filter_definition(filter_definition: str | None) -> str | None:
     normalized = normalized.replace('"', "").replace("'", "")
     normalized = re.sub(r"\s+", " ", normalized)
     normalized = normalized.replace("(", "").replace(")", "")
+    return normalized.strip() or None
+
+
+def normalize_identifier_token(token: str) -> str:
+    normalized = token.strip().lower().replace("[", "").replace("]", "").replace('"', "")
+    if "." in normalized:
+        normalized = normalized.split(".")[-1]
+    return normalized
+
+
+def normalize_check_definition(definition: str | None) -> str | None:
+    if definition is None:
+        return None
+    normalized = str(definition).strip().lower()
+    if not normalized:
+        return None
+    normalized = normalized.replace("[", "").replace("]", "")
+    normalized = normalized.replace('"', "").replace("'", "")
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    normalized = normalized.removeprefix("check ").strip()
+
+    in_match = re.fullmatch(r"\(?([a-z0-9_\.]+)\s+in\s*\(([^)]+)\)\)?", normalized)
+    if in_match:
+        column_name = normalize_identifier_token(in_match.group(1))
+        values = sorted(
+            value.strip()
+            for value in in_match.group(2).split(",")
+            if value.strip()
+        )
+        return f"{column_name} in ({','.join(values)})"
+
+    flat_or_expression = normalized.replace("(", "").replace(")", "")
+    or_segments = [segment.strip() for segment in flat_or_expression.split(" or ") if segment.strip()]
+    if or_segments:
+        parsed_segments = []
+        for segment in or_segments:
+            match = re.fullmatch(r"([a-z0-9_\.]+)\s*=\s*([a-z0-9_]+)", segment)
+            if not match:
+                parsed_segments = []
+                break
+            parsed_segments.append((normalize_identifier_token(match.group(1)), match.group(2).strip()))
+        if parsed_segments:
+            first_column = parsed_segments[0][0]
+            if all(column == first_column for column, _value in parsed_segments):
+                values = sorted(value for _column, value in parsed_segments)
+                return f"{first_column} in ({','.join(values)})"
+
+    normalized = normalized.replace("(", "").replace(")", "")
+    normalized = re.sub(r"\s+", " ", normalized)
     return normalized.strip() or None
 
 
@@ -163,6 +213,94 @@ def get_mssql_unique_definitions(table_name: str) -> list[dict]:
         )
         definition["columns"].append(str(row["column_name"]).lower())
     return list(definitions_by_name.values())
+
+
+def get_inspector_check_constraints(table_name: str) -> list[dict]:
+    if not has_table(table_name):
+        return []
+    try:
+        return get_inspector().get_check_constraints(table_name)
+    except (NotImplementedError, sa.exc.SQLAlchemyError):
+        return []
+
+
+def get_mssql_check_constraint_definitions(table_name: str) -> list[dict]:
+    if not using_mssql() or not has_table(table_name):
+        return []
+    rows = get_bind().execute(
+        sa.text(
+            """
+            SELECT
+                cc.name AS constraint_name,
+                cc.definition AS definition,
+                t.name AS table_name,
+                s.name AS schema_name
+            FROM sys.check_constraints cc
+            INNER JOIN sys.tables t
+                ON t.object_id = cc.parent_object_id
+            INNER JOIN sys.schemas s
+                ON s.schema_id = t.schema_id
+            WHERE t.name = :table_name
+            ORDER BY cc.name
+            """
+        ),
+        {"table_name": table_name},
+    ).mappings().all()
+    return [
+        {
+            "name": row["constraint_name"],
+            "definition": row["definition"],
+            "table_name": row["table_name"],
+            "schema_name": row["schema_name"],
+        }
+        for row in rows
+    ]
+
+
+def get_check_constraint_definitions(table_name: str) -> list[dict]:
+    if not has_table(table_name):
+        return []
+
+    definitions: list[dict] = []
+    seen_signatures: set[tuple[str | None, str | None]] = set()
+
+    for constraint in get_inspector_check_constraints(table_name):
+        name = constraint.get("name")
+        definition = constraint.get("sqltext")
+        signature = (
+            str(name).lower() if name else None,
+            normalize_check_definition(definition),
+        )
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        definitions.append(
+            {
+                "name": name,
+                "definition": definition,
+                "normalized_definition": normalize_check_definition(definition),
+            }
+        )
+
+    for constraint in get_mssql_check_constraint_definitions(table_name):
+        name = constraint.get("name")
+        definition = constraint.get("definition")
+        signature = (
+            str(name).lower() if name else None,
+            normalize_check_definition(definition),
+        )
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        definitions.append(
+            {
+                "name": name,
+                "definition": definition,
+                "normalized_definition": normalize_check_definition(definition),
+            }
+        )
+
+    return definitions
 
 
 def get_unique_definitions(table_name: str) -> list[dict]:
@@ -275,14 +413,31 @@ def unique_columns_exist(
     )
 
 
-def check_constraint_exists(table_name: str, constraint_name: str) -> bool:
+def check_constraint_name_exists(table_name: str, constraint_name: str) -> bool:
+    expected_name = str(constraint_name).lower()
+    return any(
+        str(definition.get("name")).lower() == expected_name
+        for definition in get_check_constraint_definitions(table_name)
+        if definition.get("name")
+    )
+
+
+def equivalent_check_constraint_exists(table_name: str, expression: str) -> bool:
+    expected_definition = normalize_check_definition(expression)
+    return any(
+        definition.get("normalized_definition") == expected_definition
+        for definition in get_check_constraint_definitions(table_name)
+    )
+
+
+def check_constraint_exists(table_name: str, constraint_name: str, expression: str | None = None) -> bool:
     if not has_table(table_name):
         return False
-    try:
-        constraints = get_inspector().get_check_constraints(table_name)
-    except NotImplementedError:
-        return False
-    return any(constraint.get("name") == constraint_name for constraint in constraints)
+    if check_constraint_name_exists(table_name, constraint_name):
+        return True
+    if expression is not None and equivalent_check_constraint_exists(table_name, expression):
+        return True
+    return False
 
 
 def foreign_key_exists(
@@ -548,6 +703,53 @@ def create_task_links_table() -> None:
     )
 
 
+def ensure_task_link_indexes() -> None:
+    create_index_if_missing(
+        "ix_pm_presupuesto_task_links_empresa_id",
+        "pm_presupuesto_task_links",
+        ["empresa_id"],
+        unique=False,
+    )
+    create_index_if_missing(
+        "ix_pm_presupuesto_task_links_proyecto_id",
+        "pm_presupuesto_task_links",
+        ["proyecto_id"],
+        unique=False,
+    )
+    create_index_if_missing(
+        "ix_pm_presupuesto_task_links_lineage_id",
+        "pm_presupuesto_task_links",
+        ["lineage_id"],
+        unique=False,
+    )
+    create_unique_index_if_missing(
+        "uq_pm_presupuesto_task_links_tarea_id_not_null",
+        "pm_presupuesto_task_links",
+        ["tarea_id"],
+        filter_definition="tarea_id IS NOT NULL",
+        sqlite_where=sa.text("tarea_id IS NOT NULL"),
+        mssql_where=sa.text("tarea_id IS NOT NULL"),
+    )
+    create_index_if_missing(
+        "ix_pm_presupuesto_task_links_source_presupuesto_id",
+        "pm_presupuesto_task_links",
+        ["source_presupuesto_id"],
+        unique=False,
+    )
+    create_index_if_missing(
+        "ix_pm_presupuesto_task_links_source_partida_id",
+        "pm_presupuesto_task_links",
+        ["source_partida_id"],
+        unique=False,
+    )
+    create_index_if_missing(
+        "ix_pm_presupuesto_task_links_sync_status",
+        "pm_presupuesto_task_links",
+        ["sync_status"],
+        unique=False,
+    )
+
+
 def task_link_column(name: str) -> sa.Column:
     definitions = {
         "id": sa.Column("id", sa.String(length=36), nullable=True),
@@ -674,8 +876,14 @@ def ensure_task_link_required_values() -> None:
 
 
 def ensure_task_link_structure() -> None:
+    table_created = False
     if not has_table("pm_presupuesto_task_links"):
         create_task_links_table()
+        table_created = True
+
+    if table_created:
+        ensure_task_link_indexes()
+        return
 
     ensure_task_link_columns()
     backfill_task_link_values()
@@ -709,7 +917,11 @@ def ensure_task_link_structure() -> None:
         ["proyecto_id", "lineage_id"],
     ):
         needs_batch = True
-    if not check_constraint_exists("pm_presupuesto_task_links", "ck_pm_presupuesto_task_links_sync_status"):
+    if not check_constraint_exists(
+        "pm_presupuesto_task_links",
+        "ck_pm_presupuesto_task_links_sync_status",
+        SYNC_STATUS_CHECK,
+    ):
         needs_batch = True
 
     foreign_keys_to_ensure = task_link_foreign_key_specs()
@@ -741,7 +953,11 @@ def ensure_task_link_structure() -> None:
                     ["proyecto_id", "lineage_id"],
                 )
 
-            if not check_constraint_exists("pm_presupuesto_task_links", "ck_pm_presupuesto_task_links_sync_status"):
+            if not check_constraint_exists(
+                "pm_presupuesto_task_links",
+                "ck_pm_presupuesto_task_links_sync_status",
+                SYNC_STATUS_CHECK,
+            ):
                 batch_op.create_check_constraint(
                     "ck_pm_presupuesto_task_links_sync_status",
                     SYNC_STATUS_CHECK,
@@ -763,50 +979,7 @@ def ensure_task_link_structure() -> None:
                     ondelete=spec["ondelete"],
                 )
 
-    create_index_if_missing(
-        "ix_pm_presupuesto_task_links_empresa_id",
-        "pm_presupuesto_task_links",
-        ["empresa_id"],
-        unique=False,
-    )
-    create_index_if_missing(
-        "ix_pm_presupuesto_task_links_proyecto_id",
-        "pm_presupuesto_task_links",
-        ["proyecto_id"],
-        unique=False,
-    )
-    create_index_if_missing(
-        "ix_pm_presupuesto_task_links_lineage_id",
-        "pm_presupuesto_task_links",
-        ["lineage_id"],
-        unique=False,
-    )
-    create_unique_index_if_missing(
-        "uq_pm_presupuesto_task_links_tarea_id_not_null",
-        "pm_presupuesto_task_links",
-        ["tarea_id"],
-        filter_definition="tarea_id IS NOT NULL",
-        sqlite_where=sa.text("tarea_id IS NOT NULL"),
-        mssql_where=sa.text("tarea_id IS NOT NULL"),
-    )
-    create_index_if_missing(
-        "ix_pm_presupuesto_task_links_source_presupuesto_id",
-        "pm_presupuesto_task_links",
-        ["source_presupuesto_id"],
-        unique=False,
-    )
-    create_index_if_missing(
-        "ix_pm_presupuesto_task_links_source_partida_id",
-        "pm_presupuesto_task_links",
-        ["source_partida_id"],
-        unique=False,
-    )
-    create_index_if_missing(
-        "ix_pm_presupuesto_task_links_sync_status",
-        "pm_presupuesto_task_links",
-        ["sync_status"],
-        unique=False,
-    )
+    ensure_task_link_indexes()
 
 
 def upgrade() -> None:

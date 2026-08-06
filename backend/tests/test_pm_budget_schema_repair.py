@@ -17,6 +17,7 @@ from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.dialects import mssql
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.schema import CreateIndex, CreateTable
+from sqlalchemy.exc import IntegrityError
 
 from app.models import Empresa, EmpresaUsuario, Plan, Usuario
 from app.models.pm import EmpresaPMConfig, PMPresupuesto, PMPresupuestoPartida, PMPresupuestoTaskLink, PMProyecto
@@ -831,6 +832,228 @@ class PMBudgetSchemaRepairMigrationTestCase(unittest.TestCase):
             )
 
         create_index.assert_not_called()
+
+    def test_mssql_check_constraint_fallback_when_inspector_is_not_implemented(self) -> None:
+        migration_0046 = self._load_migration_module(
+            "20260805_0046_repair_pm_budget_lineage_schema.py",
+            "pm_budget_lineage_0046_check_fallback",
+        )
+        fake_inspector = mock.Mock()
+        fake_inspector.has_table.return_value = True
+        fake_inspector.get_check_constraints.side_effect = NotImplementedError()
+        fake_bind = self._fake_mssql_bind_with_rows(
+            [
+                {
+                    "constraint_name": "ck_pm_presupuesto_task_links_sync_status",
+                    "definition": "([sync_status]='linked' OR [sync_status]='detached' OR [sync_status]='orphaned' OR [sync_status]='conflict')",
+                    "table_name": "pm_presupuesto_task_links",
+                    "schema_name": "dbo",
+                }
+            ]
+        )
+
+        with (
+            mock.patch.object(migration_0046, "get_inspector", return_value=fake_inspector),
+            mock.patch.object(migration_0046, "get_bind", return_value=fake_bind),
+        ):
+            definitions = migration_0046.get_check_constraint_definitions("pm_presupuesto_task_links")
+
+        self.assertEqual(len(definitions), 1)
+        self.assertEqual(definitions[0]["name"], "ck_pm_presupuesto_task_links_sync_status")
+        self.assertEqual(
+            definitions[0]["normalized_definition"],
+            "sync_status in (conflict,detached,linked,orphaned)",
+        )
+
+    def test_equivalent_check_constraint_exists_for_same_logic_with_other_name(self) -> None:
+        migration_0046 = self._load_migration_module(
+            "20260805_0046_repair_pm_budget_lineage_schema.py",
+            "pm_budget_lineage_0046_equivalent_checks",
+        )
+        with (
+            mock.patch.object(migration_0046, "has_table", return_value=True),
+            mock.patch.object(
+                migration_0046,
+                "get_check_constraint_definitions",
+                return_value=[
+                    {
+                        "name": "ck_sync_status_alt",
+                        "definition": "([sync_status]='linked' OR [sync_status]='detached' OR [sync_status]='orphaned' OR [sync_status]='conflict')",
+                        "normalized_definition": "sync_status in (conflict,detached,linked,orphaned)",
+                    }
+                ],
+            ),
+        ):
+            self.assertTrue(
+                migration_0046.check_constraint_exists(
+                    "pm_presupuesto_task_links",
+                    "ck_pm_presupuesto_task_links_sync_status",
+                    migration_0046.SYNC_STATUS_CHECK,
+                )
+            )
+
+    def test_create_task_links_path_does_not_try_to_create_check_twice(self) -> None:
+        migration_0046 = self._load_migration_module(
+            "20260805_0046_repair_pm_budget_lineage_schema.py",
+            "pm_budget_lineage_0046_create_table_once",
+        )
+        with (
+            mock.patch.object(migration_0046, "has_table", side_effect=[False]),
+            mock.patch.object(migration_0046, "create_task_links_table") as create_task_links_table,
+            mock.patch.object(migration_0046, "ensure_task_link_indexes") as ensure_task_link_indexes,
+            mock.patch.object(migration_0046, "ensure_task_link_columns") as ensure_task_link_columns,
+            mock.patch.object(migration_0046, "backfill_task_link_values") as backfill_task_link_values,
+            mock.patch.object(migration_0046, "ensure_task_link_required_values") as ensure_task_link_required_values,
+            mock.patch.object(migration_0046, "ensure_valid_sync_status_values") as ensure_valid_sync_status_values,
+            mock.patch.object(migration_0046.op, "batch_alter_table") as batch_alter_table,
+        ):
+            migration_0046.ensure_task_link_structure()
+
+        create_task_links_table.assert_called_once()
+        ensure_task_link_indexes.assert_called_once()
+        ensure_task_link_columns.assert_not_called()
+        backfill_task_link_values.assert_not_called()
+        ensure_task_link_required_values.assert_not_called()
+        ensure_valid_sync_status_values.assert_not_called()
+        batch_alter_table.assert_not_called()
+
+    def test_partial_table_with_existing_check_completes_without_duplicate_check(self) -> None:
+        self._prepare_database(self.template_0044_path)
+        company, _user, _pm_context, project, budget = self._seed_company_context(suffix="partial-check")
+        self.db.execute(text("ALTER TABLE pm_presupuesto_partidas ADD COLUMN lineage_id VARCHAR(36)"))
+        self.db.commit()
+
+        lineage_id = str(uuid4())
+        self._insert_budget_item_with_lineage(
+            company_id=company.id,
+            budget_id=budget.id,
+            project_id=project.id,
+            lineage_id=lineage_id,
+            codigo="06.01",
+            nombre="Partida con check previo",
+        )
+
+        self.db.execute(
+            text(
+                """
+                CREATE TABLE pm_presupuesto_task_links (
+                    id VARCHAR(36) NOT NULL,
+                    empresa_id VARCHAR(36) NOT NULL,
+                    proyecto_id VARCHAR(36) NOT NULL,
+                    lineage_id VARCHAR(36) NOT NULL,
+                    tarea_id VARCHAR(36) NULL,
+                    generated_from_budget BOOLEAN NULL,
+                    sync_status VARCHAR(20) NULL,
+                    created_at DATETIME NULL,
+                    updated_at DATETIME NULL,
+                    CONSTRAINT ck_pm_presupuesto_task_links_sync_status
+                        CHECK (sync_status IN ('linked', 'detached', 'orphaned', 'conflict'))
+                )
+                """
+            )
+        )
+        self.db.execute(
+            text(
+                """
+                INSERT INTO pm_presupuesto_task_links (
+                    id,
+                    empresa_id,
+                    proyecto_id,
+                    lineage_id,
+                    tarea_id,
+                    generated_from_budget,
+                    sync_status,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    :id,
+                    :empresa_id,
+                    :proyecto_id,
+                    :lineage_id,
+                    NULL,
+                    0,
+                    'linked',
+                    :created_at,
+                    :updated_at
+                )
+                """
+            ),
+            {
+                "id": str(uuid4()),
+                "empresa_id": company.id,
+                "proyecto_id": project.id,
+                "lineage_id": lineage_id,
+                "created_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(timezone.utc),
+            },
+        )
+        self.db.commit()
+        self._stamp_revision("20260805_0045")
+
+        self._upgrade("head")
+
+        check_constraints = inspect(self.engine).get_check_constraints("pm_presupuesto_task_links")
+        matching_checks = [
+            constraint
+            for constraint in check_constraints
+            if constraint.get("name") == "ck_pm_presupuesto_task_links_sync_status"
+        ]
+        self.assertEqual(len(matching_checks), 1)
+
+    def test_sync_status_check_rejects_invalid_value_after_head(self) -> None:
+        self._prepare_database(self.template_0044_path)
+        company, _user, _pm_context, project, budget = self._seed_company_context(suffix="invalid-sync")
+        project_id = project.id
+        self._upgrade("head")
+
+        with self.assertRaises(IntegrityError):
+            self.db.execute(
+                text(
+                    """
+                    INSERT INTO pm_presupuesto_task_links (
+                        id,
+                        empresa_id,
+                        proyecto_id,
+                        lineage_id,
+                        tarea_id,
+                        source_presupuesto_id,
+                        source_partida_id,
+                        source_capitulo_id,
+                        generated_from_budget,
+                        sync_status,
+                        source_hash,
+                        last_synced_at,
+                        created_at,
+                        updated_at
+                    ) VALUES (
+                        :id,
+                        :empresa_id,
+                        :proyecto_id,
+                        :lineage_id,
+                        NULL,
+                        NULL,
+                        NULL,
+                        NULL,
+                        0,
+                        'invalido',
+                        NULL,
+                        NULL,
+                        :created_at,
+                        :updated_at
+                    )
+                    """
+                ),
+                {
+                    "id": str(uuid4()),
+                    "empresa_id": company.id,
+                    "proyecto_id": project_id,
+                    "lineage_id": str(uuid4()),
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                },
+            )
+            self.db.commit()
+        self.db.rollback()
 
     def test_filtered_task_id_index_compiles_for_mssql(self) -> None:
         metadata = sa.MetaData()
