@@ -81,6 +81,14 @@ const defaultCollectForm = {
   mode: "collect",
 };
 
+const defaultLoadErrors = {
+  budget: "",
+  summary: "",
+  candidates: "",
+  estimations: "",
+  pendingChanges: "",
+};
+
 function getErrorMessage(error, fallback) {
   if (typeof error?.message === "string" && error.message.trim()) {
     return error.message.trim();
@@ -311,6 +319,7 @@ export default function PMProjectEstimationsTab({
   const [estimations, setEstimations] = useState([]);
   const [summary, setSummary] = useState(null);
   const [candidates, setCandidates] = useState([]);
+  const [loadErrors, setLoadErrors] = useState(defaultLoadErrors);
   const [pendingChanges, setPendingChanges] = useState([]);
   const [estimationModalOpen, setEstimationModalOpen] = useState(false);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -327,9 +336,22 @@ export default function PMProjectEstimationsTab({
   const [collectError, setCollectError] = useState("");
   const [actionLoading, setActionLoading] = useState({});
 
-  const hasBudget = Boolean(budgetBundle?.budget?.id);
+  const budgetContext = summary?.budget_context ?? budgetBundle?.budget_context ?? budgetBundle?.summary?.budget_context ?? null;
+  const estimationState = summary?.estimation_state ?? (
+    !budgetContext?.has_detailed_budget
+      ? budgetContext?.budget_source === "project_estimate"
+        ? "reference_only"
+        : "sin_presupuesto"
+      : !budgetContext?.has_active_items
+        ? "sin_partidas"
+        : !budgetContext?.is_approved
+          ? "borrador"
+          : "listo"
+  );
+  const hasBudget = Boolean(budgetContext?.has_detailed_budget);
+  const hasBudgetItems = Boolean(budgetContext?.has_active_items);
   const hasPendingChanges = (pendingChanges?.length ?? 0) > 0;
-  const budgetNotApproved = String(budgetBundle?.budget?.estatus ?? "").toLowerCase() !== "aprobado";
+  const budgetNotApproved = hasBudget && budgetContext?.is_approved === false;
   const canEditDrafts = canEdit && projectEditable;
   const canApproveEstimations = canApprove && projectEditable;
   const canManageCommercialFlow = canManage && projectEditable;
@@ -390,28 +412,84 @@ export default function PMProjectEstimationsTab({
     } else {
       setLoading(true);
     }
-    setError("");
+    setLoadErrors(defaultLoadErrors);
     try {
-      const [budgetResponse, estimationResponse, summaryResponse, candidateResponse, pendingChangeResponse] =
-        await Promise.all([
-          getPmProjectBudget({ empresaId, projectId, token }),
-          listPmProjectEstimations({ empresaId, projectId, token }),
-          getPmProjectEstimationsSummary({ empresaId, projectId, token }),
-          listPmProjectEstimationCandidates({ empresaId, projectId, token }),
-          listPmProjectChanges({
-            empresaId,
-            projectId,
-            token,
-            params: { estatus: "pendiente_aprobacion" },
-          }),
-        ]);
-      setBudgetBundle(budgetResponse);
-      setEstimations(estimationResponse ?? []);
-      setSummary(summaryResponse);
-      setCandidates(candidateResponse ?? []);
-      setPendingChanges(pendingChangeResponse ?? []);
-    } catch (loadError) {
-      setError(getErrorMessage(loadError, "No se pudieron cargar las estimaciones del proyecto."));
+      const [budgetResult, estimationResult, summaryResult, candidateResult, pendingChangeResult] = await Promise.allSettled([
+        getPmProjectBudget({ empresaId, projectId, token }),
+        listPmProjectEstimations({ empresaId, projectId, token }),
+        getPmProjectEstimationsSummary({ empresaId, projectId, token }),
+        listPmProjectEstimationCandidates({ empresaId, projectId, token }),
+        listPmProjectChanges({
+          empresaId,
+          projectId,
+          token,
+          params: { estatus: "pendiente_aprobacion" },
+        }),
+      ]);
+
+      const nextLoadErrors = { ...defaultLoadErrors };
+
+      if (budgetResult.status === "fulfilled") {
+        setBudgetBundle(budgetResult.value);
+      } else {
+        nextLoadErrors.budget = getErrorMessage(
+          budgetResult.reason,
+          "No se pudo cargar el presupuesto del proyecto para estimaciones.",
+        );
+        if (!background) {
+          setBudgetBundle(null);
+        }
+      }
+
+      if (estimationResult.status === "fulfilled") {
+        setEstimations(estimationResult.value ?? []);
+      } else {
+        nextLoadErrors.estimations = getErrorMessage(
+          estimationResult.reason,
+          "No se pudo cargar el listado de estimaciones.",
+        );
+        if (!background) {
+          setEstimations([]);
+        }
+      }
+
+      if (summaryResult.status === "fulfilled") {
+        setSummary(summaryResult.value);
+      } else {
+        nextLoadErrors.summary = getErrorMessage(
+          summaryResult.reason,
+          "No se pudo cargar el resumen de estimaciones.",
+        );
+        if (!background) {
+          setSummary(null);
+        }
+      }
+
+      if (candidateResult.status === "fulfilled") {
+        setCandidates(candidateResult.value ?? []);
+      } else {
+        nextLoadErrors.candidates = getErrorMessage(
+          candidateResult.reason,
+          "No se pudieron cargar las partidas disponibles para estimar.",
+        );
+        if (!background) {
+          setCandidates([]);
+        }
+      }
+
+      if (pendingChangeResult.status === "fulfilled") {
+        setPendingChanges(pendingChangeResult.value ?? []);
+      } else {
+        nextLoadErrors.pendingChanges = getErrorMessage(
+          pendingChangeResult.reason,
+          "No se pudieron cargar los cambios pendientes del proyecto.",
+        );
+        if (!background) {
+          setPendingChanges([]);
+        }
+      }
+
+      setLoadErrors(nextLoadErrors);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -731,11 +809,20 @@ export default function PMProjectEstimationsTab({
     { label: "Pendiente por cobrar", value: formatMoney(summary?.pendiente_por_cobrar ?? 0), tone: "warning", meta: "Saldo comercial" },
     { label: "% presupuesto estimado", value: formatPercent(summary?.porcentaje_presupuesto_estimado ?? 0), tone: "neutral", meta: "Sobre venta presupuestada" },
   ];
+  const budgetStateError = loadErrors.budget || loadErrors.summary;
 
   if (loading) {
     return (
       <DataCard subtitle="Genera estados de pago internos a partir del avance del presupuesto." title="Estimaciones">
         <p className="table-note">Cargando estimaciones...</p>
+      </DataCard>
+    );
+  }
+
+  if (!hasBudget && budgetStateError) {
+    return (
+      <DataCard subtitle="Genera estados de pago internos a partir del avance del presupuesto." title="Estimaciones">
+        <div className="inventory-inline-error">{normalizePmCopy(budgetStateError)}</div>
       </DataCard>
     );
   }
@@ -749,8 +836,32 @@ export default function PMProjectEstimationsTab({
               Ir a Presupuesto
             </ActionButton>
           )}
-          note="Para este MVP, las estimaciones se generan sobre partidas activas del presupuesto."
-          title="Este proyecto necesita un presupuesto para generar estimaciones."
+          note={
+            estimationState === "reference_only"
+              ? "El proyecto tiene un presupuesto de referencia, pero todavía no existe un presupuesto detallado con capítulos y partidas."
+              : "Para este MVP, las estimaciones se generan sobre partidas activas del presupuesto."
+          }
+          title={
+            estimationState === "reference_only"
+              ? "Este proyecto todavía no tiene presupuesto detallado para estimar."
+              : "Este proyecto necesita un presupuesto para generar estimaciones."
+          }
+        />
+      </DataCard>
+    );
+  }
+
+  if (!hasBudgetItems) {
+    return (
+      <DataCard subtitle="Genera estados de pago internos a partir del avance del presupuesto." title="Estimaciones">
+        <EmptyState
+          actions={(
+            <ActionButton onClick={onOpenBudget} tone="primary" type="button">
+              Ir a Presupuesto
+            </ActionButton>
+          )}
+          note="El presupuesto detallado existe, pero todavía no tiene partidas activas para estimar."
+          title="Este presupuesto aún no tiene partidas para estimaciones."
         />
       </DataCard>
     );
@@ -778,6 +889,9 @@ export default function PMProjectEstimationsTab({
       >
         {error ? <div className="inventory-inline-error">{normalizePmCopy(error)}</div> : null}
         {success ? <div className="inventory-inline-success">{normalizePmCopy(success)}</div> : null}
+        {loadErrors.estimations ? <div className="inventory-inline-error">{normalizePmCopy(loadErrors.estimations)}</div> : null}
+        {loadErrors.candidates ? <div className="inventory-inline-error">{normalizePmCopy(loadErrors.candidates)}</div> : null}
+        {loadErrors.pendingChanges ? <div className="inventory-inline-error">{normalizePmCopy(loadErrors.pendingChanges)}</div> : null}
 
         {hasPendingChanges || budgetNotApproved ? (
           <div className="pm-estimation-warning">

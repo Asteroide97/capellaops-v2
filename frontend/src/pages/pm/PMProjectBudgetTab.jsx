@@ -28,6 +28,8 @@ import {
   deletePmBudgetItemPrerequisite,
   getMaterials,
   getPmProjectBudget,
+  getPmProjectBudgetVsActual,
+  getPmProjectCosts,
   listPmProjectMembers,
   refreshPmProjectBudget,
   updatePmBudget,
@@ -50,7 +52,7 @@ import {
   formatNumber,
   safeDisplayText,
 } from "../inventory/shared";
-import { formatPercent, pmRateRoleOptions } from "./shared";
+import { formatPercent, normalizePmCopy, pmRateRoleOptions } from "./shared";
 import PMBudgetPlanPreviewModal from "./PMBudgetPlanPreviewModal";
 
 
@@ -102,6 +104,14 @@ const defaultIndirectForm = {
   tipo: "monto",
   porcentaje: "",
   monto: "0",
+};
+
+const defaultLoadErrors = {
+  budget: "",
+  costs: "",
+  vsActual: "",
+  materials: "",
+  members: "",
 };
 
 const budgetStatusLabels = {
@@ -352,6 +362,9 @@ export default function PMProjectBudgetTab({
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [bundle, setBundle] = useState(null);
+  const [budgetSummary, setBudgetSummary] = useState(null);
+  const [budgetVsActual, setBudgetVsActual] = useState(null);
+  const [loadErrors, setLoadErrors] = useState(defaultLoadErrors);
   const [materialsCatalog, setMaterialsCatalog] = useState([]);
   const [activeBudgetModal, setActiveBudgetModal] = useState("");
   const [isPlanPreviewOpen, setIsPlanPreviewOpen] = useState(false);
@@ -373,7 +386,14 @@ export default function PMProjectBudgetTab({
   const [prerequisiteSearch, setPrerequisiteSearch] = useState("");
 
   const budget = bundle?.budget ?? null;
-  const vsActual = bundle?.vs_actual ?? null;
+  const summary = budgetSummary ?? bundle?.summary ?? null;
+  const vsActual = budgetVsActual ?? bundle?.vs_actual ?? null;
+  const budgetContext = bundle?.budget_context ?? summary?.budget_context ?? vsActual?.budget_context ?? null;
+  const hasDetailedBudget = Boolean(budgetContext?.has_detailed_budget);
+  const budgetSource = budgetContext?.budget_source ?? "none";
+  const hasActiveBudgetItems = Boolean(budgetContext?.has_active_items);
+  const budgetLoadError = loadErrors.budget;
+  const costsLoadError = loadErrors.costs || loadErrors.vsActual;
   const items = useMemo(() => budget?.items ?? [], [budget]);
   const indirects = useMemo(() => budget?.indirects ?? [], [budget]);
   const activeItems = useMemo(() => items.filter((item) => item.activo), [items]);
@@ -397,11 +417,16 @@ export default function PMProjectBudgetTab({
   const selectedOperationalItem = selectedBudgetItem?.tipo === "partida" ? selectedBudgetItem : null;
   const projectBudgetBase = numericValue(project?.presupuesto_estimado);
   const canEditBudget = canManage && projectEditable;
-  const budgetCalculatedCost = numericValue(budget?.total_costo ?? vsActual?.presupuesto_detallado_costo);
-  const budgetSaleTotal = numericValue(budget?.total_venta ?? vsActual?.presupuesto_detallado_venta);
-  const budgetEstimatedMargin = numericValue(budget?.margen_estimado ?? vsActual?.margen_estimado);
-  const projectActualCost = numericValue(vsActual?.costo_real_total);
-  const varianceAgainstActual = numericValue(vsActual?.variacion ?? (budgetCalculatedCost - projectActualCost));
+  const budgetCalculatedCost = numericValue(budget?.total_costo ?? summary?.presupuesto_detallado_costo);
+  const budgetSaleTotal = numericValue(
+    budget?.total_venta ?? summary?.presupuesto_detallado_venta ?? budgetContext?.detailed_budget_total,
+  );
+  const budgetEstimatedMargin = numericValue(budget?.margen_estimado ?? summary?.margen_estimado);
+  const projectActualCost = numericValue(vsActual?.costo_real_total ?? summary?.costo_total_real);
+  const comparisonBudget = numericValue(
+    vsActual?.comparison_budget ?? (hasDetailedBudget ? budgetCalculatedCost : budgetContext?.reference_budget ?? projectBudgetBase),
+  );
+  const varianceAgainstActual = numericValue(vsActual?.variacion ?? (comparisonBudget - projectActualCost));
   const selectedOperationalItemMarginAmount = numericValue(selectedOperationalItem?.subtotal_venta) - numericValue(selectedOperationalItem?.subtotal_costo);
   const hasGeneratedPlan = Number(project?.task_stats?.total ?? 0) > 0;
   const prerequisiteCatalog = useMemo(
@@ -507,25 +532,87 @@ export default function PMProjectBudgetTab({
     if (!background) {
       setLoading(true);
     }
-    setError("");
+    setLoadErrors(defaultLoadErrors);
     try {
-      const [budgetResponse, materialsResponse, membersResponse] = await Promise.all([
+      const [budgetResult, costsResult, vsActualResult, materialsResult, membersResult] = await Promise.allSettled([
         getPmProjectBudget({ projectId, token, empresaId }),
+        getPmProjectCosts({ projectId, token, empresaId }),
+        getPmProjectBudgetVsActual({ projectId, token, empresaId }),
         getMaterials({ token, empresaId, filters: { activo: true, limit: 200, offset: 0 } }),
-        listPmProjectMembers({ projectId, token, empresaId }).catch(() => ({ items: [] })),
+        listPmProjectMembers({ projectId, token, empresaId }),
       ]);
-      setBundle(budgetResponse);
-      setMaterialsCatalog(materialsResponse.items ?? []);
-      setProjectMembers(membersResponse?.items ?? []);
-      setSelectedItemId((current) => {
-        const nextItems = budgetResponse?.budget?.items?.filter((item) => item.activo) ?? [];
-        if (current && nextItems.some((item) => item.id === current)) {
-          return current;
+
+      const nextLoadErrors = { ...defaultLoadErrors };
+
+      if (budgetResult.status === "fulfilled") {
+        const budgetResponse = budgetResult.value;
+        setBundle(budgetResponse);
+        setSelectedItemId((current) => {
+          const nextItems = budgetResponse?.budget?.items?.filter((item) => item.activo) ?? [];
+          if (current && nextItems.some((item) => item.id === current)) {
+            return current;
+          }
+          return nextItems.find((item) => item.tipo === "partida")?.id ?? nextItems[0]?.id ?? null;
+        });
+      } else {
+        nextLoadErrors.budget = getErrorMessage(
+          budgetResult.reason,
+          "No se pudo cargar la estructura del presupuesto detallado.",
+        );
+        if (!background) {
+          setBundle(null);
         }
-        return nextItems.find((item) => item.tipo === "partida")?.id ?? nextItems[0]?.id ?? null;
-      });
-    } catch (requestError) {
-      setError(getErrorMessage(requestError, "No se pudo cargar el presupuesto del proyecto."));
+      }
+
+      if (costsResult.status === "fulfilled") {
+        setBudgetSummary(costsResult.value);
+      } else {
+        nextLoadErrors.costs = getErrorMessage(
+          costsResult.reason,
+          "No se pudo cargar el resumen de costos del proyecto.",
+        );
+        if (!background) {
+          setBudgetSummary(null);
+        }
+      }
+
+      if (vsActualResult.status === "fulfilled") {
+        setBudgetVsActual(vsActualResult.value);
+      } else {
+        nextLoadErrors.vsActual = getErrorMessage(
+          vsActualResult.reason,
+          "No se pudo cargar el comparativo real del presupuesto.",
+        );
+        if (!background) {
+          setBudgetVsActual(null);
+        }
+      }
+
+      if (materialsResult.status === "fulfilled") {
+        setMaterialsCatalog(materialsResult.value?.items ?? []);
+      } else {
+        nextLoadErrors.materials = getErrorMessage(
+          materialsResult.reason,
+          "No se pudo cargar el catálogo de materiales para este presupuesto.",
+        );
+        if (!background) {
+          setMaterialsCatalog([]);
+        }
+      }
+
+      if (membersResult.status === "fulfilled") {
+        setProjectMembers(membersResult.value?.items ?? []);
+      } else {
+        nextLoadErrors.members = getErrorMessage(
+          membersResult.reason,
+          "No se pudieron cargar los responsables disponibles del proyecto.",
+        );
+        if (!background) {
+          setProjectMembers([]);
+        }
+      }
+
+      setLoadErrors(nextLoadErrors);
     } finally {
       setLoading(false);
     }
@@ -1245,7 +1332,8 @@ export default function PMProjectBudgetTab({
         subtitle="Crea el presupuesto y define la base económica del proyecto."
         title="Presupuesto del proyecto"
       >
-        {!budget ? (
+        {budgetLoadError ? <div className="inventory-inline-error">{normalizePmCopy(budgetLoadError)}</div> : null}
+        {!budget && !budgetLoadError ? (
           <EmptyState
             action={(
               <div className="inventory-actions inventory-actions-wrap">
@@ -1262,10 +1350,20 @@ export default function PMProjectBudgetTab({
               </div>
             )}
             compact
-            note={Number(project?.presupuesto_estimado ?? 0) > 0
-              ? `Presupuesto base actual: ${formatMoney(project?.presupuesto_estimado ?? 0)}`
-              : "Crea un presupuesto para organizar capítulos, partidas, materiales, mano de obra e indirectos."}
+            note={
+              budgetSource === "project_estimate" && Number(budgetContext?.reference_budget ?? 0) > 0
+                ? `El proyecto tiene un presupuesto de referencia por ${formatMoney(budgetContext?.reference_budget ?? 0)}, pero todavía no existe un presupuesto detallado con capítulos y partidas.`
+                : Number(project?.presupuesto_estimado ?? 0) > 0
+                  ? `Presupuesto base actual: ${formatMoney(project?.presupuesto_estimado ?? 0)}`
+                  : "Crea un presupuesto para organizar capítulos, partidas, materiales, mano de obra e indirectos."
+            }
             title="Este proyecto aún no tiene presupuesto detallado"
+          />
+        ) : !budget ? (
+          <EmptyState
+            compact
+            note="Intenta actualizar nuevamente para recuperar la estructura del presupuesto."
+            title="No se pudo cargar el presupuesto detallado"
           />
         ) : (
           <div className="pm-budget-header-stack">
@@ -1311,11 +1409,29 @@ export default function PMProjectBudgetTab({
 
       <section className="inventory-metric-grid inventory-metric-grid-6">
         <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Presupuesto base" meta="Referencia del proyecto" tone="neutral" value={formatMoney(projectBudgetBase)} />
-        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Costo calculado" meta="Partidas + indirectos" tone="info" value={formatMoney(budgetCalculatedCost)} />
-        <MetricCard icon={<BadgeDollarSign size={18} strokeWidth={1.9} />} label="Precio de venta" meta="Total venta" tone="success" value={formatMoney(budgetSaleTotal)} />
+        <MetricCard
+          icon={<BadgeDollarSign size={18} strokeWidth={1.9} />}
+          label="Costo calculado"
+          meta={hasDetailedBudget ? "Partidas + indirectos" : "Sin presupuesto detallado"}
+          tone="info"
+          value={formatMoney(budgetCalculatedCost)}
+        />
+        <MetricCard
+          icon={<BadgeDollarSign size={18} strokeWidth={1.9} />}
+          label="Precio de venta"
+          meta={hasDetailedBudget ? "Total venta" : "Sin presupuesto detallado"}
+          tone="success"
+          value={formatMoney(budgetSaleTotal)}
+        />
         <MetricCard icon={<Calculator size={18} strokeWidth={1.9} />} label="Margen estimado" meta="Venta - costo" tone={budgetEstimatedMargin < 0 ? "danger" : "warning"} value={formatMoney(budgetEstimatedMargin)} />
         <MetricCard icon={<Factory size={18} strokeWidth={1.9} />} label="Costo real actual" meta="Materiales + horas" tone="danger" value={formatMoney(projectActualCost)} />
-        <MetricCard icon={<TriangleAlert size={18} strokeWidth={1.9} />} label="Variación contra real" meta="Costo calculado - costo real" tone={varianceAgainstActual < 0 ? "danger" : "success"} value={formatMoney(varianceAgainstActual)} />
+        <MetricCard
+          icon={<TriangleAlert size={18} strokeWidth={1.9} />}
+          label="Variación contra real"
+          meta={hasDetailedBudget ? "Costo calculado - costo real" : "Presupuesto de referencia - costo real"}
+          tone={varianceAgainstActual < 0 ? "danger" : "success"}
+          value={formatMoney(varianceAgainstActual)}
+        />
       </section>
 
       <div className="inventory-content-grid inventory-content-grid-2 pm-budget-workspace">
@@ -1337,8 +1453,10 @@ export default function PMProjectBudgetTab({
           subtitle="Organiza el presupuesto por capítulos y partidas."
           title="Estructura del presupuesto"
         >
-          {!budget ? (
+          {!budget && !budgetLoadError ? (
             <EmptyState compact note="Primero crea el presupuesto del proyecto." title="Sin presupuesto" />
+          ) : !budget ? (
+            <EmptyState compact note="Intenta actualizar nuevamente." title="No se pudo cargar la estructura" />
           ) : activeItems.length === 0 ? (
             <EmptyState
               action={canEditBudget ? (
@@ -1476,8 +1594,10 @@ export default function PMProjectBudgetTab({
               : "Selecciona una partida para revisar su desglose de costo."}
             title={selectedOperationalItem ? `Desglose de costos de la partida · ${safeDisplayText(selectedOperationalItem.nombre)}` : "Desglose de costos de la partida"}
           >
-            {!budget ? (
+            {!budget && !budgetLoadError ? (
               <EmptyState compact note="Primero crea el presupuesto del proyecto." title="Sin presupuesto" />
+            ) : !budget ? (
+              <EmptyState compact note="Intenta actualizar nuevamente." title="No se pudo cargar el presupuesto" />
             ) : !selectedOperationalItem ? (
               <EmptyState
                 action={canEditBudget ? (
@@ -1614,20 +1734,21 @@ export default function PMProjectBudgetTab({
           </DataCard>
 
           <DataCard subtitle="Compara presupuesto detallado contra costos reales acumulados del proyecto." title="Comparativo real">
+            {costsLoadError ? <div className="inventory-inline-error">{normalizePmCopy(costsLoadError)}</div> : null}
             <div className="pm-detail-list">
               <div className="pm-detail-list-item">
                 <div>
-                  <strong>Presupuesto base</strong>
-                  <span>Referencia guardada en el proyecto</span>
+                  <strong>{hasDetailedBudget ? "Presupuesto detallado" : "Presupuesto de referencia"}</strong>
+                  <span>{hasDetailedBudget ? "Fuente económica activa del proyecto" : "Referencia guardada en el proyecto"}</span>
                 </div>
-                <strong>{formatMoney(projectBudgetBase)}</strong>
+                <strong>{formatMoney(hasDetailedBudget ? budgetCalculatedCost : budgetContext?.reference_budget ?? projectBudgetBase)}</strong>
               </div>
               <div className="pm-detail-list-item">
                 <div>
                   <strong>Costo calculado</strong>
-                  <span>{vsActual?.presupuesto_origen === "detallado" ? "Presupuesto detallado activo" : "Presupuesto simple"}</span>
+                  <span>{hasDetailedBudget ? "Presupuesto detallado activo" : "Presupuesto de referencia"}</span>
                 </div>
-                <strong>{formatMoney(budgetCalculatedCost)}</strong>
+                <strong>{formatMoney(comparisonBudget)}</strong>
               </div>
               <div className="pm-detail-list-item">
                 <div>
@@ -1653,7 +1774,7 @@ export default function PMProjectBudgetTab({
               <div className="pm-detail-list-item">
                 <div>
                   <strong>Variación</strong>
-                  <span>Costo calculado - costo real</span>
+                  <span>{hasDetailedBudget ? "Costo calculado - costo real" : "Referencia - costo real"}</span>
                 </div>
                 <strong>{formatMoney(varianceAgainstActual)}</strong>
               </div>

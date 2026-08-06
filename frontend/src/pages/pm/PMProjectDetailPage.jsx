@@ -126,6 +126,15 @@ const defaultCrmLinkForm = {
   contacto_id: "",
 };
 
+const defaultProjectLoadErrors = {
+  costs: "",
+  materials: "",
+  planning: "",
+  alerts: "",
+  members: "",
+  timeEntries: "",
+};
+
 
 function PlaceholderView({ title, note }) {
   return (
@@ -338,6 +347,7 @@ export default function PMProjectDetailPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+  const [loadErrors, setLoadErrors] = useState(defaultProjectLoadErrors);
   const [project, setProject] = useState(null);
   const [projectCosts, setProjectCosts] = useState(null);
   const [projectMaterials, setProjectMaterials] = useState(null);
@@ -485,12 +495,38 @@ export default function PMProjectDetailPage() {
     setError("");
 
     try {
-      const [projectResponse, planningResponse, alertsResponse] = await Promise.all([
+      const [projectResult, planningResult, alertsResult] = await Promise.allSettled([
         getPmProject({ projectId: id, token, empresaId }),
         getPmProjectPlanning({ projectId: id, token, empresaId }),
         listPmProjectAlerts({ projectId: id, token, empresaId }),
       ]);
-      applyWorkPlanSnapshot(projectResponse, planningResponse, alertsResponse);
+      if (projectResult.status !== "fulfilled") {
+        throw projectResult.reason;
+      }
+      setProject(projectResult.value);
+      const nextLoadErrors = { ...defaultProjectLoadErrors };
+
+      if (planningResult.status === "fulfilled") {
+        const nextTasks = planningResult.value?.tasks ?? [];
+        setProjectPlanning(planningResult.value ?? null);
+        setProjectDependencies(planningResult.value?.dependencies ?? []);
+        setTasks(nextTasks);
+        syncSelectedTask(nextTasks);
+      } else {
+        nextLoadErrors.planning = planningResult.reason?.message || "No se pudo actualizar el plan de trabajo.";
+      }
+
+      if (alertsResult.status === "fulfilled") {
+        setProjectAlerts(alertsResult.value ?? []);
+      } else {
+        nextLoadErrors.alerts = alertsResult.reason?.message || "No se pudieron cargar las alertas del proyecto.";
+      }
+
+      setLoadErrors((current) => ({
+        ...current,
+        planning: nextLoadErrors.planning,
+        alerts: nextLoadErrors.alerts,
+      }));
     } catch (requestError) {
       setError(requestError.message || "No se pudo actualizar el plan de trabajo.");
     } finally {
@@ -522,7 +558,7 @@ export default function PMProjectDetailPage() {
     setError("");
 
     try {
-      const [projectResponse, costsResponse, materialsResponse, planningResponse, alertsResponse, membersResponse, timeEntriesResponse] = await Promise.all([
+      const [projectResult, costsResult, materialsResult, planningResult, alertsResult, membersResult, timeEntriesResult] = await Promise.allSettled([
         getPmProject({ projectId: id, token, empresaId }),
         getPmProjectCosts({ projectId: id, token, empresaId }),
         getPmProjectMaterials({ projectId: id, token, empresaId }),
@@ -531,12 +567,63 @@ export default function PMProjectDetailPage() {
         listPmProjectMembers({ projectId: id, token, empresaId }),
         listPmProjectTimeEntries({ projectId: id, token, empresaId, filters: { limit: 200, offset: 0, activo: true } }),
       ]);
+      if (projectResult.status !== "fulfilled") {
+        throw projectResult.reason;
+      }
 
-      setProjectCosts(costsResponse);
-      setProjectMaterials(materialsResponse);
-      setMembers(membersResponse.items ?? []);
-      setProjectTimeEntries(timeEntriesResponse.items ?? []);
-      applyWorkPlanSnapshot(projectResponse, planningResponse, alertsResponse);
+      setProject(projectResult.value);
+      const nextLoadErrors = { ...defaultProjectLoadErrors };
+
+      if (costsResult.status === "fulfilled") {
+        setProjectCosts(costsResult.value);
+      } else {
+        nextLoadErrors.costs = costsResult.reason?.message || "No se pudieron cargar los costos del proyecto.";
+        setProjectCosts(null);
+      }
+
+      if (materialsResult.status === "fulfilled") {
+        setProjectMaterials(materialsResult.value);
+      } else {
+        nextLoadErrors.materials = materialsResult.reason?.message || "No se pudieron cargar los materiales del proyecto.";
+        setProjectMaterials(null);
+      }
+
+      if (planningResult.status === "fulfilled") {
+        const nextTasks = planningResult.value?.tasks ?? [];
+        setProjectPlanning(planningResult.value ?? null);
+        setProjectDependencies(planningResult.value?.dependencies ?? []);
+        setTasks(nextTasks);
+        syncSelectedTask(nextTasks);
+      } else {
+        nextLoadErrors.planning = planningResult.reason?.message || "No se pudo cargar el plan de trabajo.";
+        setProjectPlanning(null);
+        setProjectDependencies([]);
+        setTasks([]);
+        syncSelectedTask([]);
+      }
+
+      if (alertsResult.status === "fulfilled") {
+        setProjectAlerts(alertsResult.value ?? []);
+      } else {
+        nextLoadErrors.alerts = alertsResult.reason?.message || "No se pudieron cargar las alertas del proyecto.";
+        setProjectAlerts([]);
+      }
+
+      if (membersResult.status === "fulfilled") {
+        setMembers(membersResult.value?.items ?? []);
+      } else {
+        nextLoadErrors.members = membersResult.reason?.message || "No se pudieron cargar los miembros del proyecto.";
+        setMembers([]);
+      }
+
+      if (timeEntriesResult.status === "fulfilled") {
+        setProjectTimeEntries(timeEntriesResult.value?.items ?? []);
+      } else {
+        nextLoadErrors.timeEntries = timeEntriesResult.reason?.message || "No se pudieron cargar las horas del proyecto.";
+        setProjectTimeEntries([]);
+      }
+
+      setLoadErrors(nextLoadErrors);
     } catch (requestError) {
       setError(requestError.message || "No se pudo cargar el proyecto.");
     } finally {
@@ -936,6 +1023,11 @@ export default function PMProjectDetailPage() {
     () => sortByDateDesc(projectMaterials?.consumptions ?? [], "created_at").slice(0, 5),
     [projectMaterials],
   );
+  const projectBudgetContext = projectCosts?.budget_context ?? null;
+  const hasDetailedBudget = Boolean(projectBudgetContext?.has_detailed_budget);
+  const displayedProjectBudget = hasDetailedBudget
+    ? Number(projectCosts?.presupuesto_detallado_costo ?? 0)
+    : Number(projectBudgetContext?.reference_budget ?? projectCosts?.presupuesto_estimado ?? project?.presupuesto_estimado ?? 0);
   const membershipRole = String(membership?.role ?? "").toLowerCase();
   const isSuperadmin = Boolean(user?.is_superadmin);
   const canManagePmUi = canManagePmRole(membershipRole, isSuperadmin);
@@ -1602,8 +1694,8 @@ export default function PMProjectDetailPage() {
             <strong>{safeDisplayText(formatDate(project.fecha_fin_planificada), "—")}</strong>
           </div>
           <div className="pm-project-header-item">
-            <span>Presupuesto</span>
-            <strong>{formatMoney(projectCosts?.presupuesto_estimado ?? project.presupuesto_estimado ?? 0)}</strong>
+            <span>{hasDetailedBudget ? "Presupuesto detallado" : "Presupuesto de referencia"}</span>
+            <strong>{formatMoney(displayedProjectBudget)}</strong>
           </div>
         </div>
       </PageHeader>
@@ -1626,16 +1718,16 @@ export default function PMProjectDetailPage() {
         <MetricCard
           icon={<BadgeDollarSign size={18} strokeWidth={1.9} />}
           label="Presupuesto"
-          meta={Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? "Detalle aprobado" : "Base del proyecto"}
+          meta={hasDetailedBudget ? "Presupuesto detallado" : "Presupuesto de referencia"}
           tone="neutral"
-          value={formatMoney((Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? projectCosts?.presupuesto_detallado_costo : projectCosts?.presupuesto_estimado) ?? 0)}
+          value={formatMoney(displayedProjectBudget)}
         />
         <MetricCard
           icon={<Gauge size={18} strokeWidth={1.9} />}
           label="Variación"
-          meta={Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? "Presupuesto detallado - costo real" : "Presupuesto - costo real"}
-          tone={Number((Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? projectCosts?.variacion_vs_presupuesto_detallado : projectCosts?.variacion_presupuesto) ?? 0) < 0 ? "danger" : "success"}
-          value={formatMoney((Number(projectCosts?.presupuesto_detallado_costo ?? 0) > 0 ? projectCosts?.variacion_vs_presupuesto_detallado : projectCosts?.variacion_presupuesto) ?? 0)}
+          meta={hasDetailedBudget ? "Presupuesto detallado - costo real" : "Presupuesto de referencia - costo real"}
+          tone={Number((hasDetailedBudget ? projectCosts?.variacion_vs_presupuesto_detallado : projectCosts?.variacion_presupuesto) ?? 0) < 0 ? "danger" : "success"}
+          value={formatMoney((hasDetailedBudget ? projectCosts?.variacion_vs_presupuesto_detallado : projectCosts?.variacion_presupuesto) ?? 0)}
         />
       </section>
 
@@ -1813,6 +1905,7 @@ export default function PMProjectDetailPage() {
           </DataCard>
 
           <DataCard subtitle="Lectura rápida de presupuesto y costos." title="Costos principales">
+            {loadErrors.costs ? <div className="inventory-inline-error">{normalizePmCopy(loadErrors.costs)}</div> : null}
             <div className="inventory-metric-grid inventory-metric-grid-3">
               <MetricCard label="Materiales reales" meta="Consumo" tone="success" value={formatMoney(projectCosts?.costo_materiales_real ?? 0)} />
               <MetricCard label="Horas reales" meta="Labor" tone="info" value={formatMoney(projectCosts?.costo_horas_real ?? 0)} />
