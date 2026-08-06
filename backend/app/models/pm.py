@@ -582,6 +582,11 @@ class PMPresupuestoPartida(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     subtotal_costo: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     subtotal_venta: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0, server_default="0")
     margen_pct: Mapped[float] = mapped_column(Numeric(8, 4), nullable=False, default=0, server_default="0")
+    fecha_inicio_sugerida: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    fecha_fin_sugerida: Mapped[date | None] = mapped_column(Date(), nullable=True)
+    duracion_dias_sugerida: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    responsable_sugerido_usuario_id: Mapped[str | None] = mapped_column(ForeignKey("usuarios.id"), nullable=True, index=True)
+    notas_planificacion: Mapped[str | None] = mapped_column(Text, nullable=True)
     orden: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     activo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
 
@@ -599,6 +604,72 @@ class PMPresupuestoPartida(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         "PMPresupuestoTaskLink",
         back_populates="source_capitulo",
         foreign_keys="PMPresupuestoTaskLink.source_capitulo_id",
+    )
+    prerequisites = relationship(
+        "PMPresupuestoPartidaPrerequisito",
+        back_populates="partida",
+        foreign_keys="PMPresupuestoPartidaPrerequisito.partida_id",
+    )
+    required_by = relationship(
+        "PMPresupuestoPartidaPrerequisito",
+        back_populates="prerequisito_partida",
+        foreign_keys="PMPresupuestoPartidaPrerequisito.prerequisito_partida_id",
+    )
+
+
+class PMPresupuestoPartidaPrerequisito(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "pm_presupuesto_partida_prerequisitos"
+    __table_args__ = (
+        UniqueConstraint(
+            "presupuesto_id",
+            "partida_lineage_id",
+            "prerequisito_lineage_id",
+            "tipo_dependencia",
+            name="uq_pm_presupuesto_partida_prerequisitos_lineage",
+        ),
+        CheckConstraint(
+            "tipo_dependencia IN ('finish_to_start', 'start_to_start', 'finish_to_finish', 'start_to_finish')",
+            name="ck_pm_presupuesto_partida_prerequisitos_tipo",
+        ),
+        CheckConstraint(
+            "desfase_dias >= 0",
+            name="ck_pm_presupuesto_partida_prerequisitos_desfase",
+        ),
+        Index("ix_pm_presupuesto_partida_prerequisitos_empresa_id", "empresa_id"),
+        Index("ix_pm_presupuesto_partida_prerequisitos_proyecto_id", "proyecto_id"),
+        Index("ix_pm_presupuesto_partida_prerequisitos_presupuesto_id", "presupuesto_id"),
+        Index("ix_pm_presupuesto_partida_prerequisitos_partida_id", "partida_id"),
+        Index("ix_pm_presupuesto_partida_prerequisitos_prerequisito_id", "prerequisito_partida_id"),
+        Index("ix_pm_presupuesto_partida_prerequisitos_partida_lineage", "partida_lineage_id"),
+        Index("ix_pm_presupuesto_partida_prerequisitos_prerequisito_lineage", "prerequisito_lineage_id"),
+    )
+
+    empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
+    proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
+    presupuesto_id: Mapped[str] = mapped_column(ForeignKey("pm_presupuestos.id"), nullable=False, index=True)
+    partida_id: Mapped[str] = mapped_column(ForeignKey("pm_presupuesto_partidas.id"), nullable=False, index=True)
+    prerequisito_partida_id: Mapped[str] = mapped_column(ForeignKey("pm_presupuesto_partidas.id"), nullable=False, index=True)
+    partida_lineage_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    prerequisito_lineage_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    tipo_dependencia: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="finish_to_start",
+        server_default="finish_to_start",
+    )
+    desfase_dias: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    proyecto = relationship("PMProyecto")
+    presupuesto = relationship("PMPresupuesto")
+    partida = relationship(
+        "PMPresupuestoPartida",
+        back_populates="prerequisites",
+        foreign_keys=[partida_id],
+    )
+    prerequisito_partida = relationship(
+        "PMPresupuestoPartida",
+        back_populates="required_by",
+        foreign_keys=[prerequisito_partida_id],
     )
 
 

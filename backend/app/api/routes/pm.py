@@ -75,6 +75,8 @@ from app.schemas.pm import (
     PMPresupuestoPartidaMaterialCreate,
     PMPresupuestoPartidaMaterialOut,
     PMPresupuestoPartidaMaterialUpdate,
+    PMPresupuestoPartidaPrerequisitoCreate,
+    PMPresupuestoPartidaPrerequisitoOut,
     PMPresupuestoPartidaOut,
     PMPresupuestoPartidaUpdate,
     PMPresupuestoUpdate,
@@ -144,6 +146,7 @@ from app.services.pm import (
     create_external_invite,
     create_project_baseline,
     create_budget_item,
+    create_budget_item_prerequisite,
     create_project_estimation,
     create_project_change,
     create_portal_comment,
@@ -172,6 +175,7 @@ from app.services.pm import (
     deactivate_project_document,
     deactivate_budget_indirect,
     deactivate_budget_item,
+    delete_budget_item_prerequisite,
     deactivate_budget_item_labor,
     deactivate_budget_item_material,
     deactivate_estimation_detail,
@@ -211,6 +215,7 @@ from app.services.pm import (
     list_project_time_entries,
     list_project_material_plan,
     list_project_members,
+    list_budget_item_prerequisites,
     list_simple_project_progress_history,
     list_simple_work_progress,
     list_task_dependencies,
@@ -1329,6 +1334,11 @@ def create_budget_item_endpoint(
             cantidad=payload.cantidad,
             margen_pct=payload.margen_pct,
             precio_unitario_manual=payload.precio_unitario_manual,
+            fecha_inicio_sugerida=payload.fecha_inicio_sugerida,
+            fecha_fin_sugerida=payload.fecha_fin_sugerida,
+            duracion_dias_sugerida=payload.duracion_dias_sugerida,
+            responsable_sugerido_usuario_id=payload.responsable_sugerido_usuario_id,
+            notas_planificacion=payload.notas_planificacion,
             orden=payload.orden,
             ip_address=request.client.host if request.client else None,
         ),
@@ -1359,8 +1369,14 @@ def update_budget_item_endpoint(
             cantidad=payload.cantidad,
             margen_pct=payload.margen_pct,
             precio_unitario_manual=payload.precio_unitario_manual,
+            fecha_inicio_sugerida=payload.fecha_inicio_sugerida,
+            fecha_fin_sugerida=payload.fecha_fin_sugerida,
+            duracion_dias_sugerida=payload.duracion_dias_sugerida,
+            responsable_sugerido_usuario_id=payload.responsable_sugerido_usuario_id,
+            notas_planificacion=payload.notas_planificacion,
             orden=payload.orden,
             activo=payload.activo,
+            provided_fields=set(payload.model_fields_set),
             ip_address=request.client.host if request.client else None,
         ),
     )
@@ -1380,6 +1396,67 @@ def deactivate_budget_item_endpoint(
             db,
             pm_context,
             item_id=item_id,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.get("/budget-items/{item_id}/prerequisites", response_model=list[PMPresupuestoPartidaPrerequisitoOut])
+def list_budget_item_prerequisites_endpoint(
+    item_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[PMPresupuestoPartidaPrerequisitoOut]:
+    return list_budget_item_prerequisites(
+        db,
+        pm_context,
+        item_id=item_id,
+    )
+
+
+@router.post(
+    "/budget-items/{item_id}/prerequisites",
+    response_model=PMPresupuestoPartidaPrerequisitoOut,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_budget_item_prerequisite_endpoint(
+    item_id: str,
+    payload: PMPresupuestoPartidaPrerequisitoCreate,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaPrerequisitoOut:
+    return run_pm_write(
+        db,
+        "create_budget_item_prerequisite",
+        lambda: create_budget_item_prerequisite(
+            db,
+            pm_context,
+            item_id=item_id,
+            prerequisito_partida_id=payload.prerequisito_partida_id,
+            tipo_dependencia=payload.tipo_dependencia,
+            desfase_dias=payload.desfase_dias,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
+
+
+@router.delete("/budget-items/{item_id}/prerequisites/{prerequisite_id}", response_model=PMPresupuestoPartidaPrerequisitoOut)
+def delete_budget_item_prerequisite_endpoint(
+    item_id: str,
+    prerequisite_id: str,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMPresupuestoPartidaPrerequisitoOut:
+    return run_pm_write(
+        db,
+        "delete_budget_item_prerequisite",
+        lambda: delete_budget_item_prerequisite(
+            db,
+            pm_context,
+            item_id=item_id,
+            prerequisite_id=prerequisite_id,
             ip_address=request.client.host if request.client else None,
         ),
     )

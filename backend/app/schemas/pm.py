@@ -1316,6 +1316,32 @@ class PMProjectMembersListResponse(BaseModel):
     items: list[PMProyectoMiembroOut]
 
 
+class PMPresupuestoPartidaPrerequisitoCreate(BaseModel):
+    prerequisito_partida_id: str
+    tipo_dependencia: str = Field(default="finish_to_start", min_length=1, max_length=30)
+    desfase_dias: int = Field(default=0, ge=0)
+
+
+class PMPresupuestoPartidaPrerequisitoOut(BaseModel):
+    id: str
+    empresa_id: str
+    proyecto_id: str
+    presupuesto_id: str
+    partida_id: str
+    prerequisito_partida_id: str
+    partida_lineage_id: str
+    prerequisito_lineage_id: str
+    tipo_dependencia: str
+    desfase_dias: int = 0
+    prerequisito_codigo: str | None = None
+    prerequisito_nombre: str | None = None
+    prerequisito_capitulo_id: str | None = None
+    prerequisito_capitulo_codigo: str | None = None
+    prerequisito_capitulo_nombre: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PMProyectoMaterialPlanCreate(BaseModel):
     tarea_id: str | None = None
     material_id: str
@@ -1551,6 +1577,11 @@ class PMPresupuestoPartidaCreate(BaseModel):
     cantidad: Decimal = Field(default=Decimal("1"), ge=0)
     margen_pct: Decimal = Field(default=Decimal("0"), ge=0)
     precio_unitario_manual: Decimal | None = Field(default=None, ge=0)
+    fecha_inicio_sugerida: date | None = None
+    fecha_fin_sugerida: date | None = None
+    duracion_dias_sugerida: int | None = Field(default=None, ge=1)
+    responsable_sugerido_usuario_id: str | None = None
+    notas_planificacion: str | None = None
     orden: int = Field(default=0, ge=0)
 
 
@@ -1564,6 +1595,11 @@ class PMPresupuestoPartidaUpdate(BaseModel):
     cantidad: Decimal | None = Field(default=None, ge=0)
     margen_pct: Decimal | None = Field(default=None, ge=0)
     precio_unitario_manual: Decimal | None = Field(default=None, ge=0)
+    fecha_inicio_sugerida: date | None = None
+    fecha_fin_sugerida: date | None = None
+    duracion_dias_sugerida: int | None = Field(default=None, ge=1)
+    responsable_sugerido_usuario_id: str | None = None
+    notas_planificacion: str | None = None
     orden: int | None = Field(default=None, ge=0)
     activo: bool | None = None
 
@@ -1587,10 +1623,19 @@ class PMPresupuestoPartidaOut(BaseModel):
     subtotal_costo: Decimal = Decimal("0")
     subtotal_venta: Decimal = Decimal("0")
     margen_pct: Decimal = Decimal("0")
+    fecha_inicio_sugerida: date | None = None
+    fecha_fin_sugerida: date | None = None
+    duracion_dias_sugerida: int | None = None
+    responsable_sugerido_usuario_id: str | None = None
+    responsable_sugerido_nombre: str | None = None
+    notas_planificacion: str | None = None
+    linked_task_id: str | None = None
+    linked_task_title: str | None = None
     orden: int = 0
     activo: bool
     materials: list[PMPresupuestoPartidaMaterialOut] = Field(default_factory=list)
     labor_components: list[PMPresupuestoPartidaManoObraOut] = Field(default_factory=list)
+    prerequisites: list[PMPresupuestoPartidaPrerequisitoOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -1630,8 +1675,22 @@ class PMBudgetPlanPreviewChapterOut(BaseModel):
     code: str | None = None
     name: str
     description: str | None = None
+    target_start_date: date | None = None
+    target_end_date: date | None = None
+    planning_notes: str | None = None
+    planning_warnings: list[PMBudgetPlanPreviewNoticeOut] = Field(default_factory=list)
     order: int = 0
     child_parts_count: int = 0
+
+
+class PMBudgetPlanPreviewPrerequisiteOut(BaseModel):
+    item_id: str | None = None
+    lineage_id: str
+    code: str | None = None
+    name: str
+    chapter_name: str | None = None
+    tipo_dependencia: str = "finish_to_start"
+    desfase_dias: int = 0
 
 
 class PMBudgetPlanPreviewItemOut(BaseModel):
@@ -1653,6 +1712,16 @@ class PMBudgetPlanPreviewItemOut(BaseModel):
     source_changed: bool = False
     proposed_changes: list[PMBudgetPlanPreviewChangeOut] = Field(default_factory=list)
     economic_changes: list[PMBudgetPlanPreviewChangeOut] = Field(default_factory=list)
+    planning_suggestions: list[PMBudgetPlanPreviewChangeOut] = Field(default_factory=list)
+    operational_conflicts: list[PMBudgetPlanPreviewNoticeOut] = Field(default_factory=list)
+    planning_warnings: list[PMBudgetPlanPreviewNoticeOut] = Field(default_factory=list)
+    suggested_start_date: date | None = None
+    suggested_end_date: date | None = None
+    suggested_duration_days: int | None = None
+    suggested_responsible_id: str | None = None
+    suggested_responsible_name: str | None = None
+    planning_notes: str | None = None
+    suggested_prerequisites: list[PMBudgetPlanPreviewPrerequisiteOut] = Field(default_factory=list)
     blocking: list[PMBudgetPlanPreviewNoticeOut] = Field(default_factory=list)
 
 
@@ -1714,6 +1783,12 @@ class PMBudgetPlanApplySummaryOut(BaseModel):
     skipped: int = 0
     orphans: int = 0
     conflicts: int = 0
+    tasks_with_dates: int = 0
+    tasks_without_dates: int = 0
+    tasks_with_responsible: int = 0
+    tasks_without_responsible: int = 0
+    dependencies_created: int = 0
+    dependencies_skipped: int = 0
 
 
 class PMBudgetPlanApplyOut(BaseModel):

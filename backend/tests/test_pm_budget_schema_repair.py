@@ -563,44 +563,122 @@ class PMBudgetSchemaRepairMigrationTestCase(unittest.TestCase):
     def test_repair_on_correct_0045_schema_keeps_lineage_and_does_not_duplicate_indexes(self) -> None:
         self._prepare_database(self.template_0045_path)
         company, user, pm_context, project, budget = self._seed_company_context(suffix="correct-0045")
-        chapter = create_budget_item(
-            self.db,
-            pm_context,
-            budget_id=budget.id,
-            parent_id=None,
-            codigo="05",
-            nombre="Capitulo 5",
-            descripcion=None,
-            tipo="capitulo",
-            unidad=None,
-            cantidad=Decimal("1"),
-            margen_pct=Decimal("0"),
-            precio_unitario_manual=None,
-            orden=1,
-            ip_address=None,
+        chapter_id = str(uuid4())
+        item_id = str(uuid4())
+        chapter_lineage = str(uuid4())
+        item_lineage = str(uuid4())
+        created_at = datetime.now(timezone.utc)
+        base_insert = text(
+            """
+            INSERT INTO pm_presupuesto_partidas (
+                empresa_id,
+                presupuesto_id,
+                proyecto_id,
+                parent_id,
+                lineage_id,
+                codigo,
+                nombre,
+                descripcion,
+                tipo,
+                unidad,
+                cantidad,
+                costo_unitario,
+                precio_unitario,
+                precio_unitario_manual,
+                subtotal_costo,
+                subtotal_venta,
+                margen_pct,
+                orden,
+                activo,
+                id,
+                created_at,
+                updated_at
+            ) VALUES (
+                :empresa_id,
+                :presupuesto_id,
+                :proyecto_id,
+                :parent_id,
+                :lineage_id,
+                :codigo,
+                :nombre,
+                :descripcion,
+                :tipo,
+                :unidad,
+                :cantidad,
+                :costo_unitario,
+                :precio_unitario,
+                :precio_unitario_manual,
+                :subtotal_costo,
+                :subtotal_venta,
+                :margen_pct,
+                :orden,
+                :activo,
+                :id,
+                :created_at,
+                :updated_at
+            )
+            """
         )
-        item = create_budget_item(
-            self.db,
-            pm_context,
-            budget_id=budget.id,
-            parent_id=chapter.id,
-            codigo="05.01",
-            nombre="Partida estable",
-            descripcion=None,
-            tipo="partida",
-            unidad="servicio",
-            cantidad=Decimal("1"),
-            margen_pct=Decimal("0"),
-            precio_unitario_manual=Decimal("1000"),
-            orden=2,
-            ip_address=None,
+        self.db.execute(
+            base_insert,
+            {
+                "empresa_id": company.id,
+                "presupuesto_id": budget.id,
+                "proyecto_id": project.id,
+                "parent_id": None,
+                "lineage_id": chapter_lineage,
+                "codigo": "05",
+                "nombre": "Capitulo 5",
+                "descripcion": None,
+                "tipo": "capitulo",
+                "unidad": None,
+                "cantidad": 1,
+                "costo_unitario": 0,
+                "precio_unitario": 0,
+                "precio_unitario_manual": None,
+                "subtotal_costo": 0,
+                "subtotal_venta": 0,
+                "margen_pct": 0,
+                "orden": 1,
+                "activo": True,
+                "id": chapter_id,
+                "created_at": created_at,
+                "updated_at": created_at,
+            },
         )
-        original_lineage = item.lineage_id
+        self.db.execute(
+            base_insert,
+            {
+                "empresa_id": company.id,
+                "presupuesto_id": budget.id,
+                "proyecto_id": project.id,
+                "parent_id": chapter_id,
+                "lineage_id": item_lineage,
+                "codigo": "05.01",
+                "nombre": "Partida estable",
+                "descripcion": None,
+                "tipo": "partida",
+                "unidad": "servicio",
+                "cantidad": 1,
+                "costo_unitario": 0,
+                "precio_unitario": 1000,
+                "precio_unitario_manual": 1000,
+                "subtotal_costo": 0,
+                "subtotal_venta": 1000,
+                "margen_pct": 0,
+                "orden": 2,
+                "activo": True,
+                "id": item_id,
+                "created_at": created_at,
+                "updated_at": created_at,
+            },
+        )
+        original_lineage = item_lineage
         self.db.commit()
 
         self._upgrade("head")
 
-        refreshed = self.db.get(PMPresupuestoPartida, item.id)
+        refreshed = self.db.get(PMPresupuestoPartida, item_id)
         self.assertEqual(refreshed.lineage_id, original_lineage)
         inspector = inspect(self.engine)
         self.assertEqual(

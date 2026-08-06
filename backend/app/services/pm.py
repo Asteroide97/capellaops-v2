@@ -33,6 +33,7 @@ from app.models.pm import (
     PMPresupuesto,
     PMPresupuestoIndirecto,
     PMPresupuestoPartida,
+    PMPresupuestoPartidaPrerequisito,
     PMPresupuestoTaskLink,
     PMPresupuestoPartidaManoObra,
     PMPresupuestoPartidaMaterial,
@@ -68,6 +69,7 @@ from app.schemas.pm import (
     PMBudgetPlanPreviewItemOut,
     PMBudgetPlanPreviewNoticeOut,
     PMBudgetPlanPreviewOut,
+    PMBudgetPlanPreviewPrerequisiteOut,
     PMBudgetPlanPreviewSummaryOut,
     PMBudgetVsActualOut,
     PMCambioProyectoOut,
@@ -108,7 +110,9 @@ from app.schemas.pm import (
     PMPresupuestoOut,
     PMPresupuestoPartidaManoObraOut,
     PMPresupuestoPartidaMaterialOut,
+    PMPresupuestoPartidaPrerequisitoOut,
     PMPresupuestoPartidaOut,
+    PMPresupuestoPartidaPrerequisitoCreate,
     PMPresupuestoTaskLinkOut,
     PMDocumentoOut,
     PMInvitadoExternoCreatedOut,
@@ -200,6 +204,13 @@ PM_BUDGET_PREVIEW_ECONOMIC_FIELD_LABELS = {
     "subtotal_venta": "Subtotal venta",
     "margen_pct": "Margen",
 }
+PM_BUDGET_PREVIEW_PLANNING_FIELD_LABELS = {
+    "fecha_inicio_sugerida": "Inicio sugerido",
+    "fecha_fin_sugerida": "Fin sugerido",
+    "duracion_dias_sugerida": "Duracion estimada",
+    "responsable_sugerido_usuario_id": "Responsable sugerido",
+    "notas_planificacion": "Notas de planificacion",
+}
 PM_BUDGET_INDIRECT_TYPES = {"porcentaje", "monto"}
 PM_TASK_DEPENDENCY_TYPES = {"finish_to_start"}
 PM_DOCUMENT_TYPES = {"contrato", "alcance", "minuta", "cambio_alcance", "entrega", "evidencia", "cierre", "otro"}
@@ -276,6 +287,16 @@ class PMContext:
     empresa_id: str
     membership_role: str
     config: EmpresaPMConfig
+
+
+@dataclass
+class BudgetPlanningValues:
+    fecha_inicio_sugerida: date | None
+    fecha_fin_sugerida: date | None
+    duracion_dias_sugerida: int | None
+    responsable_sugerido_usuario_id: str | None
+    responsable_sugerido_nombre: str | None
+    notas_planificacion: str | None
 
 
 def utcnow() -> datetime:
@@ -407,6 +428,139 @@ def normalize_task_dependency_type(value: str | None) -> str:
             detail="Solo se soporta la dependencia finish_to_start en esta fase.",
         )
     return normalized
+
+
+def calculate_suggested_duration_days(start_date: date, end_date: date) -> int:
+    return (end_date - start_date).days + 1
+
+
+def get_active_project_member_catalog(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> dict[str, Usuario]:
+    rows = db.execute(
+        select(Usuario)
+        .join(EmpresaUsuario, EmpresaUsuario.usuario_id == Usuario.id)
+        .join(
+            PMProyectoMiembro,
+            and_(
+                PMProyectoMiembro.usuario_id == Usuario.id,
+                PMProyectoMiembro.proyecto_id == project_id,
+            ),
+        )
+        .where(
+            EmpresaUsuario.empresa_id == empresa_id,
+            EmpresaUsuario.is_active == True,
+            Usuario.is_active == True,
+            PMProyectoMiembro.empresa_id == empresa_id,
+            PMProyectoMiembro.activo == True,
+        )
+        .order_by(Usuario.full_name.asc(), Usuario.id.asc())
+    ).scalars().all()
+    return {row.id: row for row in rows}
+
+
+def resolve_budget_responsable_sugerido(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    responsable_sugerido_usuario_id: str | None,
+) -> tuple[str | None, str | None]:
+    normalized_user_id = normalize_optional_text(responsable_sugerido_usuario_id)
+    if not normalized_user_id:
+        return None, None
+
+    responsible_user = get_company_member_by_user_id(db, empresa_id, normalized_user_id)
+    member_catalog = get_active_project_member_catalog(db, empresa_id=empresa_id, project_id=project_id)
+    if responsible_user.id not in member_catalog:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El responsable sugerido debe ser un miembro activo del proyecto.",
+        )
+    return responsible_user.id, responsible_user.full_name
+
+
+def resolve_budget_planning_values(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    item_type: str,
+    fecha_inicio_sugerida: date | None,
+    fecha_fin_sugerida: date | None,
+    duracion_dias_sugerida: int | None,
+    responsable_sugerido_usuario_id: str | None,
+    notas_planificacion: str | None,
+) -> BudgetPlanningValues:
+    normalized_type = normalize_budget_item_type(item_type)
+    normalized_notes = normalize_optional_text(notas_planificacion)
+    start_date = fecha_inicio_sugerida
+    end_date = fecha_fin_sugerida
+    raw_duration_days = int(duracion_dias_sugerida) if duracion_dias_sugerida is not None else None
+    duration_days = raw_duration_days
+
+    if duration_days is not None and duration_days <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La duración sugerida debe ser mayor a cero.",
+        )
+
+    if start_date and end_date and end_date < start_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La fecha fin sugerida no puede ser anterior al inicio sugerido.",
+        )
+
+    if start_date and end_date:
+        resolved_duration = calculate_suggested_duration_days(start_date, end_date)
+        if resolved_duration <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La duración sugerida debe ser mayor a cero.",
+            )
+        duration_days = resolved_duration if duration_days is None else resolved_duration
+    elif start_date and duration_days is not None:
+        end_date = start_date + timedelta(days=duration_days - 1)
+    elif end_date and duration_days is not None:
+        start_date = end_date - timedelta(days=duration_days - 1)
+
+    if normalized_type == "capitulo":
+        if normalize_optional_text(responsable_sugerido_usuario_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Los capítulos no aceptan responsable sugerido en esta fase.",
+            )
+        if raw_duration_days is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Los capítulos no aceptan duración sugerida en esta fase.",
+            )
+        return BudgetPlanningValues(
+            fecha_inicio_sugerida=start_date,
+            fecha_fin_sugerida=end_date,
+            duracion_dias_sugerida=None,
+            responsable_sugerido_usuario_id=None,
+            responsable_sugerido_nombre=None,
+            notas_planificacion=normalized_notes,
+        )
+
+    responsible_user_id, responsible_name = resolve_budget_responsable_sugerido(
+        db,
+        empresa_id=empresa_id,
+        project_id=project_id,
+        responsable_sugerido_usuario_id=responsable_sugerido_usuario_id,
+    )
+    return BudgetPlanningValues(
+        fecha_inicio_sugerida=start_date,
+        fecha_fin_sugerida=end_date,
+        duracion_dias_sugerida=duration_days,
+        responsable_sugerido_usuario_id=responsible_user_id,
+        responsable_sugerido_nombre=responsible_name,
+        notas_planificacion=normalized_notes,
+    )
 
 
 def normalize_document_type(value: str | None) -> str:
@@ -943,6 +1097,22 @@ def get_budget_item_for_company(db: Session, empresa_id: str, item_id: str) -> P
     return item
 
 
+def get_budget_item_prerequisite_for_company(
+    db: Session,
+    empresa_id: str,
+    prerequisite_id: str,
+) -> PMPresupuestoPartidaPrerequisito:
+    prerequisite = db.scalar(
+        select(PMPresupuestoPartidaPrerequisito).where(
+            PMPresupuestoPartidaPrerequisito.id == prerequisite_id,
+            PMPresupuestoPartidaPrerequisito.empresa_id == empresa_id,
+        )
+    )
+    if not prerequisite:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El requisito previo no existe.")
+    return prerequisite
+
+
 def get_budget_item_material_for_company(db: Session, empresa_id: str, component_id: str) -> PMPresupuestoPartidaMaterial:
     component = db.scalar(
         select(PMPresupuestoPartidaMaterial).where(
@@ -1024,6 +1194,11 @@ def build_budget_item_record(
     cantidad: Decimal,
     margen_pct: Decimal,
     precio_unitario_manual: Decimal | None,
+    fecha_inicio_sugerida: date | None = None,
+    fecha_fin_sugerida: date | None = None,
+    duracion_dias_sugerida: int | None = None,
+    responsable_sugerido_usuario_id: str | None = None,
+    notas_planificacion: str | None = None,
     orden: int,
     lineage_id: str | None = None,
 ) -> PMPresupuestoPartida:
@@ -1043,6 +1218,11 @@ def build_budget_item_record(
         cantidad=normalized_quantity,
         margen_pct=decimal_or_zero(margen_pct),
         precio_unitario_manual=decimal_or_zero(precio_unitario_manual) if precio_unitario_manual is not None else None,
+        fecha_inicio_sugerida=fecha_inicio_sugerida,
+        fecha_fin_sugerida=fecha_fin_sugerida,
+        duracion_dias_sugerida=duracion_dias_sugerida,
+        responsable_sugerido_usuario_id=responsable_sugerido_usuario_id,
+        notas_planificacion=notas_planificacion,
         orden=max(int(orden), 0),
         activo=True,
     )
@@ -1421,6 +1601,258 @@ def build_budget_preview_synthetic_item(
     )
 
 
+def list_budget_prerequisites_for_budget(
+    db: Session,
+    *,
+    empresa_id: str,
+    budget_id: str,
+) -> list[PMPresupuestoPartidaPrerequisito]:
+    return db.scalars(
+        select(PMPresupuestoPartidaPrerequisito).where(
+            PMPresupuestoPartidaPrerequisito.empresa_id == empresa_id,
+            PMPresupuestoPartidaPrerequisito.presupuesto_id == budget_id,
+        )
+    ).all()
+
+
+def build_budget_prerequisite_graph(
+    prerequisites: list[PMPresupuestoPartidaPrerequisito],
+    *,
+    allowed_lineages: set[str] | None = None,
+) -> dict[str, set[str]]:
+    graph: dict[str, set[str]] = {}
+    for prerequisite in prerequisites:
+        successor_lineage = prerequisite.partida_lineage_id
+        prerequisite_lineage = prerequisite.prerequisito_lineage_id
+        if allowed_lineages is not None and (
+            successor_lineage not in allowed_lineages or prerequisite_lineage not in allowed_lineages
+        ):
+            continue
+        graph.setdefault(successor_lineage, set()).add(prerequisite_lineage)
+        graph.setdefault(prerequisite_lineage, set())
+    return graph
+
+
+def find_budget_prerequisite_cycle_nodes(
+    prerequisites: list[PMPresupuestoPartidaPrerequisito],
+    *,
+    allowed_lineages: set[str] | None = None,
+) -> set[str]:
+    graph = build_budget_prerequisite_graph(prerequisites, allowed_lineages=allowed_lineages)
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    stack: list[str] = []
+    cycle_nodes: set[str] = set()
+
+    def visit(node: str) -> None:
+        if node in visited:
+            return
+        visiting.add(node)
+        stack.append(node)
+        for dependency in graph.get(node, set()):
+            if dependency in visiting:
+                if dependency in stack:
+                    cycle_nodes.update(stack[stack.index(dependency):])
+                cycle_nodes.add(dependency)
+                cycle_nodes.add(node)
+                continue
+            visit(dependency)
+        stack.pop()
+        visiting.discard(node)
+        visited.add(node)
+
+    for lineage_id in list(graph.keys()):
+        visit(lineage_id)
+    return cycle_nodes
+
+
+def would_create_budget_prerequisite_cycle(
+    db: Session,
+    *,
+    empresa_id: str,
+    budget_id: str,
+    partida_lineage_id: str,
+    prerequisite_lineage_id: str,
+    exclude_prerequisite_id: str | None = None,
+) -> bool:
+    if partida_lineage_id == prerequisite_lineage_id:
+        return True
+    existing = [
+        row
+        for row in list_budget_prerequisites_for_budget(db, empresa_id=empresa_id, budget_id=budget_id)
+        if exclude_prerequisite_id is None or row.id != exclude_prerequisite_id
+    ]
+    graph = build_budget_prerequisite_graph(existing)
+    graph.setdefault(partida_lineage_id, set()).add(prerequisite_lineage_id)
+    stack = [prerequisite_lineage_id]
+    seen: set[str] = set()
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        if current == partida_lineage_id:
+            return True
+        seen.add(current)
+        stack.extend(graph.get(current, set()))
+    return False
+
+
+def build_budget_prerequisite_preview_item(
+    prerequisite: PMPresupuestoPartidaPrerequisitoOut,
+) -> PMBudgetPlanPreviewPrerequisiteOut:
+    return PMBudgetPlanPreviewPrerequisiteOut(
+        item_id=prerequisite.prerequisito_partida_id,
+        lineage_id=prerequisite.prerequisito_lineage_id,
+        code=prerequisite.prerequisito_codigo,
+        name=prerequisite.prerequisito_nombre or "Partida",
+        chapter_name=prerequisite.prerequisito_capitulo_nombre,
+        tipo_dependencia=prerequisite.tipo_dependencia,
+        desfase_dias=prerequisite.desfase_dias,
+    )
+
+
+def format_budget_prerequisite_value(
+    prerequisites: list[PMPresupuestoPartidaPrerequisitoOut],
+) -> list[str]:
+    values: list[str] = []
+    for prerequisite in prerequisites:
+        item_name = normalize_optional_text(prerequisite.prerequisito_nombre) or "Partida"
+        if prerequisite.prerequisito_codigo:
+            item_name = f"{prerequisite.prerequisito_codigo} - {item_name}"
+        values.append(item_name)
+    return values
+
+
+def build_budget_planning_preview_changes(
+    item: PMPresupuestoPartida,
+    *,
+    responsible_name: str | None,
+    prerequisites: list[PMPresupuestoPartidaPrerequisitoOut],
+) -> list[PMBudgetPlanPreviewChangeOut]:
+    changes: list[PMBudgetPlanPreviewChangeOut] = []
+    if item.fecha_inicio_sugerida is not None:
+        changes.append(
+            build_budget_preview_change(
+                "fecha_inicio_sugerida",
+                label=PM_BUDGET_PREVIEW_PLANNING_FIELD_LABELS["fecha_inicio_sugerida"],
+                current_value=None,
+                proposed_value=item.fecha_inicio_sugerida,
+            )
+        )
+    if item.fecha_fin_sugerida is not None:
+        changes.append(
+            build_budget_preview_change(
+                "fecha_fin_sugerida",
+                label=PM_BUDGET_PREVIEW_PLANNING_FIELD_LABELS["fecha_fin_sugerida"],
+                current_value=None,
+                proposed_value=item.fecha_fin_sugerida,
+            )
+        )
+    if item.duracion_dias_sugerida is not None:
+        changes.append(
+            build_budget_preview_change(
+                "duracion_dias_sugerida",
+                label=PM_BUDGET_PREVIEW_PLANNING_FIELD_LABELS["duracion_dias_sugerida"],
+                current_value=None,
+                proposed_value=item.duracion_dias_sugerida,
+            )
+        )
+    if item.responsable_sugerido_usuario_id:
+        changes.append(
+            build_budget_preview_change(
+                "responsable_sugerido_usuario_id",
+                label=PM_BUDGET_PREVIEW_PLANNING_FIELD_LABELS["responsable_sugerido_usuario_id"],
+                current_value=None,
+                proposed_value=responsible_name or item.responsable_sugerido_usuario_id,
+            )
+        )
+    if prerequisites:
+        changes.append(
+            build_budget_preview_change(
+                "prerequisitos",
+                label="Requisitos previos",
+                current_value=None,
+                proposed_value=format_budget_prerequisite_value(prerequisites),
+            )
+        )
+    return changes
+
+
+def get_task_ids_with_operational_activity(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+    task_ids: list[str],
+) -> set[str]:
+    if not task_ids:
+        return set()
+
+    task_id_set = set(task_ids)
+    active_task_ids: set[str] = set(
+        db.scalars(
+            select(PMTarea.id).where(
+                PMTarea.empresa_id == empresa_id,
+                PMTarea.proyecto_id == project_id,
+                PMTarea.id.in_(task_ids),
+                or_(
+                    PMTarea.fecha_inicio.is_not(None),
+                    PMTarea.fecha_vencimiento.is_not(None),
+                    PMTarea.asignado_user_id.is_not(None),
+                    PMTarea.porcentaje_avance > ZERO,
+                    PMTarea.fecha_completada.is_not(None),
+                ),
+            )
+        ).all()
+    )
+
+    related_queries = (
+        select(PMTareaDependencia.tarea_id).where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.proyecto_id == project_id,
+            PMTareaDependencia.tarea_id.in_(task_ids),
+            PMTareaDependencia.activo == True,
+        ),
+        select(PMComentario.tarea_id).where(
+            PMComentario.empresa_id == empresa_id,
+            PMComentario.tarea_id.in_(task_ids),
+            PMComentario.activo == True,
+        ),
+        select(PMTimeEntry.tarea_id).where(
+            PMTimeEntry.empresa_id == empresa_id,
+            PMTimeEntry.proyecto_id == project_id,
+            PMTimeEntry.tarea_id.in_(task_ids),
+            PMTimeEntry.activo == True,
+        ),
+        select(PMProyectoMaterialPlan.tarea_id).where(
+            PMProyectoMaterialPlan.empresa_id == empresa_id,
+            PMProyectoMaterialPlan.proyecto_id == project_id,
+            PMProyectoMaterialPlan.tarea_id.in_(task_ids),
+            PMProyectoMaterialPlan.activo == True,
+        ),
+        select(PMProyectoMaterialConsumo.tarea_id).where(
+            PMProyectoMaterialConsumo.empresa_id == empresa_id,
+            PMProyectoMaterialConsumo.proyecto_id == project_id,
+            PMProyectoMaterialConsumo.tarea_id.in_(task_ids),
+            PMProyectoMaterialConsumo.activo == True,
+        ),
+        select(PMEstimacionDetalle.tarea_id).where(
+            PMEstimacionDetalle.empresa_id == empresa_id,
+            PMEstimacionDetalle.proyecto_id == project_id,
+            PMEstimacionDetalle.tarea_id.in_(task_ids),
+            PMEstimacionDetalle.activo == True,
+        ),
+        select(PMProyectoLineaBaseTarea.tarea_id).where(
+            PMProyectoLineaBaseTarea.empresa_id == empresa_id,
+            PMProyectoLineaBaseTarea.proyecto_id == project_id,
+            PMProyectoLineaBaseTarea.tarea_id.in_(task_ids),
+        ),
+    )
+    for query in related_queries:
+        active_task_ids.update(task_id for task_id in db.scalars(query).all() if task_id in task_id_set)
+    return active_task_ids
+
+
 def flatten_budget_plan_preview_items(preview: PMBudgetPlanPreviewOut) -> list[PMBudgetPlanPreviewItemOut]:
     items: list[PMBudgetPlanPreviewItemOut] = []
     for group in preview.chapters:
@@ -1568,11 +2000,51 @@ def get_budget_plan_preview(
 
     chapter_items = [item for item in items if item.tipo == "capitulo"]
     part_items = [item for item in items if item.tipo == "partida"]
+    items_by_id = {item.id: item for item in items}
     chapters_by_id = {item.id: item for item in chapter_items}
+    budget_lineages = {item.lineage_id for item in part_items}
+    budget_prerequisites = list_budget_prerequisites_for_budget(db, empresa_id=pm_context.empresa_id, budget_id=budget.id)
+    prerequisites_by_item_id = list_budget_prerequisite_rows_for_budget(
+        db,
+        empresa_id=pm_context.empresa_id,
+        budget_id=budget.id,
+    )
+    prerequisite_cycle_lineages = find_budget_prerequisite_cycle_nodes(
+        budget_prerequisites,
+        allowed_lineages=budget_lineages,
+    )
+    active_project_members = get_active_project_member_catalog(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project.id,
+    )
+    project_member_names = {user_id: user.full_name for user_id, user in active_project_members.items()}
     child_count_by_chapter: dict[str, int] = defaultdict(int)
     links_by_lineage: dict[str, list[PMPresupuestoTaskLink]] = defaultdict(list)
     for link in links:
         links_by_lineage[link.lineage_id].append(link)
+    linked_task_ids = [link.tarea_id for link in links if link.tarea_id]
+    linked_lineage_by_task_id = {link.tarea_id: link.lineage_id for link in links if link.tarea_id}
+    task_dependency_lineages_by_task_id: dict[str, set[str]] = defaultdict(set)
+    if linked_task_ids:
+        dependency_rows = db.execute(
+            select(PMTareaDependencia.tarea_id, PMTareaDependencia.depende_de_tarea_id).where(
+                PMTareaDependencia.empresa_id == pm_context.empresa_id,
+                PMTareaDependencia.proyecto_id == project.id,
+                PMTareaDependencia.tarea_id.in_(linked_task_ids),
+                PMTareaDependencia.activo == True,
+            )
+        ).all()
+        for successor_task_id, prerequisite_task_id in dependency_rows:
+            prerequisite_lineage_id = linked_lineage_by_task_id.get(prerequisite_task_id)
+            if prerequisite_lineage_id:
+                task_dependency_lineages_by_task_id[successor_task_id].add(prerequisite_lineage_id)
+    task_ids_with_operational_activity = get_task_ids_with_operational_activity(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project.id,
+        task_ids=linked_task_ids,
+    )
     for item in part_items:
         if item.parent_id and item.parent_id in chapters_by_id:
             child_count_by_chapter[item.parent_id] += 1
@@ -1587,6 +2059,10 @@ def get_budget_plan_preview(
                 code=chapter.codigo,
                 name=build_budget_preview_item_name(chapter),
                 description=normalize_optional_text(chapter.descripcion),
+                target_start_date=chapter.fecha_inicio_sugerida,
+                target_end_date=chapter.fecha_fin_sugerida,
+                planning_notes=chapter.notas_planificacion,
+                planning_warnings=[],
                 order=int(chapter.orden or 0),
                 child_parts_count=child_count_by_chapter.get(chapter.id, 0),
             ),
@@ -1606,6 +2082,7 @@ def get_budget_plan_preview(
         warnings.append(build_budget_preview_notice("budget_in_draft", budget_warning))
 
     seen_orphan_lineages: set[str] = set()
+    chapter_warning_signatures: dict[str, set[str]] = defaultdict(set)
 
     def register_preview_item(
         preview_item: PMBudgetPlanPreviewItemOut,
@@ -1613,6 +2090,153 @@ def get_budget_plan_preview(
         group_id: str | None,
         force_unassigned: bool = False,
     ) -> None:
+        current_item = items_by_id.get(preview_item.item_id) if preview_item.item_id else None
+        if current_item is not None:
+            current_prerequisites = prerequisites_by_item_id.get(current_item.id, [])
+            preview_item.suggested_start_date = current_item.fecha_inicio_sugerida
+            preview_item.suggested_end_date = current_item.fecha_fin_sugerida
+            preview_item.suggested_duration_days = current_item.duracion_dias_sugerida
+            preview_item.suggested_responsible_id = current_item.responsable_sugerido_usuario_id
+            preview_item.suggested_responsible_name = project_member_names.get(current_item.responsable_sugerido_usuario_id)
+            preview_item.planning_notes = current_item.notas_planificacion
+            preview_item.suggested_prerequisites = [
+                build_budget_prerequisite_preview_item(prerequisite)
+                for prerequisite in current_prerequisites
+            ]
+            preview_item.planning_suggestions = build_budget_planning_preview_changes(
+                current_item,
+                responsible_name=preview_item.suggested_responsible_name,
+                prerequisites=current_prerequisites,
+            )
+
+            planning_warnings = list(preview_item.planning_warnings)
+            operational_conflicts = list(preview_item.operational_conflicts)
+            blocking = list(preview_item.blocking)
+            current_chapter = chapters_by_id.get(current_item.parent_id) if current_item.parent_id else None
+
+            if current_item.responsable_sugerido_usuario_id and preview_item.suggested_responsible_name is None:
+                blocking.append(
+                    build_budget_preview_notice(
+                        "invalid_suggested_responsible",
+                        "El responsable sugerido ya no es un miembro activo del proyecto.",
+                    )
+                )
+                preview_item.action = "conflict"
+                preview_item.reason_code = "invalid_suggested_responsible"
+                preview_item.reason = "La partida tiene un responsable sugerido invalido para el proyecto actual."
+
+            invalid_prerequisites = [
+                prerequisite
+                for prerequisite in current_prerequisites
+                if prerequisite.prerequisito_lineage_id not in budget_lineages
+            ]
+            if invalid_prerequisites:
+                blocking.append(
+                    build_budget_preview_notice(
+                        "invalid_prerequisite",
+                        "Hay requisitos previos que ya no pertenecen al presupuesto activo.",
+                    )
+                )
+                preview_item.action = "conflict"
+                preview_item.reason_code = "invalid_prerequisite"
+                preview_item.reason = "La partida tiene requisitos previos fuera del presupuesto activo."
+
+            if preview_item.lineage_id in prerequisite_cycle_lineages:
+                blocking.append(
+                    build_budget_preview_notice(
+                        "planning_cycle_detected",
+                        "Se detecto un ciclo entre partidas del presupuesto.",
+                    )
+                )
+                preview_item.action = "conflict"
+                preview_item.reason_code = "planning_cycle_detected"
+                preview_item.reason = "La partida participa en un ciclo de requisitos previos."
+
+            if preview_item.action == "create":
+                if current_item.fecha_inicio_sugerida is None and current_item.fecha_fin_sugerida is None:
+                    planning_warnings.append(
+                        build_budget_preview_notice(
+                            "missing_suggested_dates",
+                            "Sin fechas sugeridas. La tarea se creara sin fechas.",
+                        )
+                    )
+                if not current_item.responsable_sugerido_usuario_id:
+                    planning_warnings.append(
+                        build_budget_preview_notice(
+                            "missing_suggested_responsible",
+                            "Sin responsable sugerido. La tarea se creara sin responsable.",
+                        )
+                    )
+
+            if current_chapter and (
+                current_chapter.fecha_inicio_sugerida is not None or current_chapter.fecha_fin_sugerida is not None
+            ):
+                if (
+                    current_item.fecha_inicio_sugerida is not None
+                    and current_chapter.fecha_inicio_sugerida is not None
+                    and current_item.fecha_inicio_sugerida < current_chapter.fecha_inicio_sugerida
+                ) or (
+                    current_item.fecha_fin_sugerida is not None
+                    and current_chapter.fecha_fin_sugerida is not None
+                    and current_item.fecha_fin_sugerida > current_chapter.fecha_fin_sugerida
+                ):
+                    notice = build_budget_preview_notice(
+                        "outside_chapter_window",
+                        "La partida queda fuera de la ventana objetivo del capitulo.",
+                    )
+                    planning_warnings.append(notice)
+                    if group_id and group_id in chapter_group_map:
+                        signature = f"{notice.code}:{preview_item.lineage_id}"
+                        if signature not in chapter_warning_signatures[group_id]:
+                            chapter_warning_signatures[group_id].add(signature)
+                            chapter_group_map[group_id].chapter.planning_warnings.append(notice)
+
+            if preview_item.task_id:
+                linked_task = next(
+                    (
+                        link.tarea
+                        for link in links_by_lineage.get(preview_item.lineage_id, [])
+                        if link.tarea_id == preview_item.task_id
+                    ),
+                    None,
+                )
+                if linked_task is not None:
+                    expected_dependency_lineages = {
+                        prerequisite.prerequisito_lineage_id
+                        for prerequisite in current_prerequisites
+                    }
+                    current_dependency_lineages = task_dependency_lineages_by_task_id.get(linked_task.id, set())
+                    planning_differs = any(
+                        (
+                            linked_task.fecha_inicio != current_item.fecha_inicio_sugerida,
+                            linked_task.fecha_vencimiento != current_item.fecha_fin_sugerida,
+                            linked_task.asignado_user_id != current_item.responsable_sugerido_usuario_id,
+                            current_dependency_lineages != expected_dependency_lineages,
+                        )
+                    )
+                    if planning_differs:
+                        if linked_task.id in task_ids_with_operational_activity:
+                            operational_conflicts.append(
+                                build_budget_preview_notice(
+                                    "existing_operational_planning",
+                                    "Existe una planificacion operativa diferente en la tarea vinculada.",
+                                )
+                            )
+                        else:
+                            operational_conflicts.append(
+                                build_budget_preview_notice(
+                                    "existing_task_requires_manual_review",
+                                    "La tarea vinculada ya existe. La planificacion sugerida no se aplicara automaticamente.",
+                                )
+                            )
+                        if preview_item.action == "no_change":
+                            preview_item.reason_code = "existing_operational_planning"
+                            preview_item.reason = "La tarea vinculada conserva su planificacion operativa actual."
+
+            preview_item.planning_warnings = planning_warnings
+            preview_item.operational_conflicts = operational_conflicts
+            preview_item.blocking = blocking
+
         summary_counts[preview_item.action] = summary_counts.get(preview_item.action, 0) + 1
         if preview_item.action == "orphan" and preview_item.lineage_id not in seen_orphan_lineages:
             orphans.append(preview_item)
@@ -2380,6 +3004,33 @@ def apply_budget_plan(
     current_items_by_id = {item.id: item for item in current_items}
     current_chapters_by_id = {item.id: item for item in current_chapters}
     links_by_lineage = {link.lineage_id: link for link in links}
+    prerequisites_by_item_id = list_budget_prerequisite_rows_for_budget(
+        db,
+        empresa_id=pm_context.empresa_id,
+        budget_id=budget.id,
+    )
+    budget_prerequisites = list_budget_prerequisites_for_budget(
+        db,
+        empresa_id=pm_context.empresa_id,
+        budget_id=budget.id,
+    )
+    active_part_lineages = {
+        item.lineage_id
+        for item in current_items
+        if item.activo and item.tipo == "partida"
+    }
+    cycle_lineages = find_budget_prerequisite_cycle_nodes(
+        budget_prerequisites,
+        allowed_lineages=active_part_lineages,
+    )
+    if cycle_lineages:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=build_budget_plan_apply_conflict_detail(
+                preview,
+                message="Se detectó un ciclo entre partidas del presupuesto. Actualiza la planificación antes de aplicar el plan.",
+            ),
+        )
 
     created_results: list[PMBudgetPlanApplyItemOut] = []
     updated_results: list[PMBudgetPlanApplyItemOut] = []
@@ -2387,6 +3038,15 @@ def apply_budget_plan(
     orphan_results = [build_budget_plan_apply_item(item) for item in preview.orphans]
     link_updates = 0
     applied_at = utcnow()
+    resolved_tasks_by_lineage: dict[str, PMTarea] = {}
+    created_task_lineages: set[str] = set()
+    apply_warnings = list(preview.warnings)
+    tasks_with_dates = 0
+    tasks_without_dates = 0
+    tasks_with_responsible = 0
+    tasks_without_responsible = 0
+    dependencies_created = 0
+    dependencies_skipped = 0
 
     for preview_item in actionable_items:
         if preview_item.action == "skip":
@@ -2405,6 +3065,17 @@ def apply_budget_plan(
             )
 
         if preview_item.action == "create":
+            planning = resolve_budget_planning_values(
+                db,
+                empresa_id=pm_context.empresa_id,
+                project_id=project.id,
+                item_type=current_item.tipo,
+                fecha_inicio_sugerida=current_item.fecha_inicio_sugerida,
+                fecha_fin_sugerida=current_item.fecha_fin_sugerida,
+                duracion_dias_sugerida=current_item.duracion_dias_sugerida,
+                responsable_sugerido_usuario_id=current_item.responsable_sugerido_usuario_id,
+                notas_planificacion=current_item.notas_planificacion,
+            )
             task = PMTarea(
                 empresa_id=project.empresa_id,
                 proyecto_id=project.id,
@@ -2412,10 +3083,10 @@ def apply_budget_plan(
                 descripcion=normalize_optional_text(current_item.descripcion),
                 estatus="pendiente",
                 prioridad="media",
-                asignado_user_id=None,
-                asignado_nombre_snapshot=None,
-                fecha_inicio=None,
-                fecha_vencimiento=None,
+                asignado_user_id=planning.responsable_sugerido_usuario_id,
+                asignado_nombre_snapshot=planning.responsable_sugerido_nombre,
+                fecha_inicio=planning.fecha_inicio_sugerida,
+                fecha_vencimiento=planning.fecha_fin_sugerida,
                 fecha_completada=None,
                 estimacion_horas=Decimal("0"),
                 porcentaje_avance=Decimal("0"),
@@ -2446,6 +3117,16 @@ def apply_budget_plan(
                 last_synced_at=applied_at,
             )
             link_updates += 1
+            resolved_tasks_by_lineage[current_item.lineage_id] = task
+            created_task_lineages.add(current_item.lineage_id)
+            if task.fecha_inicio is not None and task.fecha_vencimiento is not None:
+                tasks_with_dates += 1
+            else:
+                tasks_without_dates += 1
+            if task.asignado_user_id:
+                tasks_with_responsible += 1
+            else:
+                tasks_without_responsible += 1
             created_results.append(build_budget_plan_apply_item(preview_item, task=task))
             continue
 
@@ -2483,6 +3164,7 @@ def apply_budget_plan(
                 synced_at=applied_at,
             )
             link_updates += 1
+            resolved_tasks_by_lineage[preview_item.lineage_id] = link.tarea
             updated_results.append(build_budget_plan_apply_item(preview_item, task=link.tarea))
             continue
 
@@ -2499,6 +3181,84 @@ def apply_budget_plan(
             synced_at=applied_at,
         ):
             link_updates += 1
+        resolved_tasks_by_lineage[preview_item.lineage_id] = link.tarea
+
+    for link in links:
+        if link.tarea is not None and link.lineage_id not in resolved_tasks_by_lineage:
+            resolved_tasks_by_lineage[link.lineage_id] = link.tarea
+
+    for item_id, prerequisite_rows in prerequisites_by_item_id.items():
+        if not prerequisite_rows:
+            continue
+        current_item = current_items_by_id.get(item_id)
+        if current_item is None:
+            dependencies_skipped += len(prerequisite_rows)
+            continue
+        if current_item.lineage_id not in created_task_lineages:
+            dependencies_skipped += len(prerequisite_rows)
+            apply_warnings.append(
+                build_budget_preview_notice(
+                    "existing_task_dependencies_preserved",
+                    "Las tareas ya existentes conservan sus dependencias operativas actuales.",
+                )
+            )
+            continue
+        successor_task = resolved_tasks_by_lineage.get(current_item.lineage_id)
+        if successor_task is None:
+            dependencies_skipped += len(prerequisite_rows)
+            continue
+        for prerequisite_row in prerequisite_rows:
+            predecessor_task = resolved_tasks_by_lineage.get(prerequisite_row.prerequisito_lineage_id)
+            if predecessor_task is None:
+                dependencies_skipped += 1
+                apply_warnings.append(
+                    build_budget_preview_notice(
+                        "missing_prerequisite_task",
+                        "No se pudo crear un requisito porque la tarea predecesora no está disponible.",
+                    )
+                )
+                continue
+            duplicate_dependency = db.scalar(
+                select(PMTareaDependencia.id).where(
+                    PMTareaDependencia.empresa_id == pm_context.empresa_id,
+                    PMTareaDependencia.proyecto_id == project.id,
+                    PMTareaDependencia.tarea_id == successor_task.id,
+                    PMTareaDependencia.depende_de_tarea_id == predecessor_task.id,
+                    PMTareaDependencia.activo == True,
+                )
+            )
+            if duplicate_dependency:
+                dependencies_skipped += 1
+                continue
+            if would_create_task_dependency_cycle(
+                db,
+                empresa_id=pm_context.empresa_id,
+                project_id=project.id,
+                successor_task_id=successor_task.id,
+                prerequisite_task_id=predecessor_task.id,
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=build_budget_plan_apply_conflict_detail(
+                        preview,
+                        message="Una dependencia operativa generaría un ciclo. Corrige los requisitos previos antes de aplicar el plan.",
+                    ),
+                )
+            dependency = PMTareaDependencia(
+                empresa_id=pm_context.empresa_id,
+                proyecto_id=project.id,
+                tarea_id=successor_task.id,
+                depende_de_tarea_id=predecessor_task.id,
+                tipo_dependencia=normalize_task_dependency_type(prerequisite_row.tipo_dependencia),
+                lag_dias=max(int(prerequisite_row.desfase_dias or 0), 0),
+                bloqueante=True,
+                notas="Generada desde la planificación inicial del presupuesto.",
+                activo=True,
+                created_by=pm_context.user.id,
+            )
+            db.add(dependency)
+            db.flush()
+            dependencies_created += 1
 
     if created_results:
         recalculate_project_progress(db, project)
@@ -2521,6 +3281,12 @@ def apply_budget_plan(
                 "no_change": int(preview.summary.no_change or 0),
                 "skipped": len(skipped_results),
                 "orphans": len(orphan_results),
+                "tasks_with_dates": tasks_with_dates,
+                "tasks_without_dates": tasks_without_dates,
+                "tasks_with_responsible": tasks_with_responsible,
+                "tasks_without_responsible": tasks_without_responsible,
+                "dependencies_created": dependencies_created,
+                "dependencies_skipped": dependencies_skipped,
                 "preview_token": preview.preview_token,
             },
         )
@@ -2540,12 +3306,18 @@ def apply_budget_plan(
             skipped=len(skipped_results),
             orphans=len(orphan_results),
             conflicts=0,
+            tasks_with_dates=tasks_with_dates,
+            tasks_without_dates=tasks_without_dates,
+            tasks_with_responsible=tasks_with_responsible,
+            tasks_without_responsible=tasks_without_responsible,
+            dependencies_created=dependencies_created,
+            dependencies_skipped=dependencies_skipped,
         ),
         created=created_results,
         updated=updated_results,
         skipped=skipped_results,
         orphans=orphan_results,
-        warnings=list(preview.warnings),
+        warnings=apply_warnings,
         next_step="configure_schedule",
     )
 
@@ -8193,6 +8965,111 @@ def serialize_budget_item_labor(component: PMPresupuestoPartidaManoObra) -> PMPr
     )
 
 
+def serialize_budget_item_prerequisite_row(
+    prerequisite: PMPresupuestoPartidaPrerequisito,
+    prerequisite_item: PMPresupuestoPartida | None,
+    prerequisite_chapter: PMPresupuestoPartida | None,
+) -> PMPresupuestoPartidaPrerequisitoOut:
+    return PMPresupuestoPartidaPrerequisitoOut(
+        id=prerequisite.id,
+        empresa_id=prerequisite.empresa_id,
+        proyecto_id=prerequisite.proyecto_id,
+        presupuesto_id=prerequisite.presupuesto_id,
+        partida_id=prerequisite.partida_id,
+        prerequisito_partida_id=prerequisite.prerequisito_partida_id,
+        partida_lineage_id=prerequisite.partida_lineage_id,
+        prerequisito_lineage_id=prerequisite.prerequisito_lineage_id,
+        tipo_dependencia=prerequisite.tipo_dependencia,
+        desfase_dias=int(prerequisite.desfase_dias or 0),
+        prerequisito_codigo=prerequisite_item.codigo if prerequisite_item else None,
+        prerequisito_nombre=prerequisite_item.nombre if prerequisite_item else None,
+        prerequisito_capitulo_id=prerequisite_chapter.id if prerequisite_chapter else None,
+        prerequisito_capitulo_codigo=prerequisite_chapter.codigo if prerequisite_chapter else None,
+        prerequisito_capitulo_nombre=prerequisite_chapter.nombre if prerequisite_chapter else None,
+        created_at=prerequisite.created_at,
+        updated_at=prerequisite.updated_at,
+    )
+
+
+def list_budget_item_prerequisite_rows(
+    db: Session,
+    *,
+    empresa_id: str,
+    item_id: str,
+) -> list[PMPresupuestoPartidaPrerequisitoOut]:
+    prerequisite_item_alias = aliased(PMPresupuestoPartida)
+    prerequisite_chapter_alias = aliased(PMPresupuestoPartida)
+    rows = db.execute(
+        select(
+            PMPresupuestoPartidaPrerequisito,
+            prerequisite_item_alias,
+            prerequisite_chapter_alias,
+        )
+        .join(
+            prerequisite_item_alias,
+            PMPresupuestoPartidaPrerequisito.prerequisito_partida_id == prerequisite_item_alias.id,
+        )
+        .outerjoin(
+            prerequisite_chapter_alias,
+            prerequisite_item_alias.parent_id == prerequisite_chapter_alias.id,
+        )
+        .where(
+            PMPresupuestoPartidaPrerequisito.empresa_id == empresa_id,
+            PMPresupuestoPartidaPrerequisito.partida_id == item_id,
+        )
+        .order_by(
+            prerequisite_item_alias.codigo.asc().nullslast(),
+            prerequisite_item_alias.nombre.asc(),
+            PMPresupuestoPartidaPrerequisito.created_at.asc(),
+        )
+    ).all()
+    return [
+        serialize_budget_item_prerequisite_row(prerequisite, prerequisite_item, prerequisite_chapter)
+        for prerequisite, prerequisite_item, prerequisite_chapter in rows
+    ]
+
+
+def list_budget_prerequisite_rows_for_budget(
+    db: Session,
+    *,
+    empresa_id: str,
+    budget_id: str,
+) -> dict[str, list[PMPresupuestoPartidaPrerequisitoOut]]:
+    prerequisite_item_alias = aliased(PMPresupuestoPartida)
+    prerequisite_chapter_alias = aliased(PMPresupuestoPartida)
+    rows = db.execute(
+        select(
+            PMPresupuestoPartidaPrerequisito,
+            prerequisite_item_alias,
+            prerequisite_chapter_alias,
+        )
+        .join(
+            prerequisite_item_alias,
+            PMPresupuestoPartidaPrerequisito.prerequisito_partida_id == prerequisite_item_alias.id,
+        )
+        .outerjoin(
+            prerequisite_chapter_alias,
+            prerequisite_item_alias.parent_id == prerequisite_chapter_alias.id,
+        )
+        .where(
+            PMPresupuestoPartidaPrerequisito.empresa_id == empresa_id,
+            PMPresupuestoPartidaPrerequisito.presupuesto_id == budget_id,
+        )
+        .order_by(
+            PMPresupuestoPartidaPrerequisito.partida_id.asc(),
+            prerequisite_item_alias.codigo.asc().nullslast(),
+            prerequisite_item_alias.nombre.asc(),
+            PMPresupuestoPartidaPrerequisito.created_at.asc(),
+        )
+    ).all()
+    grouped: dict[str, list[PMPresupuestoPartidaPrerequisitoOut]] = defaultdict(list)
+    for prerequisite, prerequisite_item, prerequisite_chapter in rows:
+        grouped[prerequisite.partida_id].append(
+            serialize_budget_item_prerequisite_row(prerequisite, prerequisite_item, prerequisite_chapter)
+        )
+    return grouped
+
+
 def serialize_budget_item(db: Session, item: PMPresupuestoPartida) -> PMPresupuestoPartidaOut:
     materials = db.scalars(
         select(PMPresupuestoPartidaMaterial)
@@ -8212,6 +9089,23 @@ def serialize_budget_item(db: Session, item: PMPresupuestoPartida) -> PMPresupue
         )
         .order_by(PMPresupuestoPartidaManoObra.created_at.asc(), PMPresupuestoPartidaManoObra.id.asc())
     ).all()
+    responsible_name = None
+    if item.responsable_sugerido_usuario_id:
+        responsible_name = db.scalar(
+            select(Usuario.full_name).where(
+                Usuario.id == item.responsable_sugerido_usuario_id,
+                Usuario.is_active == True,
+            )
+        )
+    linked_task = db.scalar(
+        select(PMPresupuestoTaskLink)
+        .options(selectinload(PMPresupuestoTaskLink.tarea))
+        .where(
+            PMPresupuestoTaskLink.empresa_id == item.empresa_id,
+            PMPresupuestoTaskLink.proyecto_id == item.proyecto_id,
+            PMPresupuestoTaskLink.lineage_id == item.lineage_id,
+        )
+    )
     return PMPresupuestoPartidaOut(
         id=item.id,
         empresa_id=item.empresa_id,
@@ -8231,10 +9125,19 @@ def serialize_budget_item(db: Session, item: PMPresupuestoPartida) -> PMPresupue
         subtotal_costo=decimal_or_zero(item.subtotal_costo),
         subtotal_venta=decimal_or_zero(item.subtotal_venta),
         margen_pct=decimal_or_zero(item.margen_pct),
+        fecha_inicio_sugerida=item.fecha_inicio_sugerida,
+        fecha_fin_sugerida=item.fecha_fin_sugerida,
+        duracion_dias_sugerida=item.duracion_dias_sugerida,
+        responsable_sugerido_usuario_id=item.responsable_sugerido_usuario_id,
+        responsable_sugerido_nombre=responsible_name,
+        notas_planificacion=item.notas_planificacion,
+        linked_task_id=linked_task.tarea_id if linked_task else None,
+        linked_task_title=linked_task.tarea.titulo if linked_task and linked_task.tarea else None,
         orden=item.orden,
         activo=item.activo,
         materials=[serialize_budget_item_material(component) for component in materials],
         labor_components=[serialize_budget_item_labor(component) for component in labor_components],
+        prerequisites=list_budget_item_prerequisite_rows(db, empresa_id=item.empresa_id, item_id=item.id),
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -8577,6 +9480,11 @@ def create_budget_item(
     cantidad: Decimal,
     margen_pct: Decimal,
     precio_unitario_manual: Decimal | None,
+    fecha_inicio_sugerida: date | None = None,
+    fecha_fin_sugerida: date | None = None,
+    duracion_dias_sugerida: int | None = None,
+    responsable_sugerido_usuario_id: str | None = None,
+    notas_planificacion: str | None = None,
     orden: int,
     ip_address: str | None,
 ) -> PMPresupuestoPartidaOut:
@@ -8594,6 +9502,17 @@ def create_budget_item(
     quantity = decimal_or_zero(cantidad)
     if item_type == "partida" and quantity <= ZERO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad de la partida debe ser mayor a 0.")
+    planning = resolve_budget_planning_values(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=budget.proyecto_id,
+        item_type=item_type,
+        fecha_inicio_sugerida=fecha_inicio_sugerida,
+        fecha_fin_sugerida=fecha_fin_sugerida,
+        duracion_dias_sugerida=duracion_dias_sugerida,
+        responsable_sugerido_usuario_id=responsable_sugerido_usuario_id,
+        notas_planificacion=notas_planificacion,
+    )
     item = build_budget_item_record(
         empresa_id=pm_context.empresa_id,
         presupuesto_id=budget.id,
@@ -8607,6 +9526,11 @@ def create_budget_item(
         cantidad=quantity,
         margen_pct=margen_pct,
         precio_unitario_manual=precio_unitario_manual,
+        fecha_inicio_sugerida=planning.fecha_inicio_sugerida,
+        fecha_fin_sugerida=planning.fecha_fin_sugerida,
+        duracion_dias_sugerida=planning.duracion_dias_sugerida,
+        responsable_sugerido_usuario_id=planning.responsable_sugerido_usuario_id,
+        notas_planificacion=planning.notas_planificacion,
         orden=orden,
     )
     db.add(item)
@@ -8641,9 +9565,15 @@ def update_budget_item(
     cantidad: Decimal | None,
     margen_pct: Decimal | None,
     precio_unitario_manual: Decimal | None,
-    orden: int | None,
-    activo: bool | None,
-    ip_address: str | None,
+    fecha_inicio_sugerida: date | None = None,
+    fecha_fin_sugerida: date | None = None,
+    duracion_dias_sugerida: int | None = None,
+    responsable_sugerido_usuario_id: str | None = None,
+    notas_planificacion: str | None = None,
+    orden: int | None = None,
+    activo: bool | None = None,
+    provided_fields: set[str] | None = None,
+    ip_address: str | None = None,
 ) -> PMPresupuestoPartidaOut:
     ensure_pm_budget_manage_access(pm_context)
     item = get_budget_item_for_company(db, pm_context.empresa_id, item_id)
@@ -8662,6 +9592,30 @@ def update_budget_item(
     next_quantity = decimal_or_zero(cantidad if cantidad is not None else item.cantidad)
     if next_type == "partida" and next_quantity <= ZERO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad de la partida debe ser mayor a 0.")
+    provided = set(provided_fields or set())
+    next_start = fecha_inicio_sugerida if "fecha_inicio_sugerida" in provided else item.fecha_inicio_sugerida
+    next_end = fecha_fin_sugerida if "fecha_fin_sugerida" in provided else item.fecha_fin_sugerida
+    next_duration = duracion_dias_sugerida if "duracion_dias_sugerida" in provided else item.duracion_dias_sugerida
+    next_responsable = (
+        responsable_sugerido_usuario_id
+        if "responsable_sugerido_usuario_id" in provided
+        else item.responsable_sugerido_usuario_id
+    )
+    next_notes = notas_planificacion if "notas_planificacion" in provided else item.notas_planificacion
+    if next_type == "capitulo":
+        next_duration = None
+        next_responsable = None
+    planning = resolve_budget_planning_values(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=budget.proyecto_id,
+        item_type=next_type,
+        fecha_inicio_sugerida=next_start,
+        fecha_fin_sugerida=next_end,
+        duracion_dias_sugerida=next_duration,
+        responsable_sugerido_usuario_id=next_responsable,
+        notas_planificacion=next_notes,
+    )
     item.tipo = next_type
     item.parent_id = normalize_optional_text(next_parent_id)
     if codigo is not None:
@@ -8677,6 +9631,11 @@ def update_budget_item(
         item.margen_pct = decimal_or_zero(margen_pct)
     if precio_unitario_manual is not None:
         item.precio_unitario_manual = decimal_or_zero(precio_unitario_manual)
+    item.fecha_inicio_sugerida = planning.fecha_inicio_sugerida
+    item.fecha_fin_sugerida = planning.fecha_fin_sugerida
+    item.duracion_dias_sugerida = planning.duracion_dias_sugerida
+    item.responsable_sugerido_usuario_id = planning.responsable_sugerido_usuario_id
+    item.notas_planificacion = planning.notas_planificacion
     if orden is not None:
         item.orden = max(int(orden), 0)
     if activo is not None:
@@ -8696,6 +9655,163 @@ def update_budget_item(
         )
     )
     return serialize_budget_item(db, item)
+
+
+def validate_budget_prerequisite_pair(
+    *,
+    item: PMPresupuestoPartida,
+    prerequisite_item: PMPresupuestoPartida,
+) -> None:
+    if item.tipo != "partida" or prerequisite_item.tipo != "partida":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Los requisitos previos solo pueden configurarse entre partidas.",
+        )
+    if not bool(item.activo) or not bool(prerequisite_item.activo):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Solo puedes usar partidas activas como requisito previo.",
+        )
+    if item.id == prerequisite_item.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Una partida no puede depender de si misma.",
+        )
+    if item.empresa_id != prerequisite_item.empresa_id or item.proyecto_id != prerequisite_item.proyecto_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El requisito previo debe pertenecer al mismo proyecto.",
+        )
+    if item.presupuesto_id != prerequisite_item.presupuesto_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El requisito previo debe pertenecer al mismo presupuesto.",
+        )
+
+
+def list_budget_item_prerequisites(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    item_id: str,
+) -> list[PMPresupuestoPartidaPrerequisitoOut]:
+    ensure_pm_budget_manage_access(pm_context)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, item_id)
+    get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    return list_budget_item_prerequisite_rows(db, empresa_id=pm_context.empresa_id, item_id=item.id)
+
+
+def create_budget_item_prerequisite(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    item_id: str,
+    prerequisito_partida_id: str,
+    tipo_dependencia: str,
+    desfase_dias: int,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaPrerequisitoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, item_id)
+    prerequisite_item = get_budget_item_for_company(db, pm_context.empresa_id, prerequisito_partida_id)
+    validate_budget_prerequisite_pair(item=item, prerequisite_item=prerequisite_item)
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    normalized_dependency_type = normalize_task_dependency_type(tipo_dependencia)
+    if would_create_budget_prerequisite_cycle(
+        db,
+        empresa_id=pm_context.empresa_id,
+        budget_id=budget.id,
+        partida_lineage_id=item.lineage_id,
+        prerequisite_lineage_id=prerequisite_item.lineage_id,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El requisito previo crea un ciclo entre partidas del presupuesto.",
+        )
+
+    duplicate = db.scalar(
+        select(PMPresupuestoPartidaPrerequisito.id).where(
+            PMPresupuestoPartidaPrerequisito.empresa_id == pm_context.empresa_id,
+            PMPresupuestoPartidaPrerequisito.presupuesto_id == budget.id,
+            PMPresupuestoPartidaPrerequisito.partida_lineage_id == item.lineage_id,
+            PMPresupuestoPartidaPrerequisito.prerequisito_lineage_id == prerequisite_item.lineage_id,
+            PMPresupuestoPartidaPrerequisito.tipo_dependencia == normalized_dependency_type,
+        )
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="La partida ya tiene ese requisito previo.",
+        )
+
+    prerequisite = PMPresupuestoPartidaPrerequisito(
+        empresa_id=pm_context.empresa_id,
+        proyecto_id=item.proyecto_id,
+        presupuesto_id=item.presupuesto_id,
+        partida_id=item.id,
+        prerequisito_partida_id=prerequisite_item.id,
+        partida_lineage_id=item.lineage_id,
+        prerequisito_lineage_id=prerequisite_item.lineage_id,
+        tipo_dependencia=normalized_dependency_type,
+        desfase_dias=max(int(desfase_dias or 0), 0),
+    )
+    db.add(prerequisite)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item_prerequisite.create",
+            entity_name="pm_presupuesto_partida_prerequisito",
+            entity_id=prerequisite.id,
+            ip_address=ip_address,
+            metadata_json={"project_id": item.proyecto_id, "budget_id": item.presupuesto_id, "item_id": item.id},
+        )
+    )
+    return serialize_budget_item_prerequisite_row(
+        prerequisite,
+        prerequisite_item,
+        get_budget_item_for_company(db, pm_context.empresa_id, prerequisite_item.parent_id) if prerequisite_item.parent_id else None,
+    )
+
+
+def delete_budget_item_prerequisite(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    item_id: str,
+    prerequisite_id: str,
+    ip_address: str | None,
+) -> PMPresupuestoPartidaPrerequisitoOut:
+    ensure_pm_budget_manage_access(pm_context)
+    item = get_budget_item_for_company(db, pm_context.empresa_id, item_id)
+    prerequisite = get_budget_item_prerequisite_for_company(db, pm_context.empresa_id, prerequisite_id)
+    if prerequisite.partida_id != item.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El requisito previo no existe para esta partida.")
+    budget = get_budget_for_company(db, pm_context.empresa_id, item.presupuesto_id)
+    ensure_budget_editable(budget)
+    prerequisite_item = get_budget_item_for_company(db, pm_context.empresa_id, prerequisite.prerequisito_partida_id)
+    prerequisite_chapter = (
+        get_budget_item_for_company(db, pm_context.empresa_id, prerequisite_item.parent_id)
+        if prerequisite_item.parent_id
+        else None
+    )
+    serialized = serialize_budget_item_prerequisite_row(prerequisite, prerequisite_item, prerequisite_chapter)
+    db.delete(prerequisite)
+    db.flush()
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.budget_item_prerequisite.delete",
+            entity_name="pm_presupuesto_partida_prerequisito",
+            entity_id=prerequisite_id,
+            ip_address=ip_address,
+            metadata_json={"project_id": item.proyecto_id, "budget_id": item.presupuesto_id, "item_id": item.id},
+        )
+    )
+    return serialized
 
 
 def deactivate_budget_item(
