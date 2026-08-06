@@ -3208,3 +3208,5 @@ def create_pm_portal_comment_endpoint(
             user_agent=request.headers.get("user-agent"),
         ),
     )
+
+# deployment marker: pm-prerequisites-20260806
