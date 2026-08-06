@@ -64,6 +64,33 @@ class PMBudgetSchemaRepairMigrationTestCase(unittest.TestCase):
         spec.loader.exec_module(module)
         return module
 
+    @staticmethod
+    def _fake_mssql_bind_with_rows(rows: list[dict]):
+        class FakeMappingsResult:
+            def __init__(self, payload: list[dict]) -> None:
+                self.payload = payload
+
+            def all(self) -> list[dict]:
+                return self.payload
+
+        class FakeExecuteResult:
+            def __init__(self, payload: list[dict]) -> None:
+                self.payload = payload
+
+            def mappings(self) -> FakeMappingsResult:
+                return FakeMappingsResult(self.payload)
+
+        class FakeBind:
+            dialect = type("FakeDialect", (), {"name": "mssql"})()
+
+            def __init__(self, payload: list[dict]) -> None:
+                self.payload = payload
+
+            def execute(self, _statement, _params=None) -> FakeExecuteResult:
+                return FakeExecuteResult(self.payload)
+
+        return FakeBind(rows)
+
     def setUp(self) -> None:
         self.db_path = self.temp_root / f"{self._testMethodName}.db"
         self.engine = None
@@ -664,6 +691,146 @@ class PMBudgetSchemaRepairMigrationTestCase(unittest.TestCase):
         ddl = str(CreateTable(PMPresupuestoTaskLink.__table__).compile(dialect=mssql.dialect()))
         self.assertNotIn("ON DELETE CASCADE", ddl.upper())
         self.assertNotIn("ON DELETE SET NULL", ddl.upper())
+
+    def test_mssql_unique_definitions_fallback_when_unique_constraints_are_not_implemented(self) -> None:
+        migration_0046 = self._load_migration_module(
+            "20260805_0046_repair_pm_budget_lineage_schema.py",
+            "pm_budget_lineage_0046_uniques",
+        )
+        fake_inspector = mock.Mock()
+        fake_inspector.has_table.return_value = True
+        fake_inspector.get_unique_constraints.side_effect = NotImplementedError()
+        fake_inspector.get_indexes.return_value = []
+        fake_bind = self._fake_mssql_bind_with_rows(
+            [
+                {
+                    "object_name": "uq_pm_presupuesto_partidas_presupuesto_lineage",
+                    "is_unique": 1,
+                    "is_unique_constraint": 1,
+                    "has_filter": 0,
+                    "filter_definition": None,
+                    "key_ordinal": 1,
+                    "column_name": "presupuesto_id",
+                },
+                {
+                    "object_name": "uq_pm_presupuesto_partidas_presupuesto_lineage",
+                    "is_unique": 1,
+                    "is_unique_constraint": 1,
+                    "has_filter": 0,
+                    "filter_definition": None,
+                    "key_ordinal": 2,
+                    "column_name": "lineage_id",
+                },
+            ]
+        )
+
+        with (
+            mock.patch.object(migration_0046, "get_inspector", return_value=fake_inspector),
+            mock.patch.object(migration_0046, "get_bind", return_value=fake_bind),
+        ):
+            definitions = migration_0046.get_unique_definitions("pm_presupuesto_partidas")
+
+        self.assertEqual(len(definitions), 1)
+        self.assertEqual(definitions[0]["name"], "uq_pm_presupuesto_partidas_presupuesto_lineage")
+        self.assertEqual(definitions[0]["columns"], ("presupuesto_id", "lineage_id"))
+
+    def test_unique_columns_exist_detects_equivalent_unique_constraint_via_mssql_fallback(self) -> None:
+        migration_0046 = self._load_migration_module(
+            "20260805_0046_repair_pm_budget_lineage_schema.py",
+            "pm_budget_lineage_0046_equivalent_uniques",
+        )
+        fake_inspector = mock.Mock()
+        fake_inspector.has_table.return_value = True
+        fake_inspector.get_unique_constraints.side_effect = NotImplementedError()
+        fake_inspector.get_indexes.return_value = []
+        fake_bind = self._fake_mssql_bind_with_rows(
+            [
+                {
+                    "object_name": "uq_custom_budget_lineage",
+                    "is_unique": 1,
+                    "is_unique_constraint": 1,
+                    "has_filter": 0,
+                    "filter_definition": None,
+                    "key_ordinal": 1,
+                    "column_name": "presupuesto_id",
+                },
+                {
+                    "object_name": "uq_custom_budget_lineage",
+                    "is_unique": 1,
+                    "is_unique_constraint": 1,
+                    "has_filter": 0,
+                    "filter_definition": None,
+                    "key_ordinal": 2,
+                    "column_name": "lineage_id",
+                },
+            ]
+        )
+
+        with (
+            mock.patch.object(migration_0046, "get_inspector", return_value=fake_inspector),
+            mock.patch.object(migration_0046, "get_bind", return_value=fake_bind),
+        ):
+            self.assertTrue(
+                migration_0046.unique_columns_exist(
+                    "pm_presupuesto_partidas",
+                    ["presupuesto_id", "lineage_id"],
+                )
+            )
+
+    def test_unique_columns_exist_detects_filtered_unique_task_index_by_semantics(self) -> None:
+        migration_0046 = self._load_migration_module(
+            "20260805_0046_repair_pm_budget_lineage_schema.py",
+            "pm_budget_lineage_0046_filtered_unique",
+        )
+        fake_inspector = mock.Mock()
+        fake_inspector.has_table.return_value = True
+        fake_inspector.get_unique_constraints.side_effect = NotImplementedError()
+        fake_inspector.get_indexes.return_value = []
+        fake_bind = self._fake_mssql_bind_with_rows(
+            [
+                {
+                    "object_name": "uq_existing_task_id_filtered",
+                    "is_unique": 1,
+                    "is_unique_constraint": 0,
+                    "has_filter": 1,
+                    "filter_definition": "([tarea_id] IS NOT NULL)",
+                    "key_ordinal": 1,
+                    "column_name": "tarea_id",
+                },
+            ]
+        )
+
+        with (
+            mock.patch.object(migration_0046, "get_inspector", return_value=fake_inspector),
+            mock.patch.object(migration_0046, "get_bind", return_value=fake_bind),
+        ):
+            self.assertTrue(
+                migration_0046.unique_columns_exist(
+                    "pm_presupuesto_task_links",
+                    ["tarea_id"],
+                    filter_definition="tarea_id IS NOT NULL",
+                )
+            )
+
+    def test_create_unique_index_if_missing_skips_equivalent_filtered_index(self) -> None:
+        migration_0046 = self._load_migration_module(
+            "20260805_0046_repair_pm_budget_lineage_schema.py",
+            "pm_budget_lineage_0046_skip_duplicate_index",
+        )
+        with (
+            mock.patch.object(migration_0046, "unique_name_exists", return_value=False),
+            mock.patch.object(migration_0046, "unique_columns_exist", return_value=True),
+            mock.patch.object(migration_0046.op, "create_index") as create_index,
+        ):
+            migration_0046.create_unique_index_if_missing(
+                "uq_pm_presupuesto_task_links_tarea_id_not_null",
+                "pm_presupuesto_task_links",
+                ["tarea_id"],
+                filter_definition="tarea_id IS NOT NULL",
+                mssql_where=sa.text("tarea_id IS NOT NULL"),
+            )
+
+        create_index.assert_not_called()
 
     def test_filtered_task_id_index_compiles_for_mssql(self) -> None:
         metadata = sa.MetaData()

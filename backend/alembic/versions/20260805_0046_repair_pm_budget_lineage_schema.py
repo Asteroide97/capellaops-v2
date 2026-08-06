@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
+import re
 from uuid import uuid4
 
 from alembic import op
@@ -38,6 +39,10 @@ def get_inspector():
     return inspect(get_bind())
 
 
+def using_mssql() -> bool:
+    return get_bind().dialect.name == "mssql"
+
+
 def using_sqlite() -> bool:
     return get_bind().dialect.name == "sqlite"
 
@@ -63,7 +68,10 @@ def has_column(table_name: str, column_name: str) -> bool:
 def get_indexes(table_name: str) -> list[dict]:
     if not has_table(table_name):
         return []
-    return get_inspector().get_indexes(table_name)
+    try:
+        return get_inspector().get_indexes(table_name)
+    except (NotImplementedError, sa.exc.SQLAlchemyError):
+        return []
 
 
 def index_exists(table_name: str, index_name: str) -> bool:
@@ -74,25 +82,196 @@ def normalize_columns(columns: Sequence[str] | None) -> tuple[str, ...]:
     return tuple(str(column).lower() for column in (columns or ()))
 
 
-def unique_constraint_exists(table_name: str, constraint_name: str) -> bool:
+def normalize_filter_definition(filter_definition: str | None) -> str | None:
+    if filter_definition is None:
+        return None
+    normalized = str(filter_definition).strip().lower()
+    if not normalized:
+        return None
+    normalized = normalized.removeprefix("where ").strip()
+    normalized = normalized.replace("[", "").replace("]", "")
+    normalized = normalized.replace('"', "").replace("'", "")
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = normalized.replace("(", "").replace(")", "")
+    return normalized.strip() or None
+
+
+def first_not_none(*values):
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def get_inspector_unique_constraints(table_name: str) -> list[dict]:
     if not has_table(table_name):
-        return False
+        return []
+    try:
+        return get_inspector().get_unique_constraints(table_name)
+    except (NotImplementedError, sa.exc.SQLAlchemyError):
+        return []
+
+
+def get_mssql_unique_definitions(table_name: str) -> list[dict]:
+    if not using_mssql() or not has_table(table_name):
+        return []
+    rows = get_bind().execute(
+        sa.text(
+            """
+            SELECT
+                i.name AS object_name,
+                i.is_unique AS is_unique,
+                i.is_unique_constraint AS is_unique_constraint,
+                i.has_filter AS has_filter,
+                i.filter_definition AS filter_definition,
+                ic.key_ordinal AS key_ordinal,
+                c.name AS column_name
+            FROM sys.tables t
+            INNER JOIN sys.indexes i
+                ON i.object_id = t.object_id
+            INNER JOIN sys.index_columns ic
+                ON ic.object_id = i.object_id
+               AND ic.index_id = i.index_id
+            INNER JOIN sys.columns c
+                ON c.object_id = ic.object_id
+               AND c.column_id = ic.column_id
+            WHERE t.name = :table_name
+              AND i.is_unique = 1
+              AND i.is_hypothetical = 0
+              AND ic.key_ordinal > 0
+            ORDER BY i.name, ic.key_ordinal
+            """
+        ),
+        {"table_name": table_name},
+    ).mappings().all()
+    if not rows:
+        return []
+
+    definitions_by_name: dict[str, dict] = {}
+    for row in rows:
+        definition = definitions_by_name.setdefault(
+            row["object_name"],
+            {
+                "name": row["object_name"],
+                "columns": [],
+                "unique": bool(row["is_unique"]),
+                "is_constraint": bool(row["is_unique_constraint"]),
+                "filter_definition": normalize_filter_definition(row["filter_definition"])
+                if row["has_filter"]
+                else None,
+            },
+        )
+        definition["columns"].append(str(row["column_name"]).lower())
+    return list(definitions_by_name.values())
+
+
+def get_unique_definitions(table_name: str) -> list[dict]:
+    if not has_table(table_name):
+        return []
+
+    definitions: list[dict] = []
+    seen_signatures: set[tuple[str | None, tuple[str, ...], str | None]] = set()
+
+    for constraint in get_inspector_unique_constraints(table_name):
+        if not constraint.get("name"):
+            continue
+        columns = normalize_columns(constraint.get("column_names"))
+        signature = (str(constraint.get("name")).lower(), columns, None)
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        definitions.append(
+            {
+                "name": constraint.get("name"),
+                "columns": columns,
+                "unique": True,
+                "is_constraint": True,
+                "filter_definition": None,
+            }
+        )
+
+    for index in get_indexes(table_name):
+        if not index.get("unique"):
+            continue
+        columns = normalize_columns(index.get("column_names"))
+        filter_definition = normalize_filter_definition(
+            first_not_none(
+                index.get("dialect_options", {}).get("mssql_where"),
+                index.get("dialect_options", {}).get("sqlite_where"),
+                index.get("mssql_where"),
+                index.get("sqlite_where"),
+                index.get("filter_definition"),
+            )
+        )
+        signature = (
+            str(index.get("name")).lower() if index.get("name") else None,
+            columns,
+            filter_definition,
+        )
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        definitions.append(
+            {
+                "name": index.get("name"),
+                "columns": columns,
+                "unique": True,
+                "is_constraint": False,
+                "filter_definition": filter_definition,
+            }
+        )
+
+    for definition in get_mssql_unique_definitions(table_name):
+        signature = (
+            str(definition.get("name")).lower() if definition.get("name") else None,
+            normalize_columns(definition.get("columns")),
+            normalize_filter_definition(definition.get("filter_definition")),
+        )
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        definitions.append(
+            {
+                "name": definition.get("name"),
+                "columns": normalize_columns(definition.get("columns")),
+                "unique": True,
+                "is_constraint": bool(definition.get("is_constraint")),
+                "filter_definition": normalize_filter_definition(definition.get("filter_definition")),
+            }
+        )
+
+    return definitions
+
+
+def unique_name_exists(table_name: str, object_name: str) -> bool:
+    expected_name = str(object_name).lower()
     return any(
-        constraint.get("name") == constraint_name
-        for constraint in get_inspector().get_unique_constraints(table_name)
+        str(definition.get("name")).lower() == expected_name
+        for definition in get_unique_definitions(table_name)
+        if definition.get("name")
     )
 
 
-def unique_columns_exist(table_name: str, columns: Sequence[str]) -> bool:
+def unique_constraint_exists(table_name: str, constraint_name: str) -> bool:
+    if not has_table(table_name):
+        return False
+    return unique_name_exists(table_name, constraint_name)
+
+
+def unique_columns_exist(
+    table_name: str,
+    columns: Sequence[str],
+    *,
+    filter_definition: str | None = None,
+) -> bool:
     expected = normalize_columns(columns)
     if not has_table(table_name):
         return False
-    inspector = get_inspector()
-    if any(normalize_columns(constraint.get("column_names")) == expected for constraint in inspector.get_unique_constraints(table_name)):
-        return True
+    expected_filter = normalize_filter_definition(filter_definition)
     return any(
-        bool(index.get("unique")) and normalize_columns(index.get("column_names")) == expected
-        for index in inspector.get_indexes(table_name)
+        definition.get("columns") == expected
+        and normalize_filter_definition(definition.get("filter_definition")) == expected_filter
+        for definition in get_unique_definitions(table_name)
     )
 
 
@@ -137,6 +316,21 @@ def primary_key_columns(table_name: str) -> tuple[str, ...]:
 def create_index_if_missing(index_name: str, table_name: str, columns: list[str], **kwargs) -> None:
     if not index_exists(table_name, index_name):
         op.create_index(index_name, table_name, columns, **kwargs)
+
+
+def create_unique_index_if_missing(
+    index_name: str,
+    table_name: str,
+    columns: list[str],
+    *,
+    filter_definition: str | None = None,
+    **kwargs,
+) -> None:
+    if unique_name_exists(table_name, index_name):
+        return
+    if unique_columns_exist(table_name, columns, filter_definition=filter_definition):
+        return
+    op.create_index(index_name, table_name, columns, unique=True, **kwargs)
 
 
 def task_link_foreign_key_specs() -> list[dict[str, object]]:
@@ -587,11 +781,11 @@ def ensure_task_link_structure() -> None:
         ["lineage_id"],
         unique=False,
     )
-    create_index_if_missing(
+    create_unique_index_if_missing(
         "uq_pm_presupuesto_task_links_tarea_id_not_null",
         "pm_presupuesto_task_links",
         ["tarea_id"],
-        unique=True,
+        filter_definition="tarea_id IS NOT NULL",
         sqlite_where=sa.text("tarea_id IS NOT NULL"),
         mssql_where=sa.text("tarea_id IS NOT NULL"),
     )
