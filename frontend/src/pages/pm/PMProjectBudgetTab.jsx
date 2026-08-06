@@ -299,6 +299,7 @@ export default function PMProjectBudgetTab({
   canManage = false,
   empresaId,
   onChanged,
+  onOpenWorkPlan,
   projectEditable = true,
   project,
   projectId,
@@ -349,6 +350,56 @@ export default function PMProjectBudgetTab({
   const projectActualCost = numericValue(vsActual?.costo_real_total);
   const varianceAgainstActual = numericValue(vsActual?.variacion ?? (budgetCalculatedCost - projectActualCost));
   const selectedOperationalItemMarginAmount = numericValue(selectedOperationalItem?.subtotal_venta) - numericValue(selectedOperationalItem?.subtotal_costo);
+  const hasGeneratedPlan = Number(project?.task_stats?.total ?? 0) > 0;
+  const budgetGuideSteps = useMemo(() => (
+    [
+      {
+        key: "budget",
+        number: "1",
+        title: "Presupuesto",
+        note: budget ? "Base economica capturada." : "Crea o configura el presupuesto del trabajo.",
+        statusLabel: budget ? "Completado" : "Pendiente",
+        tone: budget ? "success" : "neutral",
+        state: budget ? "complete" : "current",
+      },
+      {
+        key: "review",
+        number: "2",
+        title: "Revisar estructura",
+        note: budget ? "Valida capitulos, partidas y vinculos antes de generar tareas." : "Disponible cuando exista un presupuesto.",
+        statusLabel: budget ? "Disponible" : "Pendiente",
+        tone: budget ? "info" : "neutral",
+        state: budget ? "available" : "pending",
+      },
+      {
+        key: "plan",
+        number: "3",
+        title: "Generar plan",
+        note: hasGeneratedPlan ? "Ya existen tareas ligadas al plan de trabajo." : "Genera tareas desde las partidas del presupuesto.",
+        statusLabel: hasGeneratedPlan ? "Completado" : budget ? "Siguiente" : "Pendiente",
+        tone: hasGeneratedPlan ? "success" : budget ? "warning" : "neutral",
+        state: hasGeneratedPlan ? "complete" : budget ? "current" : "pending",
+      },
+      {
+        key: "schedule",
+        number: "4",
+        title: "Configurar fechas y responsables",
+        note: hasGeneratedPlan ? "Asigna fechas, responsables y dependencias desde Plan de trabajo." : "Se habilita despues de generar el plan.",
+        statusLabel: hasGeneratedPlan ? "Siguiente" : "Posterior",
+        tone: hasGeneratedPlan ? "warning" : "neutral",
+        state: hasGeneratedPlan ? "current" : "upcoming",
+      },
+      {
+        key: "baseline",
+        number: "5",
+        title: "Crear linea base",
+        note: "Fase posterior. No se genera en este paso.",
+        statusLabel: "Posterior",
+        tone: "neutral",
+        state: "upcoming",
+      },
+    ]
+  ), [budget, hasGeneratedPlan]);
 
   async function loadBudgetTab({ background = false } = {}) {
     if (!token || !empresaId || !projectId) {
@@ -509,6 +560,11 @@ export default function PMProjectBudgetTab({
 
   function closePlanPreview() {
     setIsPlanPreviewOpen(false);
+  }
+
+  async function handlePlanApplied() {
+    await loadBudgetTab({ background: true });
+    await onChanged?.();
   }
 
   function openCreateItemModal(type = "partida", event = null) {
@@ -969,11 +1025,15 @@ export default function PMProjectBudgetTab({
         </div>
       ) : null}
 
-      <section className="pm-budget-guide-grid">
+      <section className="pm-budget-guide-flow">
         {budgetGuideSteps.map((step) => (
-          <article className="pm-budget-guide-card" key={step.key}>
-            <strong>{step.title}</strong>
-            <p>{step.note}</p>
+          <article className={`pm-budget-guide-step is-${step.state}`} key={step.key}>
+            <span className="pm-budget-guide-step-index">{step.number}</span>
+            <div className="pm-budget-guide-step-copy">
+              <strong>{step.title}</strong>
+              <span>{step.note}</span>
+            </div>
+            <StatusBadge tone={step.tone}>{step.statusLabel}</StatusBadge>
           </article>
         ))}
       </section>
@@ -1000,7 +1060,7 @@ export default function PMProjectBudgetTab({
             ) : (
               <>
                 <ActionButton disabled={saving || !budget} icon={<ClipboardList size={16} strokeWidth={1.9} />} onClick={openPlanPreview} type="button">
-                  Revisar estructura del proyecto
+                  Revisar estructura
                 </ActionButton>
                 <ActionButton disabled={!canEditBudget} onClick={openEditBudgetModal} type="button">
                   Editar
@@ -1722,7 +1782,9 @@ export default function PMProjectBudgetTab({
         budgetId={budget?.id ?? ""}
         budgetStatus={budget?.estatus ?? ""}
         empresaId={empresaId}
+        onApplied={handlePlanApplied}
         onClose={closePlanPreview}
+        onOpenWorkPlan={onOpenWorkPlan}
         open={isPlanPreviewOpen}
         token={token}
       />

@@ -2113,6 +2113,10 @@ export default function PMProjectDetailPage() {
           empresaId={empresaId}
           canManage={canManagePmUi}
           onChanged={() => loadProjectBundle({ background: true })}
+          onOpenWorkPlan={async () => {
+            setActiveView("plan");
+            await loadProjectBundle({ background: true });
+          }}
           projectEditable={projectEditable}
           project={project}
           projectId={id}

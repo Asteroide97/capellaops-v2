@@ -22,10 +22,12 @@ const DEV = import.meta.env.DEV;
 
 
 class ApiError extends Error {
-  constructor(message, status = 0) {
+  constructor(message, status = 0, detail = null, data = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.detail = detail;
+    this.data = data;
   }
 }
 
@@ -157,7 +159,7 @@ async function parseResponse(response) {
       status: response.status,
       message,
     });
-    throw new ApiError(message, response.status);
+    throw new ApiError(message, response.status, detail, data);
   }
 
   logApiDebug("response", {
@@ -1443,6 +1445,27 @@ export function refreshPmProjectBudget({ projectId, token, empresaId }) {
 export function previewPmBudgetPlan({ budgetId, token, empresaId }) {
   return apiRequest(`/pm/budgets/${budgetId}/plan-preview`, {
     method: "POST",
+    token,
+    empresaId,
+  });
+}
+
+
+export function applyPmBudgetPlan({
+  budgetId,
+  expectedPreviewToken,
+  confirm = true,
+  allowDraft = false,
+  token,
+  empresaId,
+}) {
+  return apiRequest(`/pm/budgets/${budgetId}/plan-apply`, {
+    method: "POST",
+    body: {
+      expected_preview_token: expectedPreviewToken,
+      confirm,
+      allow_draft: allowDraft,
+    },
     token,
     empresaId,
   });
