@@ -59,6 +59,9 @@ from app.schemas.pm import (
     PMBaselineDeviationOut,
     PMBaselineTaskComparisonOut,
     PMBaselineVsActualOut,
+    PMBudgetPlanApplyItemOut,
+    PMBudgetPlanApplyOut,
+    PMBudgetPlanApplySummaryOut,
     PMBudgetPlanPreviewChapterGroupOut,
     PMBudgetPlanPreviewChapterOut,
     PMBudgetPlanPreviewChangeOut,
@@ -1418,6 +1421,96 @@ def build_budget_preview_synthetic_item(
     )
 
 
+def flatten_budget_plan_preview_items(preview: PMBudgetPlanPreviewOut) -> list[PMBudgetPlanPreviewItemOut]:
+    items: list[PMBudgetPlanPreviewItemOut] = []
+    for group in preview.chapters:
+        items.extend(group.items)
+    items.extend(preview.unassigned_items)
+    return items
+
+
+def build_budget_plan_preview_token(preview: PMBudgetPlanPreviewOut) -> str:
+    payload = preview.model_dump(mode="json", exclude={"generated_at", "preview_token"})
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, default=str, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def build_budget_plan_apply_item(preview_item: PMBudgetPlanPreviewItemOut, *, task: PMTarea | None = None) -> PMBudgetPlanApplyItemOut:
+    resolved_task = task
+    return PMBudgetPlanApplyItemOut(
+        lineage_id=preview_item.lineage_id,
+        item_id=preview_item.item_id,
+        task_id=resolved_task.id if resolved_task else preview_item.task_id,
+        task_title=resolved_task.titulo if resolved_task else preview_item.task_title,
+        chapter_id=preview_item.chapter_id,
+        action=preview_item.action,
+        reason=preview_item.reason,
+    )
+
+
+def build_budget_plan_apply_conflict_detail(
+    preview: PMBudgetPlanPreviewOut,
+    *,
+    message: str,
+) -> dict[str, object]:
+    return {
+        "message": message,
+        "project_id": preview.project_id,
+        "budget_id": preview.budget_id,
+        "budget_version": preview.budget_version,
+        "preview_token": preview.preview_token,
+        "summary": preview.summary.model_dump(mode="json"),
+        "conflicts": [item.model_dump(mode="json") for item in preview.conflicts],
+        "warnings": [item.model_dump(mode="json") for item in preview.warnings],
+    }
+
+
+def should_update_generated_task_description(
+    *,
+    task: PMTarea,
+    current_item: PMPresupuestoPartida,
+    linked_item: PMPresupuestoPartida | None,
+) -> bool:
+    next_description = normalize_optional_text(current_item.descripcion)
+    current_description = normalize_optional_text(task.descripcion)
+    previous_source_description = normalize_optional_text(linked_item.descripcion) if linked_item else None
+    if current_description == next_description:
+        return False
+    if not current_description:
+        return True
+    return current_description == previous_source_description
+
+
+def sync_budget_task_link_to_source(
+    link: PMPresupuestoTaskLink,
+    *,
+    budget: PMPresupuesto,
+    current_item: PMPresupuestoPartida,
+    current_chapter: PMPresupuestoPartida | None,
+    current_source_hash: str,
+    synced_at: datetime,
+) -> bool:
+    changed = False
+    if link.source_presupuesto_id != budget.id:
+        link.source_presupuesto_id = budget.id
+        changed = True
+    if link.source_partida_id != current_item.id:
+        link.source_partida_id = current_item.id
+        changed = True
+    next_chapter_id = current_chapter.id if current_chapter else None
+    if link.source_capitulo_id != next_chapter_id:
+        link.source_capitulo_id = next_chapter_id
+        changed = True
+    if link.source_hash != current_source_hash:
+        link.source_hash = current_source_hash
+        changed = True
+    if link.sync_status != "linked":
+        link.sync_status = "linked"
+        changed = True
+    if changed:
+        link.last_synced_at = synced_at
+    return changed
+
+
 def get_budget_plan_preview(
     db: Session,
     pm_context: PMContext,
@@ -2172,7 +2265,7 @@ def get_budget_plan_preview(
             orphans.append(orphan_item)
             seen_orphan_lineages.add(link.lineage_id)
 
-    return PMBudgetPlanPreviewOut(
+    preview = PMBudgetPlanPreviewOut(
         project_id=project.id,
         budget_id=budget.id,
         budget_version=int(budget.version or 0),
@@ -2196,6 +2289,264 @@ def get_budget_plan_preview(
         orphans=orphans,
         conflicts=conflicts,
         warnings=warnings,
+    )
+    preview.preview_token = build_budget_plan_preview_token(preview)
+    return preview
+
+
+def apply_budget_plan(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    budget_id: str,
+    expected_preview_token: str,
+    confirm: bool,
+    allow_draft: bool = False,
+    ip_address: str | None,
+) -> PMBudgetPlanApplyOut:
+    ensure_pm_tasks_enabled(pm_context)
+    ensure_pm_project_edit_access(pm_context, "No tienes permiso para generar el plan operativo desde presupuesto.")
+    if confirm is not True:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirma la aplicación del plan antes de continuar.",
+        )
+
+    preview = get_budget_plan_preview(db, pm_context, budget_id=budget_id)
+    normalized_preview_token = normalize_required_text(expected_preview_token, "Preview token")
+    if preview.preview_token != normalized_preview_token:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=build_budget_plan_apply_conflict_detail(
+                preview,
+                message="La estructura cambió desde la última revisión. Actualiza el análisis antes de continuar.",
+            ),
+        )
+
+    if str(preview.budget_status or "").lower() == "borrador" and not allow_draft:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=build_budget_plan_apply_conflict_detail(
+                preview,
+                message="El presupuesto sigue en borrador. Revisa el análisis y confirma allow_draft para aplicarlo.",
+            ),
+        )
+
+    if preview.conflicts:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=build_budget_plan_apply_conflict_detail(
+                preview,
+                message="Existen conflictos bloqueantes en la estructura del presupuesto. Resuélvelos antes de aplicar el plan.",
+            ),
+        )
+
+    budget = get_budget_for_company(db, pm_context.empresa_id, preview.budget_id)
+    project = get_project_for_company(db, pm_context.empresa_id, preview.project_id)
+    ensure_project_is_operable(project)
+
+    preview_items = flatten_budget_plan_preview_items(preview)
+    actionable_items = [item for item in preview_items if item.action in {"create", "update", "no_change", "skip"}]
+    current_item_ids = [item.item_id for item in actionable_items if item.item_id]
+    current_chapter_ids = [item.chapter_id for item in actionable_items if item.chapter_id]
+    lineage_ids = [item.lineage_id for item in actionable_items if item.action in {"create", "update", "no_change"}]
+
+    current_items = db.scalars(
+        select(PMPresupuestoPartida).where(
+            PMPresupuestoPartida.empresa_id == pm_context.empresa_id,
+            PMPresupuestoPartida.id.in_(current_item_ids),
+        )
+    ).all() if current_item_ids else []
+    current_chapters = db.scalars(
+        select(PMPresupuestoPartida).where(
+            PMPresupuestoPartida.empresa_id == pm_context.empresa_id,
+            PMPresupuestoPartida.id.in_(current_chapter_ids),
+        )
+    ).all() if current_chapter_ids else []
+    links = db.scalars(
+        select(PMPresupuestoTaskLink)
+        .options(
+            selectinload(PMPresupuestoTaskLink.tarea),
+            selectinload(PMPresupuestoTaskLink.source_partida),
+            selectinload(PMPresupuestoTaskLink.source_capitulo),
+        )
+        .where(
+            PMPresupuestoTaskLink.empresa_id == pm_context.empresa_id,
+            PMPresupuestoTaskLink.proyecto_id == project.id,
+            PMPresupuestoTaskLink.lineage_id.in_(lineage_ids),
+        )
+    ).all() if lineage_ids else []
+
+    current_items_by_id = {item.id: item for item in current_items}
+    current_chapters_by_id = {item.id: item for item in current_chapters}
+    links_by_lineage = {link.lineage_id: link for link in links}
+
+    created_results: list[PMBudgetPlanApplyItemOut] = []
+    updated_results: list[PMBudgetPlanApplyItemOut] = []
+    skipped_results: list[PMBudgetPlanApplyItemOut] = []
+    orphan_results = [build_budget_plan_apply_item(item) for item in preview.orphans]
+    link_updates = 0
+    applied_at = utcnow()
+
+    for preview_item in actionable_items:
+        if preview_item.action == "skip":
+            skipped_results.append(build_budget_plan_apply_item(preview_item))
+            continue
+
+        current_item = current_items_by_id.get(preview_item.item_id) if preview_item.item_id else None
+        current_chapter = current_chapters_by_id.get(preview_item.chapter_id) if preview_item.chapter_id else None
+        if current_item is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=build_budget_plan_apply_conflict_detail(
+                    preview,
+                    message="La estructura cambió desde la última revisión. Actualiza el análisis antes de continuar.",
+                ),
+            )
+
+        if preview_item.action == "create":
+            task = PMTarea(
+                empresa_id=project.empresa_id,
+                proyecto_id=project.id,
+                titulo=build_budget_generated_task_title(current_item),
+                descripcion=normalize_optional_text(current_item.descripcion),
+                estatus="pendiente",
+                prioridad="media",
+                asignado_user_id=None,
+                asignado_nombre_snapshot=None,
+                fecha_inicio=None,
+                fecha_vencimiento=None,
+                fecha_completada=None,
+                estimacion_horas=Decimal("0"),
+                porcentaje_avance=Decimal("0"),
+                orden=int(current_item.orden or 0),
+                bloqueada=False,
+                requiere_materiales=False,
+                requiere_compra=False,
+                requiere_venta_pos=False,
+                requiere_factura=False,
+                activo=True,
+                created_by=pm_context.user.id,
+                updated_by=pm_context.user.id,
+            )
+            db.add(task)
+            db.flush()
+            create_budget_task_link(
+                db,
+                empresa_id=pm_context.empresa_id,
+                project_id=project.id,
+                lineage_id=current_item.lineage_id,
+                tarea_id=task.id,
+                source_presupuesto_id=budget.id,
+                source_partida_id=current_item.id,
+                source_capitulo_id=current_chapter.id if current_chapter else None,
+                generated_from_budget=True,
+                sync_status="linked",
+                source_hash=preview_item.current_source_hash,
+                last_synced_at=applied_at,
+            )
+            link_updates += 1
+            created_results.append(build_budget_plan_apply_item(preview_item, task=task))
+            continue
+
+        link = links_by_lineage.get(preview_item.lineage_id)
+        if link is None or link.tarea is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=build_budget_plan_apply_conflict_detail(
+                    preview,
+                    message="La estructura cambió desde la última revisión. Actualiza el análisis antes de continuar.",
+                ),
+            )
+
+        if preview_item.action == "update":
+            if link.generated_from_budget:
+                next_title = build_budget_generated_task_title(current_item)
+                if link.tarea.titulo != next_title:
+                    link.tarea.titulo = next_title
+                if should_update_generated_task_description(
+                    task=link.tarea,
+                    current_item=current_item,
+                    linked_item=link.source_partida,
+                ):
+                    link.tarea.descripcion = normalize_optional_text(current_item.descripcion)
+                link.tarea.updated_by = pm_context.user.id
+            sync_budget_task_link_to_source(
+                link,
+                budget=budget,
+                current_item=current_item,
+                current_chapter=current_chapter,
+                current_source_hash=preview_item.current_source_hash or build_budget_item_source_hash(
+                    current_item,
+                    parent_lineage_id=current_chapter.lineage_id if current_chapter else None,
+                ),
+                synced_at=applied_at,
+            )
+            link_updates += 1
+            updated_results.append(build_budget_plan_apply_item(preview_item, task=link.tarea))
+            continue
+
+        current_source_hash = preview_item.current_source_hash or build_budget_item_source_hash(
+            current_item,
+            parent_lineage_id=current_chapter.lineage_id if current_chapter else None,
+        )
+        if sync_budget_task_link_to_source(
+            link,
+            budget=budget,
+            current_item=current_item,
+            current_chapter=current_chapter,
+            current_source_hash=current_source_hash,
+            synced_at=applied_at,
+        ):
+            link_updates += 1
+
+    if created_results:
+        recalculate_project_progress(db, project)
+
+    db.add(
+        AuditLog(
+            empresa_id=pm_context.empresa_id,
+            usuario_id=pm_context.user.id,
+            action="pm.plan.generated_from_budget",
+            entity_name="pm_presupuesto",
+            entity_id=budget.id,
+            ip_address=ip_address,
+            metadata_json={
+                "project_id": project.id,
+                "budget_id": budget.id,
+                "budget_version": int(budget.version or 0),
+                "created_tasks": len(created_results),
+                "updated_tasks": len(updated_results),
+                "linked": link_updates,
+                "no_change": int(preview.summary.no_change or 0),
+                "skipped": len(skipped_results),
+                "orphans": len(orphan_results),
+                "preview_token": preview.preview_token,
+            },
+        )
+    )
+    db.flush()
+
+    return PMBudgetPlanApplyOut(
+        project_id=project.id,
+        budget_id=budget.id,
+        budget_version=int(budget.version or 0),
+        applied_at=applied_at,
+        summary=PMBudgetPlanApplySummaryOut(
+            created_tasks=len(created_results),
+            updated_tasks=len(updated_results),
+            linked=link_updates,
+            no_change=int(preview.summary.no_change or 0),
+            skipped=len(skipped_results),
+            orphans=len(orphan_results),
+            conflicts=0,
+        ),
+        created=created_results,
+        updated=updated_results,
+        skipped=skipped_results,
+        orphans=orphan_results,
+        warnings=list(preview.warnings),
+        next_step="configure_schedule",
     )
 
 

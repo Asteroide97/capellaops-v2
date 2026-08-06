@@ -1678,6 +1678,7 @@ class PMBudgetPlanPreviewOut(BaseModel):
     budget_version: int
     budget_status: str
     generated_at: datetime
+    preview_token: str = ""
     is_approved: bool = False
     warning: str | None = None
     source_hash_fields: list[str] = Field(default_factory=list)
@@ -1687,6 +1688,46 @@ class PMBudgetPlanPreviewOut(BaseModel):
     orphans: list[PMBudgetPlanPreviewItemOut] = Field(default_factory=list)
     conflicts: list[PMBudgetPlanPreviewItemOut] = Field(default_factory=list)
     warnings: list[PMBudgetPlanPreviewNoticeOut] = Field(default_factory=list)
+
+
+class PMBudgetPlanApplyRequest(BaseModel):
+    expected_preview_token: str = Field(min_length=1)
+    confirm: bool = False
+    allow_draft: bool = False
+
+
+class PMBudgetPlanApplyItemOut(BaseModel):
+    lineage_id: str
+    item_id: str | None = None
+    task_id: str | None = None
+    task_title: str | None = None
+    chapter_id: str | None = None
+    action: str
+    reason: str
+
+
+class PMBudgetPlanApplySummaryOut(BaseModel):
+    created_tasks: int = 0
+    updated_tasks: int = 0
+    linked: int = 0
+    no_change: int = 0
+    skipped: int = 0
+    orphans: int = 0
+    conflicts: int = 0
+
+
+class PMBudgetPlanApplyOut(BaseModel):
+    project_id: str
+    budget_id: str
+    budget_version: int
+    applied_at: datetime
+    summary: PMBudgetPlanApplySummaryOut
+    created: list[PMBudgetPlanApplyItemOut] = Field(default_factory=list)
+    updated: list[PMBudgetPlanApplyItemOut] = Field(default_factory=list)
+    skipped: list[PMBudgetPlanApplyItemOut] = Field(default_factory=list)
+    orphans: list[PMBudgetPlanApplyItemOut] = Field(default_factory=list)
+    warnings: list[PMBudgetPlanPreviewNoticeOut] = Field(default_factory=list)
+    next_step: str = "configure_schedule"
 
 
 class PMPresupuestoIndirectoCreate(BaseModel):

@@ -16,6 +16,8 @@ from app.schemas.pm import (
     PMAprobacionCreate,
     PMAprobacionOut,
     PMAprobacionResolve,
+    PMBudgetPlanApplyOut,
+    PMBudgetPlanApplyRequest,
     PMBaselineVsActualOut,
     PMBudgetPlanPreviewOut,
     PMBudgetVsActualOut,
@@ -184,6 +186,7 @@ from app.services.pm import (
     get_project_critical_path,
     get_project_planning,
     get_project_budget,
+    apply_budget_plan,
     get_budget_plan_preview,
     get_project_budget_vs_actual,
     get_project_change,
@@ -931,6 +934,29 @@ def get_budget_plan_preview_endpoint(
     db: Session = Depends(get_db),
 ) -> PMBudgetPlanPreviewOut:
     return get_budget_plan_preview(db, pm_context, budget_id=budget_id)
+
+
+@router.post("/budgets/{budget_id}/plan-apply", response_model=PMBudgetPlanApplyOut)
+def apply_budget_plan_endpoint(
+    budget_id: str,
+    payload: PMBudgetPlanApplyRequest,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMBudgetPlanApplyOut:
+    return run_pm_write(
+        db,
+        "apply_budget_plan",
+        lambda: apply_budget_plan(
+            db,
+            pm_context,
+            budget_id=budget_id,
+            expected_preview_token=payload.expected_preview_token,
+            confirm=payload.confirm,
+            allow_draft=payload.allow_draft,
+            ip_address=request.client.host if request.client else None,
+        ),
+    )
 
 
 @router.post("/projects/{project_id}/budget/refresh", response_model=PMProjectCostsOut)
