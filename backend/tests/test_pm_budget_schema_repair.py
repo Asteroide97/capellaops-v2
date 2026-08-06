@@ -2,22 +2,24 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+import importlib.util
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from uuid import uuid4
 
 import sqlalchemy as sa
 from sqlalchemy import create_engine, event, inspect, select, text
 from sqlalchemy.dialects import mssql
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.schema import CreateIndex
+from sqlalchemy.schema import CreateIndex, CreateTable
 
 from app.models import Empresa, EmpresaUsuario, Plan, Usuario
-from app.models.pm import EmpresaPMConfig, PMPresupuesto, PMPresupuestoPartida, PMProyecto
+from app.models.pm import EmpresaPMConfig, PMPresupuesto, PMPresupuestoPartida, PMPresupuestoTaskLink, PMProyecto
 from app.services.pm import PMContext, create_budget_item, get_project_costs
 
 
@@ -51,6 +53,16 @@ class PMBudgetSchemaRepairMigrationTestCase(unittest.TestCase):
             raise RuntimeError(
                 f"Alembic template upgrade to {revision} failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
             )
+
+    @classmethod
+    def _load_migration_module(cls, filename: str, module_name: str):
+        migration_path = cls.backend_dir / "alembic" / "versions" / filename
+        spec = importlib.util.spec_from_file_location(module_name, migration_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"No se pudo cargar la migracion {filename}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
 
     def setUp(self) -> None:
         self.db_path = self.temp_root / f"{self._testMethodName}.db"
@@ -571,6 +583,87 @@ class PMBudgetSchemaRepairMigrationTestCase(unittest.TestCase):
             sum(1 for index in inspector.get_indexes("pm_presupuesto_task_links") if index["name"] == "ix_pm_presupuesto_task_links_lineage_id"),
             1,
         )
+
+    def test_0045_mssql_bridge_skips_conflicting_schema_changes(self) -> None:
+        migration_0045 = self._load_migration_module(
+            "20260805_0045_pm_budget_lineage_task_links.py",
+            "pm_budget_lineage_0045_bridge",
+        )
+        fake_bind = type("FakeBind", (), {"dialect": type("FakeDialect", (), {"name": "mssql"})()})()
+
+        with (
+            mock.patch.object(migration_0045.op, "get_bind", return_value=fake_bind),
+            mock.patch.object(migration_0045.op, "batch_alter_table") as batch_alter_table,
+            mock.patch.object(migration_0045.op, "create_table") as create_table,
+            mock.patch.object(migration_0045.op, "create_index") as create_index,
+        ):
+            migration_0045.upgrade()
+
+        batch_alter_table.assert_not_called()
+        create_table.assert_not_called()
+        create_index.assert_not_called()
+
+    def test_0046_task_link_fk_policy_compiles_without_delete_cascades_for_mssql(self) -> None:
+        migration_0046 = self._load_migration_module(
+            "20260805_0046_repair_pm_budget_lineage_schema.py",
+            "pm_budget_lineage_0046_repair",
+        )
+        metadata = sa.MetaData()
+        for table_name in (
+            "empresas",
+            "pm_proyectos",
+            "pm_tareas",
+            "pm_presupuestos",
+            "pm_presupuesto_partidas",
+        ):
+            sa.Table(table_name, metadata, sa.Column("id", sa.String(length=36), primary_key=True))
+        table = sa.Table(
+            "pm_presupuesto_task_links",
+            metadata,
+            sa.Column("id", sa.String(length=36), primary_key=True),
+            sa.Column("empresa_id", sa.String(length=36), nullable=False),
+            sa.Column("proyecto_id", sa.String(length=36), nullable=False),
+            sa.Column("lineage_id", sa.String(length=36), nullable=False),
+            sa.Column("tarea_id", sa.String(length=36), nullable=True),
+            sa.Column("source_presupuesto_id", sa.String(length=36), nullable=True),
+            sa.Column("source_partida_id", sa.String(length=36), nullable=True),
+            sa.Column("source_capitulo_id", sa.String(length=36), nullable=True),
+            sa.Column("generated_from_budget", sa.Boolean(), nullable=False),
+            sa.Column("sync_status", sa.String(length=20), nullable=False),
+            sa.Column("source_hash", sa.String(length=64), nullable=True),
+            sa.Column("last_synced_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+            sa.CheckConstraint(
+                migration_0046.SYNC_STATUS_CHECK,
+                name="ck_pm_presupuesto_task_links_sync_status",
+            ),
+            sa.UniqueConstraint(
+                "proyecto_id",
+                "lineage_id",
+                name="uq_pm_presupuesto_task_links_proyecto_lineage",
+            ),
+            *[
+                sa.ForeignKeyConstraint(
+                    spec["local_columns"],
+                    [f"{spec['referred_table']}.{spec['remote_columns'][0]}"],
+                    name=spec["name"],
+                    ondelete=spec["ondelete"],
+                )
+                for spec in migration_0046.task_link_foreign_key_specs()
+            ],
+        )
+
+        ddl = str(CreateTable(table).compile(dialect=mssql.dialect()))
+        self.assertNotIn("ON DELETE CASCADE", ddl.upper())
+        self.assertNotIn("ON DELETE SET NULL", ddl.upper())
+        for spec in migration_0046.task_link_foreign_key_specs():
+            self.assertIsNone(spec["ondelete"])
+
+    def test_task_link_model_uses_portable_no_action_policy(self) -> None:
+        ddl = str(CreateTable(PMPresupuestoTaskLink.__table__).compile(dialect=mssql.dialect()))
+        self.assertNotIn("ON DELETE CASCADE", ddl.upper())
+        self.assertNotIn("ON DELETE SET NULL", ddl.upper())
 
     def test_filtered_task_id_index_compiles_for_mssql(self) -> None:
         metadata = sa.MetaData()

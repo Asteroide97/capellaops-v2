@@ -21,8 +21,16 @@ depends_on: str | Sequence[str] | None = None
 SYNC_STATUS_CHECK = "sync_status IN ('linked', 'detached', 'orphaned', 'conflict')"
 
 
+def dialect_name() -> str:
+    return op.get_bind().dialect.name
+
+
 def using_sqlite() -> bool:
-    return op.get_bind().dialect.name == "sqlite"
+    return dialect_name() == "sqlite"
+
+
+def using_mssql() -> bool:
+    return dialect_name() == "mssql"
 
 
 def backfill_lineage_ids() -> None:
@@ -46,6 +54,13 @@ def backfill_lineage_ids() -> None:
 
 
 def upgrade() -> None:
+    if using_mssql():
+        # Azure SQL can reject the original pm_presupuesto_task_links DDL with error 1785 due to
+        # multiple cascade paths triggered by historical SET NULL FKs. Production is currently on
+        # 0044, so this revision acts as a bridge on MSSQL: Alembic advances to 0045 without
+        # applying the conflicting DDL, and 0046 performs the schema repair using portable FKs.
+        return None
+
     batch_kwargs = {"recreate": "always"} if using_sqlite() else {}
 
     with op.batch_alter_table("pm_presupuesto_partidas", **batch_kwargs) as batch_op:
@@ -125,6 +140,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if using_mssql():
+        # Non-destructive on MSSQL. 0046 may have created the repaired schema, so 0045 must not
+        # remove objects during downgrade on the compatibility path.
+        return None
+
     op.drop_index("ix_pm_presupuesto_task_links_sync_status", table_name="pm_presupuesto_task_links")
     op.drop_index("ix_pm_presupuesto_task_links_source_partida_id", table_name="pm_presupuesto_task_links")
     op.drop_index("ix_pm_presupuesto_task_links_source_presupuesto_id", table_name="pm_presupuesto_task_links")

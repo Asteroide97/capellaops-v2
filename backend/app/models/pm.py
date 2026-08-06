@@ -628,19 +628,19 @@ class PMPresupuestoTaskLink(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     empresa_id: Mapped[str] = mapped_column(ForeignKey("empresas.id"), nullable=False, index=True)
     proyecto_id: Mapped[str] = mapped_column(ForeignKey("pm_proyectos.id"), nullable=False, index=True)
     lineage_id: Mapped[str] = mapped_column(String(36), nullable=False)
-    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id", ondelete="SET NULL"), nullable=True, index=True)
+    tarea_id: Mapped[str | None] = mapped_column(ForeignKey("pm_tareas.id"), nullable=True, index=True)
     source_presupuesto_id: Mapped[str | None] = mapped_column(
-        ForeignKey("pm_presupuestos.id", ondelete="SET NULL"),
+        ForeignKey("pm_presupuestos.id"),
         nullable=True,
         index=True,
     )
     source_partida_id: Mapped[str | None] = mapped_column(
-        ForeignKey("pm_presupuesto_partidas.id", ondelete="SET NULL"),
+        ForeignKey("pm_presupuesto_partidas.id"),
         nullable=True,
         index=True,
     )
     source_capitulo_id: Mapped[str | None] = mapped_column(
-        ForeignKey("pm_presupuesto_partidas.id", ondelete="SET NULL"),
+        ForeignKey("pm_presupuesto_partidas.id"),
         nullable=True,
     )
     generated_from_budget: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")

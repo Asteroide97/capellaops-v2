@@ -139,6 +139,56 @@ def create_index_if_missing(index_name: str, table_name: str, columns: list[str]
         op.create_index(index_name, table_name, columns, **kwargs)
 
 
+def task_link_foreign_key_specs() -> list[dict[str, object]]:
+    # Portable NO ACTION policy. Historical links stay nullable, and detach/cleanup is handled by
+    # application services instead of database-level cascades so Azure SQL does not reject the DDL
+    # with multiple cascade path errors.
+    return [
+        {
+            "name": "fk_pm_presupuesto_task_links_empresa_id",
+            "local_columns": ["empresa_id"],
+            "referred_table": "empresas",
+            "remote_columns": ["id"],
+            "ondelete": None,
+        },
+        {
+            "name": "fk_pm_presupuesto_task_links_proyecto_id",
+            "local_columns": ["proyecto_id"],
+            "referred_table": "pm_proyectos",
+            "remote_columns": ["id"],
+            "ondelete": None,
+        },
+        {
+            "name": "fk_pm_presupuesto_task_links_tarea_id",
+            "local_columns": ["tarea_id"],
+            "referred_table": "pm_tareas",
+            "remote_columns": ["id"],
+            "ondelete": None,
+        },
+        {
+            "name": "fk_pm_presupuesto_task_links_source_presupuesto_id",
+            "local_columns": ["source_presupuesto_id"],
+            "referred_table": "pm_presupuestos",
+            "remote_columns": ["id"],
+            "ondelete": None,
+        },
+        {
+            "name": "fk_pm_presupuesto_task_links_source_partida_id",
+            "local_columns": ["source_partida_id"],
+            "referred_table": "pm_presupuesto_partidas",
+            "remote_columns": ["id"],
+            "ondelete": None,
+        },
+        {
+            "name": "fk_pm_presupuesto_task_links_source_capitulo_id",
+            "local_columns": ["source_capitulo_id"],
+            "referred_table": "pm_presupuesto_partidas",
+            "remote_columns": ["id"],
+            "ondelete": None,
+        },
+    ]
+
+
 def count_rows(table_name: str) -> int:
     return int(get_bind().execute(sa.text(f"SELECT COUNT(*) FROM {table_name}")).scalar_one())
 
@@ -272,6 +322,7 @@ def ensure_budget_partidas_lineage_schema() -> None:
 
 
 def create_task_links_table() -> None:
+    fk_specs = task_link_foreign_key_specs()
     op.create_table(
         "pm_presupuesto_task_links",
         sa.Column("empresa_id", sa.String(length=36), nullable=False),
@@ -289,27 +340,15 @@ def create_task_links_table() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.CheckConstraint(SYNC_STATUS_CHECK, name="ck_pm_presupuesto_task_links_sync_status"),
-        sa.ForeignKeyConstraint(["empresa_id"], ["empresas.id"], name="fk_pm_presupuesto_task_links_empresa_id"),
-        sa.ForeignKeyConstraint(["proyecto_id"], ["pm_proyectos.id"], name="fk_pm_presupuesto_task_links_proyecto_id"),
-        sa.ForeignKeyConstraint(["tarea_id"], ["pm_tareas.id"], name="fk_pm_presupuesto_task_links_tarea_id", ondelete="SET NULL"),
-        sa.ForeignKeyConstraint(
-            ["source_presupuesto_id"],
-            ["pm_presupuestos.id"],
-            name="fk_pm_presupuesto_task_links_source_presupuesto_id",
-            ondelete="SET NULL",
-        ),
-        sa.ForeignKeyConstraint(
-            ["source_partida_id"],
-            ["pm_presupuesto_partidas.id"],
-            name="fk_pm_presupuesto_task_links_source_partida_id",
-            ondelete="SET NULL",
-        ),
-        sa.ForeignKeyConstraint(
-            ["source_capitulo_id"],
-            ["pm_presupuesto_partidas.id"],
-            name="fk_pm_presupuesto_task_links_source_capitulo_id",
-            ondelete="SET NULL",
-        ),
+        *[
+            sa.ForeignKeyConstraint(
+                spec["local_columns"],
+                [f"{spec['referred_table']}.{spec['remote_columns'][0]}"],
+                name=spec["name"],
+                ondelete=spec["ondelete"],
+            )
+            for spec in fk_specs
+        ],
         sa.PrimaryKeyConstraint("id", name="pk_pm_presupuesto_task_links"),
         sa.UniqueConstraint("proyecto_id", "lineage_id", name="uq_pm_presupuesto_task_links_proyecto_lineage"),
     )
@@ -479,20 +518,13 @@ def ensure_task_link_structure() -> None:
     if not check_constraint_exists("pm_presupuesto_task_links", "ck_pm_presupuesto_task_links_sync_status"):
         needs_batch = True
 
-    foreign_keys_to_ensure = [
-        ("fk_pm_presupuesto_task_links_empresa_id", ["empresa_id"], "empresas", ["id"], None),
-        ("fk_pm_presupuesto_task_links_proyecto_id", ["proyecto_id"], "pm_proyectos", ["id"], None),
-        ("fk_pm_presupuesto_task_links_tarea_id", ["tarea_id"], "pm_tareas", ["id"], "SET NULL"),
-        ("fk_pm_presupuesto_task_links_source_presupuesto_id", ["source_presupuesto_id"], "pm_presupuestos", ["id"], "SET NULL"),
-        ("fk_pm_presupuesto_task_links_source_partida_id", ["source_partida_id"], "pm_presupuesto_partidas", ["id"], "SET NULL"),
-        ("fk_pm_presupuesto_task_links_source_capitulo_id", ["source_capitulo_id"], "pm_presupuesto_partidas", ["id"], "SET NULL"),
-    ]
-    for _name, local_columns, referred_table, remote_columns, _ondelete in foreign_keys_to_ensure:
+    foreign_keys_to_ensure = task_link_foreign_key_specs()
+    for spec in foreign_keys_to_ensure:
         if not foreign_key_exists(
             "pm_presupuesto_task_links",
-            constrained_columns=local_columns,
-            referred_table=referred_table,
-            referred_columns=remote_columns,
+            constrained_columns=spec["local_columns"],
+            referred_table=str(spec["referred_table"]),
+            referred_columns=spec["remote_columns"],
         ):
             needs_batch = True
             break
@@ -521,20 +553,20 @@ def ensure_task_link_structure() -> None:
                     SYNC_STATUS_CHECK,
                 )
 
-            for name, local_columns, referred_table, remote_columns, ondelete in foreign_keys_to_ensure:
+            for spec in foreign_keys_to_ensure:
                 if foreign_key_exists(
                     "pm_presupuesto_task_links",
-                    constrained_columns=local_columns,
-                    referred_table=referred_table,
-                    referred_columns=remote_columns,
+                    constrained_columns=spec["local_columns"],
+                    referred_table=str(spec["referred_table"]),
+                    referred_columns=spec["remote_columns"],
                 ):
                     continue
                 batch_op.create_foreign_key(
-                    name,
-                    referred_table,
-                    local_columns,
-                    remote_columns,
-                    ondelete=ondelete,
+                    str(spec["name"]),
+                    str(spec["referred_table"]),
+                    spec["local_columns"],
+                    spec["remote_columns"],
+                    ondelete=spec["ondelete"],
                 )
 
     create_index_if_missing(
