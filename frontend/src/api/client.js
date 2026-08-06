@@ -1497,6 +1497,33 @@ export function updatePmBudgetItem({ itemId, token, empresaId, payload }) {
 }
 
 
+export function listPmBudgetItemPrerequisites({ itemId, token, empresaId }) {
+  return apiRequest(`/pm/budget-items/${itemId}/prerequisites`, {
+    token,
+    empresaId,
+  });
+}
+
+
+export function createPmBudgetItemPrerequisite({ itemId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-items/${itemId}/prerequisites`, {
+    method: "POST",
+    body: payload,
+    token,
+    empresaId,
+  });
+}
+
+
+export function deletePmBudgetItemPrerequisite({ itemId, prerequisiteId, token, empresaId }) {
+  return apiRequest(`/pm/budget-items/${itemId}/prerequisites/${prerequisiteId}`, {
+    method: "DELETE",
+    token,
+    empresaId,
+  });
+}
+
+
 export function deactivatePmBudgetItem({ itemId, token, empresaId }) {
   return apiRequest(`/pm/budget-items/${itemId}/deactivate`, {
     method: "POST",

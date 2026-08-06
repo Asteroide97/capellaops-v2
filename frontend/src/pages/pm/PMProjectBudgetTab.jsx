@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   BadgeDollarSign,
   Calculator,
+  ChevronDown,
+  ChevronRight,
   ClipboardList,
   Factory,
   PackageOpen,
@@ -17,13 +19,16 @@ import {
   createPmBudgetItem,
   createPmBudgetItemLabor,
   createPmBudgetItemMaterial,
+  createPmBudgetItemPrerequisite,
   createPmProjectBudget,
   deactivatePmBudgetIndirect,
   deactivatePmBudgetItem,
   deactivatePmBudgetItemLabor,
   deactivatePmBudgetItemMaterial,
+  deletePmBudgetItemPrerequisite,
   getMaterials,
   getPmProjectBudget,
+  listPmProjectMembers,
   refreshPmProjectBudget,
   updatePmBudget,
   updatePmBudgetIndirect,
@@ -67,6 +72,12 @@ const defaultItemForm = {
   margen_pct: "0",
   precio_unitario_manual: "",
   orden: "0",
+  fecha_inicio_sugerida: "",
+  fecha_fin_sugerida: "",
+  duracion_dias_sugerida: "",
+  responsable_sugerido_usuario_id: "",
+  notas_planificacion: "",
+  prerequisite_ids: [],
 };
 
 const defaultMaterialForm = {
@@ -207,7 +218,38 @@ function buildItemForm(item) {
     margen_pct: item.margen_pct ?? "0",
     precio_unitario_manual: item.precio_unitario_manual ?? "",
     orden: item.orden ?? "0",
+    fecha_inicio_sugerida: item.fecha_inicio_sugerida ?? "",
+    fecha_fin_sugerida: item.fecha_fin_sugerida ?? "",
+    duracion_dias_sugerida: item.duracion_dias_sugerida ?? "",
+    responsable_sugerido_usuario_id: item.responsable_sugerido_usuario_id ?? "",
+    notas_planificacion: item.notas_planificacion ?? "",
+    prerequisite_ids: Array.isArray(item.prerequisites)
+      ? item.prerequisites
+        .map((prerequisite) => prerequisite.prerequisito_partida_id)
+        .filter(Boolean)
+      : [],
   };
+}
+
+function hasPlanningData(item) {
+  return Boolean(
+    item?.fecha_inicio_sugerida
+    || item?.fecha_fin_sugerida
+    || item?.duracion_dias_sugerida
+    || item?.responsable_sugerido_usuario_id
+    || item?.notas_planificacion
+    || (item?.prerequisites?.length ?? 0) > 0
+    || (item?.prerequisite_ids?.length ?? 0) > 0,
+  );
+}
+
+function formatProjectMemberLabel(member) {
+  const name = safeDisplayText(member?.nombre_snapshot, "");
+  const email = safeDisplayText(member?.email, "");
+  if (name && email) {
+    return `${name} · ${email}`;
+  }
+  return name || email || "Miembro sin nombre";
 }
 
 
@@ -326,15 +368,26 @@ export default function PMProjectBudgetTab({
   const [laborForm, setLaborForm] = useState(defaultLaborForm);
   const [indirectForm, setIndirectForm] = useState(defaultIndirectForm);
   const [selectedItemId, setSelectedItemId] = useState(null);
+  const [projectMembers, setProjectMembers] = useState([]);
+  const [itemPlanningExpanded, setItemPlanningExpanded] = useState(false);
+  const [prerequisiteSearch, setPrerequisiteSearch] = useState("");
 
   const budget = bundle?.budget ?? null;
   const vsActual = bundle?.vs_actual ?? null;
   const items = useMemo(() => budget?.items ?? [], [budget]);
   const indirects = useMemo(() => budget?.indirects ?? [], [budget]);
   const activeItems = useMemo(() => items.filter((item) => item.activo), [items]);
+  const activeProjectMembers = useMemo(
+    () => projectMembers.filter((member) => member?.activo && member?.usuario_id),
+    [projectMembers],
+  );
   const chapterOptions = useMemo(
     () => activeItems.filter((item) => item.tipo === "capitulo"),
     [activeItems],
+  );
+  const chapterOptionsById = useMemo(
+    () => new Map(chapterOptions.map((chapter) => [chapter.id, chapter])),
+    [chapterOptions],
   );
   const budgetTree = useMemo(() => buildTree(activeItems), [activeItems]);
   const selectedBudgetItem = useMemo(
@@ -351,6 +404,52 @@ export default function PMProjectBudgetTab({
   const varianceAgainstActual = numericValue(vsActual?.variacion ?? (budgetCalculatedCost - projectActualCost));
   const selectedOperationalItemMarginAmount = numericValue(selectedOperationalItem?.subtotal_venta) - numericValue(selectedOperationalItem?.subtotal_costo);
   const hasGeneratedPlan = Number(project?.task_stats?.total ?? 0) > 0;
+  const prerequisiteCatalog = useMemo(
+    () => activeItems
+      .filter((item) => item.tipo === "partida" && item.id !== editingItem?.id)
+      .map((item) => {
+        const chapter = chapterOptionsById.get(item.parent_id);
+        const chapterLabel = chapter
+          ? safeDisplayText(chapter.codigo ? `${chapter.codigo} · ${chapter.nombre}` : chapter.nombre)
+          : "Sin capitulo";
+        const itemLabel = safeDisplayText(item.codigo ? `${item.codigo} · ${item.nombre}` : item.nombre);
+        return {
+          id: item.id,
+          label: itemLabel,
+          chapterLabel,
+          searchableText: `${itemLabel} ${chapterLabel}`.toLowerCase(),
+        };
+      }),
+    [activeItems, chapterOptionsById, editingItem?.id],
+  );
+  const selectedPrerequisiteIds = useMemo(
+    () => (Array.isArray(itemForm.prerequisite_ids) ? itemForm.prerequisite_ids : []),
+    [itemForm.prerequisite_ids],
+  );
+  const prerequisiteCatalogById = useMemo(
+    () => new Map(prerequisiteCatalog.map((option) => [option.id, option])),
+    [prerequisiteCatalog],
+  );
+  const selectedPrerequisiteOptions = useMemo(
+    () => selectedPrerequisiteIds
+      .map((itemId) => prerequisiteCatalogById.get(itemId))
+      .filter(Boolean),
+    [prerequisiteCatalogById, selectedPrerequisiteIds],
+  );
+  const filteredPrerequisiteOptions = useMemo(() => {
+    const search = prerequisiteSearch.trim().toLowerCase();
+    return prerequisiteCatalog.filter((option) => (
+      !selectedPrerequisiteIds.includes(option.id)
+      && (!search || option.searchableText.includes(search))
+    ));
+  }, [prerequisiteCatalog, prerequisiteSearch, selectedPrerequisiteIds]);
+  const isChapterForm = itemForm.tipo === "capitulo";
+  const itemModalTitle = editingItem
+    ? isChapterForm ? "Editar capitulo" : "Editar partida"
+    : isChapterForm ? "Agregar capitulo" : "Agregar partida";
+  const itemModalSubtitle = isChapterForm
+    ? "Organiza el presupuesto en grandes frentes de trabajo."
+    : "Registra una partida operativa para despues agregar materiales y mano de obra.";
   const budgetGuideSteps = useMemo(() => (
     [
       {
@@ -410,12 +509,14 @@ export default function PMProjectBudgetTab({
     }
     setError("");
     try {
-      const [budgetResponse, materialsResponse] = await Promise.all([
+      const [budgetResponse, materialsResponse, membersResponse] = await Promise.all([
         getPmProjectBudget({ projectId, token, empresaId }),
         getMaterials({ token, empresaId, filters: { activo: true, limit: 200, offset: 0 } }),
+        listPmProjectMembers({ projectId, token, empresaId }).catch(() => ({ items: [] })),
       ]);
       setBundle(budgetResponse);
       setMaterialsCatalog(materialsResponse.items ?? []);
+      setProjectMembers(membersResponse?.items ?? []);
       setSelectedItemId((current) => {
         const nextItems = budgetResponse?.budget?.items?.filter((item) => item.activo) ?? [];
         if (current && nextItems.some((item) => item.id === current)) {
@@ -453,6 +554,8 @@ export default function PMProjectBudgetTab({
     setMaterialForm(defaultMaterialForm);
     setLaborForm(defaultLaborForm);
     setIndirectForm(defaultIndirectForm);
+    setItemPlanningExpanded(false);
+    setPrerequisiteSearch("");
   }
 
   function openBudgetModal(type, payload = null, event = null) {
@@ -492,16 +595,17 @@ export default function PMProjectBudgetTab({
 
     if (type === "chapter" || type === "item") {
       const targetItem = payload ?? null;
-      setEditingItem(targetItem);
-      if (targetItem) {
-        setItemForm(buildItemForm(targetItem));
-      } else {
-        setItemForm({
+      const nextItemForm = targetItem
+        ? buildItemForm(targetItem)
+        : {
           ...defaultItemForm,
           tipo: type === "chapter" ? "capitulo" : "partida",
           parent_id: type === "item" ? chapterOptions[0]?.id ?? "" : "",
-        });
-      }
+        };
+      setEditingItem(targetItem);
+      setItemForm(nextItemForm);
+      setItemPlanningExpanded(Boolean(targetItem ? hasPlanningData(targetItem) : false));
+      setPrerequisiteSearch("");
       setActiveBudgetModal(type);
       return;
     }
@@ -597,6 +701,24 @@ export default function PMProjectBudgetTab({
 
   function openEditIndirectModal(indirect, event = null) {
     openBudgetModal("indirect", indirect, event);
+  }
+
+  function addPrerequisiteToForm(itemId) {
+    if (!itemId) {
+      return;
+    }
+    setItemForm((current) => ({
+      ...current,
+      prerequisite_ids: Array.from(new Set([...(current.prerequisite_ids ?? []), itemId])),
+    }));
+    setPrerequisiteSearch("");
+  }
+
+  function removePrerequisiteFromForm(itemId) {
+    setItemForm((current) => ({
+      ...current,
+      prerequisite_ids: (current.prerequisite_ids ?? []).filter((value) => value !== itemId),
+    }));
   }
 
   async function handleQuickCreateBudget({ useProjectBase = false } = {}) {
@@ -762,6 +884,15 @@ export default function PMProjectBudgetTab({
         cantidad: itemForm.tipo === "capitulo" ? Math.max(1, numericValue(itemForm.cantidad || 1)) : numericValue(itemForm.cantidad),
         margen_pct: numericValue(itemForm.margen_pct),
         precio_unitario_manual: itemForm.precio_unitario_manual === "" ? null : numericValue(itemForm.precio_unitario_manual),
+        fecha_inicio_sugerida: itemForm.fecha_inicio_sugerida || null,
+        fecha_fin_sugerida: itemForm.fecha_fin_sugerida || null,
+        duracion_dias_sugerida: itemForm.tipo === "capitulo" || itemForm.duracion_dias_sugerida === ""
+          ? null
+          : Math.max(1, Math.trunc(numericValue(itemForm.duracion_dias_sugerida))),
+        responsable_sugerido_usuario_id: itemForm.tipo === "capitulo"
+          ? null
+          : itemForm.responsable_sugerido_usuario_id || null,
+        notas_planificacion: itemForm.notas_planificacion.trim() || null,
         orden: Math.max(0, Math.trunc(numericValue(itemForm.orden))),
       };
       let response;
@@ -772,6 +903,39 @@ export default function PMProjectBudgetTab({
         response = await createPmBudgetItem({ budgetId: budget.id, token, empresaId, payload });
         setSuccess(itemForm.tipo === "capitulo" ? "Capítulo agregado." : "Partida agregada.");
       }
+      const targetItemId = response?.id ?? editingItem?.id;
+      const currentPrerequisites = Array.isArray(editingItem?.prerequisites) ? editingItem.prerequisites : [];
+      const currentPrerequisiteIds = new Set(currentPrerequisites.map((entry) => entry.prerequisito_partida_id).filter(Boolean));
+      const desiredPrerequisiteIds = itemForm.tipo === "partida"
+        ? Array.from(new Set((itemForm.prerequisite_ids ?? []).filter(Boolean)))
+        : [];
+
+      for (const prerequisite of currentPrerequisites) {
+        if (!desiredPrerequisiteIds.includes(prerequisite.prerequisito_partida_id)) {
+          await deletePmBudgetItemPrerequisite({
+            itemId: targetItemId,
+            prerequisiteId: prerequisite.id,
+            token,
+            empresaId,
+          });
+        }
+      }
+
+      for (const prerequisiteItemId of desiredPrerequisiteIds) {
+        if (!currentPrerequisiteIds.has(prerequisiteItemId)) {
+          await createPmBudgetItemPrerequisite({
+            itemId: targetItemId,
+            token,
+            empresaId,
+            payload: {
+              prerequisito_partida_id: prerequisiteItemId,
+              tipo_dependencia: "finish_to_start",
+              desfase_dias: 0,
+            },
+          });
+        }
+      }
+
       closeItemModal();
       await loadBudgetTab({ background: true });
       setSelectedItemId(response?.id ?? selectedItemId);
@@ -1570,10 +1734,19 @@ export default function PMProjectBudgetTab({
         )}
         onClose={closeItemModal}
         open={activeBudgetModal === "chapter" || activeBudgetModal === "item"}
-        subtitle={itemForm.tipo === "capitulo" ? "Organiza el presupuesto en grandes frentes de trabajo." : "Registra una partida operativa para después agregar materiales y mano de obra."}
-        title={editingItem ? "Editar partida" : itemForm.tipo === "capitulo" ? "Agregar capítulo" : "Agregar partida"}
+        subtitle={itemModalSubtitle}
+        title={itemModalTitle}
       >
         <form className="inventory-modal-form" id="pm-budget-item-form" onSubmit={handleSaveItem}>
+          {editingItem?.linked_task_id ? (
+            <div className="inventory-form-note inventory-form-note-warning">
+              <strong>La partida ya tiene una tarea operativa</strong>
+              <p className="table-note">
+                Esta partida ya esta ligada a {safeDisplayText(editingItem.linked_task_title, "una tarea operativa")}. Los cambios de planificacion no sobrescribiran automaticamente fechas, responsable ni dependencias existentes.
+              </p>
+            </div>
+          ) : null}
+
           <FormGrid columns={2}>
             <Field label="Tipo">
               <select
@@ -1581,6 +1754,10 @@ export default function PMProjectBudgetTab({
                   ...current,
                   tipo: event.target.value,
                   parent_id: event.target.value === "capitulo" ? "" : current.parent_id,
+                  unidad: event.target.value === "capitulo" ? "" : current.unidad,
+                  duracion_dias_sugerida: event.target.value === "capitulo" ? "" : current.duracion_dias_sugerida,
+                  responsable_sugerido_usuario_id: event.target.value === "capitulo" ? "" : current.responsable_sugerido_usuario_id,
+                  prerequisite_ids: event.target.value === "capitulo" ? [] : (current.prerequisite_ids ?? []),
                 }))}
                 value={itemForm.tipo}
               >
@@ -1593,7 +1770,7 @@ export default function PMProjectBudgetTab({
             </Field>
             <Field label="Capítulo padre">
               <select
-                disabled={itemForm.tipo === "capitulo"}
+                disabled={isChapterForm}
                 onChange={(event) => setItemForm((current) => ({ ...current, parent_id: event.target.value }))}
                 value={itemForm.parent_id}
               >
@@ -1607,14 +1784,14 @@ export default function PMProjectBudgetTab({
                   ))}
               </select>
             </Field>
-            <Field label={itemForm.tipo === "capitulo" ? "Nombre del capítulo" : "Nombre de la partida"}>
+            <Field label={isChapterForm ? "Nombre del capitulo" : "Nombre de la partida"}>
               <input onChange={(event) => setItemForm((current) => ({ ...current, nombre: event.target.value }))} required value={itemForm.nombre} />
             </Field>
             <Field label="Descripción opcional">
               <textarea onChange={(event) => setItemForm((current) => ({ ...current, descripcion: event.target.value }))} rows={4} value={itemForm.descripcion} />
             </Field>
             <Field label="Unidad">
-              <input disabled={itemForm.tipo === "capitulo"} onChange={(event) => setItemForm((current) => ({ ...current, unidad: event.target.value }))} value={itemForm.unidad} />
+              <input disabled={isChapterForm} onChange={(event) => setItemForm((current) => ({ ...current, unidad: event.target.value }))} value={itemForm.unidad} />
             </Field>
             <Field label="Cantidad">
               <input min="0" onChange={(event) => setItemForm((current) => ({ ...current, cantidad: event.target.value }))} step="0.01" type="number" value={itemForm.cantidad} />
@@ -1629,6 +1806,138 @@ export default function PMProjectBudgetTab({
               <input min="0" onChange={(event) => setItemForm((current) => ({ ...current, orden: event.target.value }))} step="1" type="number" value={itemForm.orden} />
             </Field>
           </FormGrid>
+
+          <section className="pm-budget-planning-card">
+            <button
+              className="pm-budget-planning-toggle"
+              onClick={() => setItemPlanningExpanded((current) => !current)}
+              type="button"
+            >
+              <div className="pm-budget-planning-toggle-copy">
+                <strong>{isChapterForm ? "Planificacion objetivo - opcional" : "Planificacion inicial - opcional"}</strong>
+                <span>
+                  {isChapterForm
+                    ? "Estas fechas sirven como referencia para validar las partidas del capitulo. El capitulo no genera una tarea independiente."
+                    : "Al generar el plan de trabajo, estos datos se usaran para crear la tarea inicial. Despues podras ajustarlos desde Plan de trabajo o Gantt."}
+                </span>
+              </div>
+              {itemPlanningExpanded ? <ChevronDown size={16} strokeWidth={1.9} /> : <ChevronRight size={16} strokeWidth={1.9} />}
+            </button>
+
+            {itemPlanningExpanded ? (
+              <div className="pm-budget-planning-body">
+                <FormGrid columns={2}>
+                  <Field label={isChapterForm ? "Inicio objetivo" : "Inicio sugerido"}>
+                    <input
+                      onChange={(event) => setItemForm((current) => ({ ...current, fecha_inicio_sugerida: event.target.value }))}
+                      type="date"
+                      value={itemForm.fecha_inicio_sugerida}
+                    />
+                  </Field>
+                  <Field label={isChapterForm ? "Fin objetivo" : "Fin sugerido"}>
+                    <input
+                      onChange={(event) => setItemForm((current) => ({ ...current, fecha_fin_sugerida: event.target.value }))}
+                      type="date"
+                      value={itemForm.fecha_fin_sugerida}
+                    />
+                  </Field>
+
+                  {!isChapterForm ? (
+                    <>
+                      <Field label="Duracion estimada (dias)">
+                        <input
+                          min="1"
+                          onChange={(event) => setItemForm((current) => ({ ...current, duracion_dias_sugerida: event.target.value }))}
+                          step="1"
+                          type="number"
+                          value={itemForm.duracion_dias_sugerida}
+                        />
+                      </Field>
+                      <Field label="Responsable sugerido">
+                        <select
+                          onChange={(event) => setItemForm((current) => ({ ...current, responsable_sugerido_usuario_id: event.target.value }))}
+                          value={itemForm.responsable_sugerido_usuario_id}
+                        >
+                          <option value="">Sin responsable</option>
+                          {activeProjectMembers.map((member) => (
+                            <option key={member.id} value={member.usuario_id ?? ""}>
+                              {formatProjectMemberLabel(member)}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                    </>
+                  ) : null}
+
+                  <Field label="Notas de planificacion">
+                    <textarea
+                      onChange={(event) => setItemForm((current) => ({ ...current, notas_planificacion: event.target.value }))}
+                      rows={3}
+                      value={itemForm.notas_planificacion}
+                    />
+                  </Field>
+                </FormGrid>
+
+                {!isChapterForm ? (
+                  <div className="pm-budget-prerequisite-picker">
+                    <div className="pm-budget-prerequisite-head">
+                      <strong>Requisitos previos</strong>
+                      <span>Selecciona otras partidas del mismo presupuesto que deban completarse antes.</span>
+                    </div>
+
+                    {selectedPrerequisiteOptions.length ? (
+                      <div className="pm-budget-chip-list">
+                        {selectedPrerequisiteOptions.map((option) => (
+                          <div className="pm-budget-chip" key={option.id}>
+                            <div className="pm-budget-chip-copy">
+                              <strong>{option.label}</strong>
+                              <span>{option.chapterLabel}</span>
+                            </div>
+                            <button onClick={() => removePrerequisiteFromForm(option.id)} type="button">
+                              Quitar
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="table-note">No hay requisitos previos seleccionados.</p>
+                    )}
+
+                    {prerequisiteCatalog.length === 0 ? (
+                      <p className="table-note">Agrega otras partidas para poder definir requisitos previos.</p>
+                    ) : (
+                      <>
+                        <Field label="Buscar partida">
+                          <input
+                            onChange={(event) => setPrerequisiteSearch(event.target.value)}
+                            placeholder="Codigo, nombre o capitulo"
+                            value={prerequisiteSearch}
+                          />
+                        </Field>
+                        <div className="pm-budget-prerequisite-results">
+                          {filteredPrerequisiteOptions.length ? (
+                            filteredPrerequisiteOptions.slice(0, 8).map((option) => (
+                              <button
+                                className="pm-budget-prerequisite-option"
+                                key={option.id}
+                                onClick={() => addPrerequisiteToForm(option.id)}
+                                type="button"
+                              >
+                                <strong>{option.label}</strong>
+                                <span>{option.chapterLabel}</span>
+                              </button>
+                            ))
+                          ) : (
+                            <p className="table-note">No hay partidas disponibles con ese filtro.</p>
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
         </form>
       </ModalShell>
 

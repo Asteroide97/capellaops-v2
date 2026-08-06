@@ -53,12 +53,17 @@ const fieldLabels = {
   descripcion: "Descripcion",
   margen_pct: "Margen",
   nombre: "Nombre",
+  notas_planificacion: "Notas de planificacion",
   precio_unitario: "Precio unitario",
   precio_unitario_manual: "Precio unitario",
+  responsable_sugerido_usuario_id: "Responsable sugerido",
   subtotal_costo: "Subtotal de costo",
   subtotal_venta: "Subtotal de venta",
   task_title: "Nombre de la tarea",
   unidad: "Unidad",
+  fecha_inicio_sugerida: "Inicio sugerido",
+  fecha_fin_sugerida: "Fin sugerido",
+  duracion_dias_sugerida: "Duracion estimada",
 };
 
 const moneyFields = new Set([
@@ -70,7 +75,13 @@ const moneyFields = new Set([
 ]);
 
 const percentFields = new Set(["margen_pct"]);
-const numericFields = new Set(["cantidad"]);
+const numericFields = new Set(["cantidad", "duracion_dias_sugerida"]);
+const dateFields = new Set(["fecha_inicio_sugerida", "fecha_fin_sugerida"]);
+const dateOnlyFormatter = new Intl.DateTimeFormat("es-MX", {
+  day: "2-digit",
+  month: "short",
+  year: "numeric",
+});
 
 const previewSummaryRows = [
   { key: "create", label: "Tareas por crear" },
@@ -88,6 +99,12 @@ const applySummaryRows = [
   { key: "no_change", label: "Sin cambios" },
   { key: "skipped", label: "Omitidos" },
   { key: "orphans", label: "Huerfanos" },
+  { key: "tasks_with_dates", label: "Tareas con fechas" },
+  { key: "tasks_without_dates", label: "Tareas sin fechas" },
+  { key: "tasks_with_responsible", label: "Responsables asignados" },
+  { key: "tasks_without_responsible", label: "Sin responsable" },
+  { key: "dependencies_created", label: "Requisitos creados" },
+  { key: "dependencies_skipped", label: "Requisitos omitidos" },
 ];
 
 function getBudgetStatusLabel(status) {
@@ -156,10 +173,53 @@ function formatChangeValue(field, value) {
   if (percentFields.has(field)) {
     return `${formatNumber(value)} %`;
   }
+  if (dateFields.has(field)) {
+    return formatPlanningDate(value);
+  }
   if (numericFields.has(field)) {
     return formatNumber(value);
   }
   return safeDisplayText(value, "Sin dato");
+}
+
+function formatPlanningDate(value) {
+  if (!value) {
+    return "Sin fecha";
+  }
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return safeDisplayText(value, "Sin fecha");
+  }
+  return dateOnlyFormatter.format(parsed);
+}
+
+function buildPlanningMeta(item) {
+  const parts = [];
+  if (item?.suggested_start_date) {
+    parts.push(`Inicio ${formatPlanningDate(item.suggested_start_date)}`);
+  }
+  if (item?.suggested_end_date) {
+    parts.push(`Fin ${formatPlanningDate(item.suggested_end_date)}`);
+  }
+  if (item?.suggested_duration_days) {
+    parts.push(`Duracion ${formatNumber(item.suggested_duration_days)} d`);
+  }
+  if (item?.suggested_responsible_name) {
+    parts.push(`Responsable ${safeDisplayText(item.suggested_responsible_name)}`);
+  }
+  if ((item?.suggested_prerequisites?.length ?? 0) > 0) {
+    parts.push(`Requisitos ${formatNumber(item.suggested_prerequisites.length)}`);
+  }
+  return parts;
+}
+
+function buildPrerequisiteLabel(prerequisite) {
+  const itemLabel = safeDisplayText(
+    prerequisite?.code ? `${prerequisite.code} - ${prerequisite.name}` : prerequisite?.name,
+    "Partida",
+  );
+  const chapterLabel = safeDisplayText(prerequisite?.chapter_name, "");
+  return chapterLabel ? `${itemLabel} · ${chapterLabel}` : itemLabel;
 }
 
 function buildSectionCounts(items) {
@@ -265,8 +325,12 @@ function PreviewItemDetail({ item }) {
   const hasProposedChanges = (item?.proposed_changes?.length ?? 0) > 0;
   const hasEconomicChanges = (item?.economic_changes?.length ?? 0) > 0;
   const hasBlocking = (item?.blocking?.length ?? 0) > 0;
+  const hasPlanningSuggestions = (item?.planning_suggestions?.length ?? 0) > 0;
+  const hasPlanningWarnings = (item?.planning_warnings?.length ?? 0) > 0;
+  const hasOperationalConflicts = (item?.operational_conflicts?.length ?? 0) > 0;
+  const hasPrerequisites = (item?.suggested_prerequisites?.length ?? 0) > 0;
 
-  if (!hasProposedChanges && !hasEconomicChanges && !hasBlocking) {
+  if (!hasProposedChanges && !hasEconomicChanges && !hasBlocking && !hasPlanningSuggestions && !hasPlanningWarnings && !hasOperationalConflicts && !hasPrerequisites) {
     return null;
   }
 
@@ -280,6 +344,49 @@ function PreviewItemDetail({ item }) {
               <span className="pm-budget-preview-notice" key={`${item.lineage_id}-notice-${index}`}>
                 {safeDisplayText(notice?.message)}
               </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {hasPlanningWarnings ? (
+        <div className="pm-budget-preview-change-group">
+          <strong>Alertas de planificacion</strong>
+          <div className="pm-budget-preview-notice-list">
+            {item.planning_warnings.map((notice, index) => (
+              <span className="pm-budget-preview-notice" key={`${item.lineage_id}-planning-warning-${index}`}>
+                {safeDisplayText(notice?.message)}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {hasOperationalConflicts ? (
+        <div className="pm-budget-preview-change-group">
+          <strong>Conflictos operativos</strong>
+          <div className="pm-budget-preview-notice-list">
+            {item.operational_conflicts.map((notice, index) => (
+              <span className="pm-budget-preview-notice" key={`${item.lineage_id}-operational-conflict-${index}`}>
+                {safeDisplayText(notice?.message)}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {hasPlanningSuggestions ? (
+        <div className="pm-budget-preview-change-group">
+          <strong>Planificacion sugerida</strong>
+          <div className="pm-budget-preview-change-list">
+            {item.planning_suggestions.map((change, index) => (
+              <div className="pm-budget-preview-change-item" key={`${item.lineage_id}-planning-${change?.field ?? "field"}-${index}`}>
+                <span className="pm-budget-preview-change-label">{getChangeLabel(change)}</span>
+                <div className="pm-budget-preview-change-values">
+                  <span>Actual: {formatChangeValue(change?.field, change?.current_value)}</span>
+                  <span>Propuesto: {formatChangeValue(change?.field, change?.proposed_value)}</span>
+                </div>
+              </div>
             ))}
           </div>
         </div>
@@ -321,6 +428,19 @@ function PreviewItemDetail({ item }) {
           </div>
         </div>
       ) : null}
+
+      {hasPrerequisites ? (
+        <div className="pm-budget-preview-change-group">
+          <strong>Requisitos previos</strong>
+          <div className="pm-budget-preview-notice-list">
+            {item.suggested_prerequisites.map((prerequisite, index) => (
+              <span className="pm-budget-preview-notice" key={`${item.lineage_id}-prerequisite-${index}`}>
+                {buildPrerequisiteLabel(prerequisite)}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -344,7 +464,14 @@ function PreviewItemsTable({ items, emptyTitle, emptyNote }) {
       <tbody>
         {items.map((item) => {
           const relationCopy = getTaskRelationCopy(item);
-          const hasExtra = (item?.proposed_changes?.length ?? 0) > 0 || (item?.economic_changes?.length ?? 0) > 0 || (item?.blocking?.length ?? 0) > 0;
+          const planningMeta = buildPlanningMeta(item);
+          const hasExtra = (item?.proposed_changes?.length ?? 0) > 0
+            || (item?.economic_changes?.length ?? 0) > 0
+            || (item?.blocking?.length ?? 0) > 0
+            || (item?.planning_suggestions?.length ?? 0) > 0
+            || (item?.planning_warnings?.length ?? 0) > 0
+            || (item?.operational_conflicts?.length ?? 0) > 0
+            || (item?.suggested_prerequisites?.length ?? 0) > 0;
           return (
             <Fragment key={item.lineage_id}>
               <tr>
@@ -352,6 +479,13 @@ function PreviewItemsTable({ items, emptyTitle, emptyNote }) {
                 <td>
                   <div className="pm-budget-preview-cell-stack">
                     <strong title={getItemDisplayName(item)}>{getItemDisplayName(item)}</strong>
+                    {planningMeta.length ? (
+                      <div className="pm-budget-preview-inline-meta">
+                        {planningMeta.map((part, index) => (
+                          <span key={`${item.lineage_id}-meta-${index}`}>{part}</span>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </td>
                 <td>
@@ -821,6 +955,10 @@ export default function PMBudgetPlanPreviewModal({
                 {preview.chapters.map((group) => {
                   const chapterId = group.chapter.lineage_id || group.chapter.id;
                   const isExpanded = expandedChapters.includes(chapterId);
+                  const chapterPlanningSummary = [
+                    group.chapter.target_start_date ? `Inicio ${formatPlanningDate(group.chapter.target_start_date)}` : "",
+                    group.chapter.target_end_date ? `Fin ${formatPlanningDate(group.chapter.target_end_date)}` : "",
+                  ].filter(Boolean);
                   return (
                     <article className="pm-budget-preview-chapter" key={chapterId}>
                       <button
@@ -833,6 +971,22 @@ export default function PMBudgetPlanPreviewModal({
                             {safeDisplayText(group.chapter.code ? `${group.chapter.code} - ${group.chapter.name}` : group.chapter.name)}
                           </strong>
                           <span>{buildChapterSummary(group.items)}</span>
+                          {chapterPlanningSummary.length ? (
+                            <div className="pm-budget-preview-inline-meta">
+                              {chapterPlanningSummary.map((entry, index) => (
+                                <span key={`${chapterId}-planning-${index}`}>{entry}</span>
+                              ))}
+                            </div>
+                          ) : null}
+                          {group.chapter.planning_warnings?.length ? (
+                            <div className="pm-budget-preview-notice-list">
+                              {group.chapter.planning_warnings.map((notice, index) => (
+                                <span className="pm-budget-preview-notice" key={`${chapterId}-warning-${index}`}>
+                                  {safeDisplayText(notice?.message)}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
                         <span className="pm-budget-preview-chapter-icon">
                           {isExpanded ? <ChevronDown size={16} strokeWidth={1.9} /> : <ChevronRight size={16} strokeWidth={1.9} />}
@@ -901,8 +1055,7 @@ export default function PMBudgetPlanPreviewModal({
                     <div>
                       <h4>Plan de trabajo generado</h4>
                       <p className="table-note">
-                        Las tareas ya estan disponibles en Plan de trabajo, Kanban y Gantt. El siguiente paso es asignar fechas,
-                        responsables y dependencias.
+                        Las tareas nuevas ya estan disponibles en Plan de trabajo, Kanban y Gantt. Revisa las tareas sin fechas, confirma responsables y valida dependencias antes de crear una linea base.
                       </p>
                     </div>
                     <StatusBadge tone="success">Listo</StatusBadge>
@@ -950,7 +1103,7 @@ export default function PMBudgetPlanPreviewModal({
                       <h4>{hasActionableChanges ? primaryActionLabel : "Plan actualizado"}</h4>
                       <p className="table-note">
                         {hasActionableChanges
-                          ? "Capella Ops creara tareas a partir de las partidas del presupuesto. Los capitulos se usaran como agrupadores."
+                          ? "Capella Ops creara tareas a partir de las partidas del presupuesto. Las tareas nuevas se crearan con esta planificacion y las tareas existentes no seran sobrescritas."
                           : "El analisis no detecta cambios pendientes para generar o actualizar el plan de trabajo."}
                       </p>
                     </div>
@@ -1015,8 +1168,7 @@ export default function PMBudgetPlanPreviewModal({
         <div className="pm-budget-preview-stack">
           <section className="pm-budget-preview-section pm-budget-preview-confirm-dialog">
             <p className="table-note">
-              Capella Ops creara tareas a partir de las partidas del presupuesto. Los capitulos se usaran como agrupadores. No se
-              modificaran fechas, responsables, avance ni dependencias existentes.
+              Capella Ops creara tareas a partir de las partidas del presupuesto. Los capitulos se usaran como agrupadores. Las tareas nuevas se crearan con la planificacion sugerida y no se modificaran fechas, responsables, avance ni dependencias existentes.
             </p>
 
             <div className="pm-budget-preview-confirm-grid">

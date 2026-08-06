@@ -5754,6 +5754,109 @@ body.pm-is-dragging {
   gap: 0.75rem;
 }
 
+.pm-budget-planning-card {
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+.pm-budget-planning-toggle {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pm-budget-planning-toggle-copy,
+.pm-budget-planning-body,
+.pm-budget-prerequisite-picker {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.pm-budget-planning-toggle-copy strong,
+.pm-budget-prerequisite-head strong {
+  color: var(--text-primary);
+  font-size: 0.92rem;
+}
+
+.pm-budget-planning-toggle-copy span,
+.pm-budget-prerequisite-head span {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.pm-budget-chip-list,
+.pm-budget-prerequisite-results {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.pm-budget-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+}
+
+.pm-budget-chip-copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: 0;
+}
+
+.pm-budget-chip-copy strong,
+.pm-budget-prerequisite-option strong {
+  color: var(--text-primary);
+  font-size: 0.84rem;
+}
+
+.pm-budget-chip-copy span,
+.pm-budget-prerequisite-option span {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+}
+
+.pm-budget-chip button {
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.pm-budget-prerequisite-option {
+  display: grid;
+  gap: 0.15rem;
+  justify-items: start;
+  padding: 0.75rem 0.85rem;
+  border-radius: 0.9rem;
+  border: 1px solid var(--border-soft);
+  background: var(--surface);
+  text-align: left;
+  cursor: pointer;
+}
+
+.pm-budget-prerequisite-option:hover,
+.pm-budget-chip button:hover {
+  border-color: rgba(20, 92, 67, 0.22);
+  color: var(--brand);
+}
+
 .pm-budget-preview-entry-note {
   margin: 0;
 }
@@ -5951,6 +6054,12 @@ body.pm-is-dragging {
   color: var(--text-secondary);
   font-size: 0.79rem;
   line-height: 1.35;
+}
+
+.pm-budget-preview-inline-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.65rem;
 }
 
 .pm-budget-preview-chapter-icon {
