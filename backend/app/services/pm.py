@@ -435,6 +435,13 @@ def calculate_suggested_duration_days(start_date: date, end_date: date) -> int:
     return (end_date - start_date).days + 1
 
 
+def order_optional_text_nulls_last(column):
+    return (
+        case((column.is_(None), 1), else_=0).asc(),
+        column.asc(),
+    )
+
+
 def get_active_project_member_catalog(
     db: Session,
     *,
@@ -9066,30 +9073,10 @@ def list_budget_item_prerequisite_rows(
     empresa_id: str,
     item_id: str,
 ) -> list[PMPresupuestoPartidaPrerequisitoOut]:
-    prerequisite_item_alias = aliased(PMPresupuestoPartida)
-    prerequisite_chapter_alias = aliased(PMPresupuestoPartida)
     rows = db.execute(
-        select(
-            PMPresupuestoPartidaPrerequisito,
-            prerequisite_item_alias,
-            prerequisite_chapter_alias,
-        )
-        .join(
-            prerequisite_item_alias,
-            PMPresupuestoPartidaPrerequisito.prerequisito_partida_id == prerequisite_item_alias.id,
-        )
-        .outerjoin(
-            prerequisite_chapter_alias,
-            prerequisite_item_alias.parent_id == prerequisite_chapter_alias.id,
-        )
-        .where(
-            PMPresupuestoPartidaPrerequisito.empresa_id == empresa_id,
-            PMPresupuestoPartidaPrerequisito.partida_id == item_id,
-        )
-        .order_by(
-            prerequisite_item_alias.codigo.asc().nullslast(),
-            prerequisite_item_alias.nombre.asc(),
-            PMPresupuestoPartidaPrerequisito.created_at.asc(),
+        build_budget_prerequisite_rows_query(
+            empresa_id=empresa_id,
+            item_id=item_id,
         )
     ).all()
     return [
@@ -9098,15 +9085,24 @@ def list_budget_item_prerequisite_rows(
     ]
 
 
-def list_budget_prerequisite_rows_for_budget(
-    db: Session,
+def build_budget_prerequisite_rows_query(
     *,
     empresa_id: str,
-    budget_id: str,
-) -> dict[str, list[PMPresupuestoPartidaPrerequisitoOut]]:
+    item_id: str | None = None,
+    budget_id: str | None = None,
+):
+    if not item_id and not budget_id:
+        raise ValueError("item_id o budget_id es requerido para listar prerequisitos de presupuesto.")
+
     prerequisite_item_alias = aliased(PMPresupuestoPartida)
     prerequisite_chapter_alias = aliased(PMPresupuestoPartida)
-    rows = db.execute(
+    filters = [PMPresupuestoPartidaPrerequisito.empresa_id == empresa_id]
+    if item_id:
+        filters.append(PMPresupuestoPartidaPrerequisito.partida_id == item_id)
+    if budget_id:
+        filters.append(PMPresupuestoPartidaPrerequisito.presupuesto_id == budget_id)
+
+    return (
         select(
             PMPresupuestoPartidaPrerequisito,
             prerequisite_item_alias,
@@ -9120,15 +9116,27 @@ def list_budget_prerequisite_rows_for_budget(
             prerequisite_chapter_alias,
             prerequisite_item_alias.parent_id == prerequisite_chapter_alias.id,
         )
-        .where(
-            PMPresupuestoPartidaPrerequisito.empresa_id == empresa_id,
-            PMPresupuestoPartidaPrerequisito.presupuesto_id == budget_id,
-        )
+        .where(*filters)
         .order_by(
             PMPresupuestoPartidaPrerequisito.partida_id.asc(),
-            prerequisite_item_alias.codigo.asc().nullslast(),
+            *order_optional_text_nulls_last(prerequisite_item_alias.codigo),
             prerequisite_item_alias.nombre.asc(),
             PMPresupuestoPartidaPrerequisito.created_at.asc(),
+            PMPresupuestoPartidaPrerequisito.id.asc(),
+        )
+    )
+
+
+def list_budget_prerequisite_rows_for_budget(
+    db: Session,
+    *,
+    empresa_id: str,
+    budget_id: str,
+) -> dict[str, list[PMPresupuestoPartidaPrerequisitoOut]]:
+    rows = db.execute(
+        build_budget_prerequisite_rows_query(
+            empresa_id=empresa_id,
+            budget_id=budget_id,
         )
     ).all()
     grouped: dict[str, list[PMPresupuestoPartidaPrerequisitoOut]] = defaultdict(list)

@@ -10,13 +10,16 @@ import tempfile
 import unittest
 
 from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.dialects import mssql, sqlite
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Empresa, EmpresaUsuario, Plan, Usuario
 from app.models.pm import EmpresaPMConfig, PMPresupuesto, PMPresupuestoPartida, PMPresupuestoTaskLink, PMProyecto
 from app.services.pm import (
     PMContext,
+    build_budget_prerequisite_rows_query,
     create_budget_item,
+    create_budget_item_prerequisite,
     get_current_project_budget_row,
     get_project_budget,
     get_project_budget_vs_actual,
@@ -376,6 +379,102 @@ class PMBudgetCurrentResolutionTestCase(unittest.TestCase):
             self.db.scalar(select(func.count(PMPresupuestoTaskLink.id))) or 0,
         )
         self.assertEqual(before_counts, after_counts)
+
+    def test_budget_prerequisite_query_compiles_without_nulls_first_last_for_mssql_and_sqlite(self) -> None:
+        statement = build_budget_prerequisite_rows_query(
+            empresa_id="empresa-demo",
+            budget_id="budget-demo",
+        )
+
+        mssql_sql = str(
+            statement.compile(
+                dialect=mssql.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        ).upper()
+        sqlite_sql = str(
+            statement.compile(
+                dialect=sqlite.dialect(),
+                compile_kwargs={"literal_binds": True},
+            )
+        ).upper()
+
+        self.assertNotIn("NULLS LAST", mssql_sql)
+        self.assertNotIn("NULLS FIRST", mssql_sql)
+        self.assertNotIn("NULLS LAST", sqlite_sql)
+        self.assertNotIn("NULLS FIRST", sqlite_sql)
+        self.assertIn("ORDER BY", mssql_sql)
+        self.assertIn("CASE WHEN", mssql_sql)
+        self.assertIn("ORDER BY", sqlite_sql)
+        self.assertIn("CASE WHEN", sqlite_sql)
+
+    def test_get_project_budget_orders_prerequisites_with_null_codes_last(self) -> None:
+        project = self._create_project(self.company_a, name="Prerequisitos portables")
+        budget = self._create_budget(project, status_name="borrador", version=1)
+        chapter = self._create_budget_item(budget, parent_id=None, codigo="01", nombre="Base", tipo="capitulo", orden=1)
+        prerequisite_without_code = self._create_budget_item(
+            budget,
+            parent_id=chapter.id,
+            codigo=None,
+            nombre="Sin codigo",
+            tipo="partida",
+            unidad="pz",
+            cantidad=Decimal("1"),
+            precio_unitario_manual=Decimal("10"),
+            orden=1,
+        )
+        prerequisite_with_code = self._create_budget_item(
+            budget,
+            parent_id=chapter.id,
+            codigo="01.01",
+            nombre="Con codigo",
+            tipo="partida",
+            unidad="pz",
+            cantidad=Decimal("1"),
+            precio_unitario_manual=Decimal("20"),
+            orden=2,
+        )
+        target_item = self._create_budget_item(
+            budget,
+            parent_id=chapter.id,
+            codigo="01.02",
+            nombre="Objetivo",
+            tipo="partida",
+            unidad="pz",
+            cantidad=Decimal("1"),
+            precio_unitario_manual=Decimal("30"),
+            orden=3,
+        )
+
+        create_budget_item_prerequisite(
+            self.db,
+            self.pm_context_a,
+            item_id=target_item.id,
+            prerequisito_partida_id=prerequisite_without_code.id,
+            tipo_dependencia="finish_to_start",
+            desfase_dias=0,
+            ip_address=None,
+        )
+        create_budget_item_prerequisite(
+            self.db,
+            self.pm_context_a,
+            item_id=target_item.id,
+            prerequisito_partida_id=prerequisite_with_code.id,
+            tipo_dependencia="finish_to_start",
+            desfase_dias=0,
+            ip_address=None,
+        )
+
+        bundle = get_project_budget(self.db, self.pm_context_a, project.id)
+        serialized_target = next(item for item in bundle.budget.items if item.id == target_item.id)
+
+        self.assertEqual(len(serialized_target.prerequisites), 2)
+        self.assertEqual(
+            [item.prerequisito_partida_id for item in serialized_target.prerequisites],
+            [prerequisite_with_code.id, prerequisite_without_code.id],
+        )
+        self.assertEqual(serialized_target.prerequisites[0].prerequisito_codigo, "01.01")
+        self.assertIsNone(serialized_target.prerequisites[1].prerequisito_codigo)
 
 
 if __name__ == "__main__":
