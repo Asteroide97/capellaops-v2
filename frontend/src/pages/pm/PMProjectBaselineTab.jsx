@@ -17,7 +17,6 @@ import {
   approvePmProjectChange,
   archivePmBaseline,
   cancelPmProjectChange,
-  createPmProjectBaseline,
   createPmProjectChange,
   getPmBaseline,
   getPmProjectBaselineVsActual,
@@ -43,6 +42,7 @@ import {
   formatNumber,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import {
   getBaselineStatusLabel,
   getBaselineStatusTone,
@@ -52,12 +52,6 @@ import {
   normalizePmCopy,
   pmChangeTypeOptions,
 } from "./shared";
-
-const defaultBaselineForm = {
-  nombre: "",
-  descripcion: "",
-  es_principal: true,
-};
 
 const defaultChangeForm = {
   id: null,
@@ -266,6 +260,7 @@ export default function PMProjectBaselineTab({
   canManage = false,
   empresaId,
   onComparisonLoaded,
+  onOpenBudget,
   onOpenApprovals,
   onPlanningChanged,
   projectEditable = true,
@@ -284,13 +279,11 @@ export default function PMProjectBaselineTab({
   const [comparison, setComparison] = useState(null);
   const [selectedBaselineId, setSelectedBaselineId] = useState("");
   const [baselineDetail, setBaselineDetail] = useState(null);
-  const [baselineModalOpen, setBaselineModalOpen] = useState(false);
   const [baselineDetailOpen, setBaselineDetailOpen] = useState(false);
   const [changeModalOpen, setChangeModalOpen] = useState(false);
   const [changeModalReadOnly, setChangeModalReadOnly] = useState(false);
   const [changeSubmitMode, setChangeSubmitMode] = useState("draft");
   const [changeForm, setChangeForm] = useState(defaultChangeForm);
-  const [baselineForm, setBaselineForm] = useState(defaultBaselineForm);
   const [submitting, setSubmitting] = useState(false);
   const [actionLoading, setActionLoading] = useState({});
   const [deviationPickerOpen, setDeviationPickerOpen] = useState(false);
@@ -409,14 +402,6 @@ export default function PMProjectBaselineTab({
     loadBaselineData();
   }, [token, empresaId, projectId, reloadToken]);
 
-  function closeBaselineModal(force = false) {
-    if (submitting && !force) {
-      return;
-    }
-    setBaselineModalOpen(false);
-    setBaselineForm(defaultBaselineForm);
-  }
-
   function closeBaselineDetail() {
     setBaselineDetailOpen(false);
     setBaselineDetail(null);
@@ -525,33 +510,6 @@ export default function PMProjectBaselineTab({
       fecha_inicio_referencia: selectedTask?.fecha_inicio ?? "",
       fecha_fin_referencia: selectedTask?.fecha_vencimiento ?? "",
     }));
-  }
-
-  async function handleCreateBaseline(event) {
-    event.preventDefault();
-    setSubmitting(true);
-    setError("");
-    setSuccess("");
-
-    try {
-      const response = await createPmProjectBaseline({
-        projectId,
-        token,
-        empresaId,
-        payload: {
-          nombre: baselineForm.nombre.trim(),
-          descripcion: baselineForm.descripcion.trim() || null,
-          es_principal: baselineForm.es_principal,
-        },
-      });
-      setSuccess("Línea base creada.");
-      closeBaselineModal(true);
-      await loadBaselineData({ background: true, baselineId: response.id });
-    } catch (requestError) {
-      setError(getErrorMessage(requestError, "No se pudo crear la línea base."));
-    } finally {
-      setSubmitting(false);
-    }
   }
 
   async function handleViewBaselineDetail(baselineId) {
@@ -789,16 +747,11 @@ export default function PMProjectBaselineTab({
               </ActionButton>
               {canManageBaseline ? (
                 <ActionButton
-                  icon={<Plus size={16} strokeWidth={1.9} />}
-                  onClick={() => {
-                    setError("");
-                    setSuccess("");
-                    setBaselineModalOpen(true);
-                  }}
+                  onClick={onOpenBudget}
                   tone="primary"
                   type="button"
                 >
-                  Crear línea base
+                  Validar plan en Presupuesto
                 </ActionButton>
               ) : null}
             </div>
@@ -810,8 +763,8 @@ export default function PMProjectBaselineTab({
             <EmptyState
               action={(
                 canManageBaseline ? (
-                  <ActionButton onClick={() => setBaselineModalOpen(true)} tone="primary" type="button">
-                    Crear línea base
+                  <ActionButton onClick={onOpenBudget} tone="primary" type="button">
+                    Validar plan en Presupuesto
                   </ActionButton>
                 ) : null
               )}
@@ -855,8 +808,8 @@ export default function PMProjectBaselineTab({
                     tone="info"
                     value={comparison.baseline.es_principal ? "Sí" : "No"}
                   />
-                  <MetricCard label="Fecha fin base" meta="Plan aprobado" tone="neutral" value={safeDisplayText(formatDate(comparison.deviation.fecha_fin_base), "—")} />
-                  <MetricCard label="Fecha fin actual" meta="Estado operativo" tone="warning" value={safeDisplayText(formatDate(comparison.deviation.fecha_fin_actual), "—")} />
+                  <MetricCard label="Fecha fin base" meta="Plan aprobado" tone="neutral" value={safeDisplayText(formatPmCalendarDate(comparison.deviation.fecha_fin_base), "—")} />
+                  <MetricCard label="Fecha fin actual" meta="Estado operativo" tone="warning" value={safeDisplayText(formatPmCalendarDate(comparison.deviation.fecha_fin_actual), "—")} />
                   <MetricCard
                     label="Desviación en días"
                     meta="Fin actual vs línea base"
@@ -964,10 +917,10 @@ export default function PMProjectBaselineTab({
                               : "Comparada contra línea base"}
                         </div>
                       </td>
-                      <td>{safeDisplayText(formatDate(row.fecha_inicio_base), "—")}</td>
-                      <td>{safeDisplayText(formatDate(row.fecha_inicio_actual), "—")}</td>
-                      <td>{safeDisplayText(formatDate(row.fecha_fin_base), "—")}</td>
-                      <td>{safeDisplayText(formatDate(row.fecha_fin_actual), "—")}</td>
+                      <td>{safeDisplayText(formatPmCalendarDate(row.fecha_inicio_base), "—")}</td>
+                      <td>{safeDisplayText(formatPmCalendarDate(row.fecha_inicio_actual), "—")}</td>
+                      <td>{safeDisplayText(formatPmCalendarDate(row.fecha_fin_base), "—")}</td>
+                      <td>{safeDisplayText(formatPmCalendarDate(row.fecha_fin_actual), "—")}</td>
                       <td>{formatDeltaDays(row.desviacion_dias_fin)}</td>
                       <td>
                         <div className="inventory-cell-main">{safeDisplayText(row.estatus_actual ?? row.estatus_base, "—")}</div>
@@ -1351,54 +1304,6 @@ export default function PMProjectBaselineTab({
       </section>
 
       <ModalShell
-        footer={(
-          <div className="inventory-actions inventory-actions-wrap">
-            <ActionButton disabled={submitting} onClick={closeBaselineModal} type="button">
-              Cancelar
-            </ActionButton>
-            <ActionButton disabled={submitting} form="pm-baseline-create-form" tone="primary" type="submit">
-              {submitting ? "Guardando..." : "Crear línea base"}
-            </ActionButton>
-          </div>
-        )}
-        onClose={closeBaselineModal}
-        open={baselineModalOpen}
-        size="medium"
-        subtitle="Se guardarán tareas, fechas, avance, ruta crítica y presupuesto actual."
-        title="Crear línea base"
-      >
-        <form className="inventory-modal-form" id="pm-baseline-create-form" onSubmit={handleCreateBaseline}>
-          <FormGrid>
-            <Field label="Nombre" span={2}>
-              <input
-                onChange={(event) => setBaselineForm((current) => ({ ...current, nombre: event.target.value }))}
-                required
-                type="text"
-                value={baselineForm.nombre}
-              />
-            </Field>
-            <Field label="Descripción" span={2}>
-              <textarea
-                onChange={(event) => setBaselineForm((current) => ({ ...current, descripcion: event.target.value }))}
-                rows={4}
-                value={baselineForm.descripcion}
-              />
-            </Field>
-            <Field label="Principal" span={2}>
-              <label className="inventory-checkbox">
-                <input
-                  checked={baselineForm.es_principal}
-                  onChange={(event) => setBaselineForm((current) => ({ ...current, es_principal: event.target.checked }))}
-                  type="checkbox"
-                />
-                <span>Marcar como línea base principal</span>
-              </label>
-            </Field>
-          </FormGrid>
-        </form>
-      </ModalShell>
-
-      <ModalShell
         onClose={closeBaselineDetail}
         open={baselineDetailOpen}
         size="wide"
@@ -1408,8 +1313,8 @@ export default function PMProjectBaselineTab({
         {baselineDetail ? (
           <div className="pm-baseline-detail-stack">
             <div className="inventory-metric-grid inventory-metric-grid-4">
-              <MetricCard label="Fecha inicio base" meta="Plan aprobado" tone="neutral" value={safeDisplayText(formatDate(baselineDetail.fecha_inicio_base), "—")} />
-              <MetricCard label="Fecha fin base" meta="Plan aprobado" tone="neutral" value={safeDisplayText(formatDate(baselineDetail.fecha_fin_base), "—")} />
+              <MetricCard label="Fecha inicio base" meta="Plan aprobado" tone="neutral" value={safeDisplayText(formatPmCalendarDate(baselineDetail.fecha_inicio_base), "—")} />
+              <MetricCard label="Fecha fin base" meta="Plan aprobado" tone="neutral" value={safeDisplayText(formatPmCalendarDate(baselineDetail.fecha_fin_base), "—")} />
               <MetricCard label="Duración base" meta="Días calendario" tone="info" value={formatNumber(baselineDetail.duracion_dias_base ?? 0)} />
               <MetricCard label="Costo base" meta="Costo estimado" tone="warning" value={formatMoney(baselineDetail.costo_estimado_base ?? 0)} />
             </div>
@@ -1418,8 +1323,8 @@ export default function PMProjectBaselineTab({
                 {(baselineDetail.tasks ?? []).map((item) => (
                   <tr key={item.id}>
                     <td>{safeDisplayText(item.tarea_titulo_snapshot)}</td>
-                    <td>{safeDisplayText(formatDate(item.fecha_inicio_base), "—")}</td>
-                    <td>{safeDisplayText(formatDate(item.fecha_fin_base), "—")}</td>
+                    <td>{safeDisplayText(formatPmCalendarDate(item.fecha_inicio_base), "—")}</td>
+                    <td>{safeDisplayText(formatPmCalendarDate(item.fecha_fin_base), "—")}</td>
                     <td>{formatNumber(item.porcentaje_avance_base ?? 0)}%</td>
                     <td>{item.es_critica_base ? "Sí" : "No"}</td>
                   </tr>

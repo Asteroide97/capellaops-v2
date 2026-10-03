@@ -32,6 +32,9 @@ import {
   getPmProjectBudget,
   getPmProjectBudgetVsActual,
   getPmProjectCosts,
+  getPmProjectBaselineReadiness,
+  listPmProjectBaselines,
+  createPmProjectBaseline,
   listPmProjectMembers,
   listPmBudgetImports,
   refreshPmProjectBudget,
@@ -353,9 +356,15 @@ function getChapterDisplayTotals(chapter, chapterItems) {
 
 
 export default function PMProjectBudgetTab({
+  autoReviewStructure = false,
+  autoValidateBaseline = false,
   canManage = false,
   empresaId,
   onChanged,
+  onOpenBaseline,
+  onAutoReviewOpened,
+  onAutoValidationOpened,
+  onOpenOverview,
   onOpenWorkPlan,
   projectEditable = true,
   project,
@@ -373,9 +382,20 @@ export default function PMProjectBudgetTab({
   const [materialsCatalog, setMaterialsCatalog] = useState([]);
   const [activeBudgetModal, setActiveBudgetModal] = useState("");
   const [isPlanPreviewOpen, setIsPlanPreviewOpen] = useState(false);
+  const [baselineList, setBaselineList] = useState([]);
+  const [baselineDialogOpen, setBaselineDialogOpen] = useState(false);
+  const [baselineDialogStep, setBaselineDialogStep] = useState("review");
+  const [baselineReadiness, setBaselineReadiness] = useState(null);
+  const [baselineDialogLoading, setBaselineDialogLoading] = useState(false);
+  const [baselineCreating, setBaselineCreating] = useState(false);
+  const [baselineDialogError, setBaselineDialogError] = useState("");
+  const [baselineName, setBaselineName] = useState("Línea base inicial");
   const [budgetViewMode, setBudgetViewMode] = useState("spreadsheet");
   const [importWizardOpen, setImportWizardOpen] = useState(false);
   const [budgetImportSessions, setBudgetImportSessions] = useState([]);
+  const [confirmDraftBudget, setConfirmDraftBudget] = useState(false);
+  const [createdBaseline, setCreatedBaseline] = useState(null);
+  const autoSetupActionHandled = useRef(false);
 
   const [editingBudget, setEditingBudget] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
@@ -437,6 +457,7 @@ export default function PMProjectBudgetTab({
   const varianceAgainstActual = numericValue(vsActual?.variacion ?? (comparisonBudget - projectActualCost));
   const selectedOperationalItemMarginAmount = numericValue(selectedOperationalItem?.subtotal_venta) - numericValue(selectedOperationalItem?.subtotal_costo);
   const hasGeneratedPlan = Number(project?.task_stats?.total ?? 0) > 0;
+  const activeBaseline = baselineList.find((item) => item.estatus === "activa") ?? null;
   const prerequisiteCatalog = useMemo(
     () => activeItems
       .filter((item) => item.tipo === "partida" && item.id !== editingItem?.id)
@@ -525,13 +546,19 @@ export default function PMProjectBudgetTab({
         key: "baseline",
         number: "5",
         title: "Crear linea base",
-        note: "Fase posterior. No se genera en este paso.",
-        statusLabel: "Posterior",
-        tone: "neutral",
-        state: "upcoming",
+        note: activeBaseline
+          ? "El estado actual quedó guardado como referencia de control."
+          : !budget
+            ? "Primero configura un presupuesto detallado."
+            : !hasGeneratedPlan
+              ? "Genera tareas y configura el cronograma antes de validar."
+              : "Valida el cronograma y crea la referencia de control explícitamente.",
+        statusLabel: activeBaseline ? "Creada" : !budget || !hasGeneratedPlan ? "Bloqueado" : baselineReadiness?.ready ? "Listo" : "Requiere revisión",
+        tone: activeBaseline || baselineReadiness?.ready ? "success" : !budget || !hasGeneratedPlan ? "neutral" : "warning",
+        state: activeBaseline ? "complete" : !budget || !hasGeneratedPlan ? "upcoming" : "current",
       },
     ]
-  ), [budget, hasGeneratedPlan]);
+  ), [activeBaseline, baselineReadiness?.ready, budget, hasGeneratedPlan]);
 
   async function loadBudgetTab({ background = false } = {}) {
     if (!token || !empresaId || !projectId) {
@@ -633,10 +660,96 @@ export default function PMProjectBudgetTab({
 
   useEffect(() => {
     loadBudgetTab();
+    refreshBaselineList();
   }, [token, empresaId, projectId]);
 
   function notifyChanged() {
     onChanged?.();
+  }
+
+  async function refreshBaselineList() {
+    if (!token || !empresaId || !projectId) return [];
+    try {
+      const result = await listPmProjectBaselines({ projectId, token, empresaId });
+      const rows = Array.isArray(result) ? result : [];
+      setBaselineList(rows);
+      return rows;
+    } catch {
+      return baselineList;
+    }
+  }
+
+  async function handleValidateBaseline() {
+    setBaselineDialogOpen(true);
+    setBaselineDialogStep("review");
+    setBaselineDialogLoading(true);
+    setBaselineDialogError("");
+    setConfirmDraftBudget(false);
+    setCreatedBaseline(null);
+    try {
+      const readiness = await getPmProjectBaselineReadiness({ projectId, token, empresaId });
+      setBaselineReadiness(readiness);
+      await refreshBaselineList();
+    } catch (requestError) {
+      setBaselineDialogError(getErrorMessage(requestError, "No se pudo validar el plan."));
+    } finally {
+      setBaselineDialogLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (loading || !budget?.id || autoSetupActionHandled.current) return;
+    if (autoReviewStructure) {
+      autoSetupActionHandled.current = true;
+      setIsPlanPreviewOpen(true);
+      onAutoReviewOpened?.();
+    } else if (autoValidateBaseline) {
+      autoSetupActionHandled.current = true;
+      onAutoValidationOpened?.();
+      handleValidateBaseline();
+    }
+  }, [autoReviewStructure, autoValidateBaseline, budget?.id, loading]);
+
+  async function handleCreateBaseline() {
+    if (!baselineReadiness?.ready || !baselineReadiness?.readiness_token || baselineCreating) return;
+    if (baselineReadiness?.budget_context?.budget_status === "borrador" && !confirmDraftBudget) return;
+    setBaselineCreating(true);
+    setBaselineDialogError("");
+    try {
+      const created = await createPmProjectBaseline({
+        projectId,
+        token,
+        empresaId,
+        payload: {
+          nombre: baselineName.trim() || "Línea base inicial",
+          descripcion: "Creada después de validar el plan operativo.",
+          es_principal: true,
+          confirm: true,
+          expected_readiness_token: baselineReadiness.readiness_token,
+          confirm_presupuesto_borrador: confirmDraftBudget,
+        },
+      });
+      setCreatedBaseline(created);
+      setBaselineDialogStep("success");
+      setBaselineList((current) => [created, ...current.filter((item) => item.id !== created?.id)]);
+      setSuccess("Línea base creada.");
+      notifyChanged();
+      await refreshBaselineList();
+    } catch (requestError) {
+      const message = getErrorMessage(requestError, "No se pudo crear la línea base.");
+      setBaselineDialogError(message);
+      if (message.includes("El plan cambió desde la última revisión")) {
+        setBaselineReadiness(null);
+        setBaselineDialogStep("review");
+      }
+    } finally {
+      setBaselineCreating(false);
+    }
+  }
+
+  function closeBaselineDialog() {
+    if (baselineCreating || baselineDialogLoading) return;
+    setBaselineDialogOpen(false);
   }
 
   function closeBudgetModal() {
@@ -1340,6 +1453,15 @@ export default function PMProjectBudgetTab({
               <span>{step.note}</span>
             </div>
             <StatusBadge tone={step.tone}>{step.statusLabel}</StatusBadge>
+            {step.key === "baseline" ? (
+              <ActionButton
+                disabled={baselineDialogLoading || baselineCreating || !budget || !hasGeneratedPlan}
+                onClick={activeBaseline ? onOpenBaseline : handleValidateBaseline}
+                type="button"
+              >
+                {activeBaseline ? "Ver línea base" : "Validar plan"}
+              </ActionButton>
+            ) : null}
           </article>
         ))}
       </section>
@@ -2214,6 +2336,116 @@ export default function PMProjectBudgetTab({
             </Field>
           </FormGrid>
         </form>
+      </ModalShell>
+
+      <ModalShell
+        footer={(
+          <div className="inventory-actions inventory-actions-wrap">
+            <ActionButton disabled={baselineCreating || baselineDialogLoading} onClick={closeBaselineDialog} type="button">
+              {baselineDialogStep === "success" ? "Cerrar" : "Cancelar"}
+            </ActionButton>
+            {baselineDialogStep === "review" && !baselineReadiness?.blocking_issues?.length ? (
+              <ActionButton
+                disabled={baselineDialogLoading || baselineCreating || !baselineReadiness?.ready || (baselineReadiness?.budget_context?.budget_status === "borrador" && !confirmDraftBudget)}
+                onClick={() => setBaselineDialogStep("confirm")}
+                tone="primary"
+                type="button"
+              >
+                Continuar
+              </ActionButton>
+            ) : null}
+            {baselineDialogStep === "review" && baselineReadiness?.blocking_issues?.length ? (
+              <ActionButton disabled={baselineCreating || baselineDialogLoading} onClick={() => {
+                closeBaselineDialog();
+                if (baselineReadiness.recommended_next_step === "configure_budget") return;
+                if (baselineReadiness.blocking_issues.some((issue) => issue.code === "open_alert")) {
+                  onOpenOverview?.();
+                  return;
+                }
+                onOpenWorkPlan?.();
+              }} type="button">
+                {baselineReadiness.recommended_next_step === "configure_budget"
+                  ? "Revisar presupuesto"
+                  : baselineReadiness.blocking_issues.some((issue) => issue.code === "open_alert")
+                    ? "Ir a Vista general"
+                    : "Ir a Plan de trabajo"}
+              </ActionButton>
+            ) : null}
+            {baselineDialogStep === "confirm" ? (
+              <ActionButton disabled={baselineCreating || !baselineReadiness?.readiness_token} onClick={handleCreateBaseline} tone="primary" type="button">
+                {baselineCreating ? "Creando..." : "Crear línea base"}
+              </ActionButton>
+            ) : null}
+            {baselineDialogStep === "success" && createdBaseline?.id ? (
+              <ActionButton disabled={baselineCreating} onClick={() => { closeBaselineDialog(); onOpenBaseline?.(); }} tone="primary" type="button">
+                Ver línea base
+              </ActionButton>
+            ) : null}
+          </div>
+        )}
+        onClose={closeBaselineDialog}
+        open={baselineDialogOpen}
+        size="large"
+        subtitle="Revisa que el cronograma y el presupuesto estén listos antes de congelar esta referencia."
+        title={baselineDialogStep === "success" ? "Línea base creada" : "Validación del plan"}
+      >
+        {baselineDialogError ? <div className="inventory-inline-error">{normalizePmCopy(baselineDialogError)}</div> : null}
+        {baselineDialogLoading ? <p className="table-note">Revisando tareas, fechas, vínculos y presupuesto...</p> : null}
+        {!baselineDialogLoading && baselineReadiness && baselineDialogStep !== "success" ? (
+          <div className="pm-baseline-readiness">
+            <div className="pm-baseline-readiness-summary">
+              <MetricCard label="Tareas" value={formatNumber(baselineReadiness.summary?.total_tasks ?? 0)} />
+              <MetricCard label="Sin fechas" value={formatNumber(baselineReadiness.summary?.tasks_without_dates ?? 0)} />
+              <MetricCard label="Sin responsable" value={formatNumber(baselineReadiness.summary?.tasks_without_responsible ?? 0)} />
+              <MetricCard label="Bloqueadas" value={formatNumber(baselineReadiness.summary?.blocked_tasks ?? 0)} />
+              <MetricCard label="Conflictos" value={formatNumber(baselineReadiness.summary?.dependency_conflicts ?? 0)} />
+              <MetricCard label="Alertas abiertas" value={formatNumber(baselineReadiness.summary?.open_alerts ?? 0)} />
+            </div>
+            <div className="pm-baseline-readiness-budget">
+              <strong>Presupuesto {safeDisplayText(baselineReadiness.budget_context?.budget_status, "no disponible")}</strong>
+              <span>Versión {baselineReadiness.budget_context?.budget_version ?? "—"}</span>
+              <span>Costo planificado: {baselineReadiness.budget_context?.planned_cost == null ? "—" : formatMoney(baselineReadiness.budget_context.planned_cost)}</span>
+              <span>Venta planificada: {baselineReadiness.budget_context?.planned_sale == null ? "—" : formatMoney(baselineReadiness.budget_context.planned_sale)}</span>
+            </div>
+            <p className="table-note">Ruta crítica: {formatNumber(baselineReadiness.critical_path?.length ?? 0)} tareas · Fuera de secuencia: {formatNumber(baselineReadiness.summary?.out_of_sequence ?? 0)}</p>
+            {baselineReadiness.blocking_issues?.length ? (
+              <section className="pm-baseline-readiness-issues is-blocking">
+                <h4>Bloqueos</h4>
+                <ul>{baselineReadiness.blocking_issues.map((issue, index) => <li key={`${issue.code}-${issue.reference_id ?? issue.task_id ?? index}`}>{safeDisplayText(issue.message)}</li>)}</ul>
+              </section>
+            ) : <div className="inventory-form-note inventory-form-note-success"><strong>Sin bloqueos</strong><p className="table-note">El plan puede pasar a confirmación de línea base.</p></div>}
+            {baselineReadiness.warnings?.length ? (
+              <section className="pm-baseline-readiness-issues is-warning">
+                <h4>Advertencias</h4>
+                <ul>{baselineReadiness.warnings.map((issue, index) => <li key={`${issue.code}-${issue.reference_id ?? issue.task_id ?? index}`}>{safeDisplayText(issue.message)}</li>)}</ul>
+              </section>
+            ) : null}
+            {baselineReadiness.budget_context?.budget_status === "borrador" ? (
+              <label className="inventory-checkbox pm-baseline-draft-confirm">
+                <input checked={confirmDraftBudget} onChange={(event) => setConfirmDraftBudget(event.target.checked)} type="checkbox" />
+                Entiendo que el presupuesto está en borrador.
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+        {!baselineDialogLoading && baselineDialogStep === "confirm" && baselineReadiness ? (
+          <div className="pm-baseline-confirmation">
+            <p>Crear la línea base congelará el estado actual del cronograma y presupuesto como referencia de control. Las tareas seguirán siendo editables, pero sus cambios se medirán contra esta línea base.</p>
+            <FormGrid columns={2}>
+              <Field label="Nombre de la línea base"><input onChange={(event) => setBaselineName(event.target.value)} value={baselineName} /></Field>
+              <Field label="Presupuesto / versión"><input readOnly value={`${safeDisplayText(baselineReadiness.budget_context?.budget_status)} · v${baselineReadiness.budget_context?.budget_version ?? "—"}`} /></Field>
+              <Field label="Tareas incluidas"><input readOnly value={formatNumber(baselineReadiness.summary?.total_tasks ?? 0)} /></Field>
+              <Field label="Costo planificado"><input readOnly value={baselineReadiness.budget_context?.planned_cost == null ? "—" : formatMoney(baselineReadiness.budget_context.planned_cost)} /></Field>
+            </FormGrid>
+            <p className="table-note">El snapshot se tomará al confirmar la creación.</p>
+          </div>
+        ) : null}
+        {baselineDialogStep === "success" && createdBaseline ? (
+          <div className="inventory-form-note inventory-form-note-success">
+            <strong>{safeDisplayText(createdBaseline.nombre, "Línea base")}</strong>
+            <p className="table-note">Versión {createdBaseline.version} · {safeDisplayText(createdBaseline.created_at)} · {formatNumber(createdBaseline.tasks?.length ?? baselineReadiness?.summary?.total_tasks ?? 0)} tareas incluidas · Presupuesto {safeDisplayText(baselineReadiness?.budget_context?.budget_status, "vigente")} v{baselineReadiness?.budget_context?.budget_version ?? "—"}.</p>
+          </div>
+        ) : null}
       </ModalShell>
 
       <ModalShell

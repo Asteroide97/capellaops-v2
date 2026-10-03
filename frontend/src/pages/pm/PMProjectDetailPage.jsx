@@ -53,6 +53,7 @@ import {
   updatePmTask,
 } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
+import { formatPmCalendarDate } from "./dateOnly";
 import {
   ActionButton,
   DataCard,
@@ -1687,11 +1688,11 @@ export default function PMProjectDetailPage() {
           </div>
           <div className="pm-project-header-item">
             <span>Inicio</span>
-            <strong>{safeDisplayText(formatDate(project.fecha_inicio), "—")}</strong>
+            <strong>{safeDisplayText(formatPmCalendarDate(project.fecha_inicio), "—")}</strong>
           </div>
           <div className="pm-project-header-item">
             <span>Fin planificada</span>
-            <strong>{safeDisplayText(formatDate(project.fecha_fin_planificada), "—")}</strong>
+            <strong>{safeDisplayText(formatPmCalendarDate(project.fecha_fin_planificada), "—")}</strong>
           </div>
           <div className="pm-project-header-item">
             <span>{hasDetailedBudget ? "Presupuesto detallado" : "Presupuesto de referencia"}</span>
@@ -1797,15 +1798,15 @@ export default function PMProjectDetailPage() {
               </div>
               <div>
                 <strong>Inicio</strong>
-                <span>{safeDisplayText(formatDate(project.fecha_inicio), "—")}</span>
+                <span>{safeDisplayText(formatPmCalendarDate(project.fecha_inicio), "—")}</span>
               </div>
               <div>
                 <strong>Fin planificada</strong>
-                <span>{safeDisplayText(formatDate(project.fecha_fin_planificada), "—")}</span>
+                <span>{safeDisplayText(formatPmCalendarDate(project.fecha_fin_planificada), "—")}</span>
               </div>
               <div>
                 <strong>Fin real</strong>
-                <span>{safeDisplayText(formatDate(project.fecha_fin_real), "—")}</span>
+                <span>{safeDisplayText(formatPmCalendarDate(project.fecha_fin_real), "—")}</span>
               </div>
               <div>
                 <strong>Presupuesto</strong>
@@ -1842,7 +1843,7 @@ export default function PMProjectDetailPage() {
                   <button className="pm-detail-list-item pm-detail-list-item-button" key={task.id} onClick={() => setSelectedTaskId(task.id)} type="button">
                     <div>
                       <strong>{safeDisplayText(task.titulo)}</strong>
-                      <span>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} · {safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</span>
+                      <span>{safeDisplayText(task.asignado_nombre_snapshot, "Sin responsable")} · {safeDisplayText(formatPmCalendarDate(task.fecha_vencimiento), "—")}</span>
                     </div>
                     <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                   </button>
@@ -1945,7 +1946,7 @@ export default function PMProjectDetailPage() {
                   <div className="pm-detail-list-item" key={entry.id}>
                     <div>
                       <strong>{safeDisplayText(entry.usuario_nombre_snapshot, "Registro manual")}</strong>
-                      <span>{safeDisplayText(formatDate(entry.fecha), "—")} · {safeDisplayText(entry.tarea_titulo, "Proyecto general")}</span>
+                      <span>{safeDisplayText(formatPmCalendarDate(entry.fecha), "—")} · {safeDisplayText(entry.tarea_titulo, "Proyecto general")}</span>
                     </div>
                     <strong>{formatMoney(entry.costo_total_snapshot)}</strong>
                   </div>
@@ -1975,6 +1976,7 @@ export default function PMProjectDetailPage() {
           onEditTask={openExistingTaskModal}
           onGanttNotice={handleGanttInteractionNotice}
           onInlineTaskUpdate={handleInlineTaskUpdate}
+          onOpenBudget={() => setActiveView("presupuesto")}
           onPreviewReschedule={(taskId, draft) =>
             openTaskDatesModal(taskId, "drag", {
               proposedStart: draft?.proposedStart ?? null,
@@ -2011,6 +2013,7 @@ export default function PMProjectDetailPage() {
           canEditChanges={canEditActiveProjectUi}
           canManage={canManagePmUi}
           onComparisonLoaded={setBaselineComparison}
+          onOpenBudget={() => setActiveView("presupuesto")}
           onOpenApprovals={() => setActiveView("aprobaciones")}
           onPlanningChanged={() => refreshPmWorkPlanLight({ background: true })}
           projectEditable={projectEditable}
@@ -2077,7 +2080,7 @@ export default function PMProjectDetailPage() {
                             <div className="pm-task-card-meta-grid">
                               <div>
                                 <span>Vence</span>
-                                <strong>{safeDisplayText(formatDate(task.fecha_vencimiento), "Sin fecha")}</strong>
+                                <strong>{safeDisplayText(formatPmCalendarDate(task.fecha_vencimiento), "Sin fecha")}</strong>
                               </div>
                               <div>
                                 <span>Avance</span>

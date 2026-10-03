@@ -2019,6 +2019,11 @@ export function listPmProjectBaselines({ projectId, token, empresaId }) {
 }
 
 
+export function getPmProjectBaselineReadiness({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/baseline-readiness`, { token, empresaId });
+}
+
+
 export function createPmProjectBaseline({ projectId, token, empresaId, payload }) {
   return apiRequest(`/pm/projects/${projectId}/baselines`, {
     method: "POST",
