@@ -55,6 +55,7 @@ from app.schemas.pm import (
     PMLineaBaseCreate,
     PMLineaBaseDetailOut,
     PMLineaBaseOut,
+    PMBaselineReadinessOut,
     PMPortalAccessLogOut,
     PMPortalCommentCreate,
     PMPortalCommentOut,
@@ -148,6 +149,7 @@ from app.services.pm import (
     create_task_dependency,
     create_external_invite,
     create_project_baseline,
+    get_project_baseline_readiness,
     create_budget_item,
     create_budget_item_prerequisite,
     create_project_estimation,
@@ -2704,6 +2706,15 @@ def list_project_baselines_endpoint(
     return list_project_baselines(db, pm_context, project_id=project_id)
 
 
+@router.get("/projects/{project_id}/baseline-readiness", response_model=PMBaselineReadinessOut)
+def get_project_baseline_readiness_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> PMBaselineReadinessOut:
+    return get_project_baseline_readiness(db, pm_context, project_id=project_id)
+
+
 @router.post("/projects/{project_id}/baselines", response_model=PMLineaBaseDetailOut, status_code=status.HTTP_201_CREATED)
 def create_project_baseline_endpoint(
     project_id: str,
@@ -2722,6 +2733,9 @@ def create_project_baseline_endpoint(
             nombre=payload.nombre,
             descripcion=payload.descripcion,
             es_principal=payload.es_principal,
+            confirm=payload.confirm,
+            expected_readiness_token=payload.expected_readiness_token,
+            confirm_presupuesto_borrador=payload.confirm_presupuesto_borrador,
             ip_address=request.client.host if request.client else None,
         ),
     )

@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import secrets
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi import HTTPException, UploadFile, status
@@ -58,6 +59,10 @@ from app.schemas.pm import (
     PMAlertOut,
     PMAlertResolveRequest,
     PMBaselineDeviationOut,
+    PMBaselineReadinessBudgetOut,
+    PMBaselineReadinessIssueOut,
+    PMBaselineReadinessOut,
+    PMBaselineReadinessSummaryOut,
     PMBaselineTaskComparisonOut,
     PMBaselineVsActualOut,
     PMBudgetPlanApplyItemOut,
@@ -12095,6 +12100,311 @@ def get_next_project_baseline_version(db: Session, *, empresa_id: str, project_i
     return int(current_max or 0) + 1
 
 
+def build_project_baseline_readiness_context(
+    db: Session,
+    *,
+    empresa_id: str,
+    project_id: str,
+) -> tuple[PMBaselineReadinessOut, dict]:
+    project = get_project_for_company(db, empresa_id, project_id)
+    tasks = list_project_tasks_for_planning(db, empresa_id=empresa_id, project_id=project_id)
+    task_by_id = {task.id: task for task in tasks}
+    budget = get_current_project_budget_row(db, empresa_id, project_id)
+    latest_budget = db.scalar(
+        select(PMPresupuesto)
+        .where(PMPresupuesto.empresa_id == empresa_id, PMPresupuesto.proyecto_id == project_id)
+        .order_by(desc(PMPresupuesto.version), desc(PMPresupuesto.created_at), desc(PMPresupuesto.id))
+    )
+    blocks: list[PMBaselineReadinessIssueOut] = []
+    warnings: list[PMBaselineReadinessIssueOut] = []
+
+    def add_block(code: str, message: str, task_id: str | None = None, reference_id: str | None = None) -> None:
+        blocks.append(PMBaselineReadinessIssueOut(code=code, message=message, task_id=task_id, reference_id=reference_id))
+
+    def add_warning(code: str, message: str, task_id: str | None = None, reference_id: str | None = None) -> None:
+        warnings.append(PMBaselineReadinessIssueOut(code=code, message=message, task_id=task_id, reference_id=reference_id))
+
+    if budget is None:
+        if latest_budget and str(latest_budget.estatus or "").lower() == "cancelado":
+            add_block("budget_cancelled", "El presupuesto detallado vigente está cancelado.", reference_id=latest_budget.id)
+        else:
+            add_block("budget_missing", "El proyecto necesita un presupuesto detallado vigente.")
+    elif budget.estatus == "borrador":
+        add_warning("budget_draft", "El presupuesto vigente está en borrador y requiere confirmación explícita.", reference_id=budget.id)
+
+    if not tasks:
+        add_block("tasks_missing", "Agrega tareas al plan antes de crear la línea base.")
+    tasks_without_dates = 0
+    tasks_without_responsible = 0
+    for task in tasks:
+        if not task.fecha_inicio or not task.fecha_vencimiento:
+            tasks_without_dates += 1
+            add_block("task_missing_dates", f"{task.titulo}: agrega fecha de inicio y fecha fin.", task.id)
+        if task.fecha_inicio and task.fecha_vencimiento and task.fecha_vencimiento < task.fecha_inicio:
+            add_block("task_invalid_dates", f"{task.titulo}: la fecha fin es anterior al inicio.", task.id)
+        if not task.asignado_user_id:
+            tasks_without_responsible += 1
+            add_warning("task_without_responsible", f"{task.titulo}: no tiene responsable asignado.", task.id)
+
+    raw_dependencies = db.scalars(
+        select(PMTareaDependencia)
+        .where(
+            PMTareaDependencia.empresa_id == empresa_id,
+            PMTareaDependencia.proyecto_id == project_id,
+            PMTareaDependencia.activo == True,
+        )
+        .order_by(PMTareaDependencia.created_at.asc(), PMTareaDependencia.id.asc())
+    ).all()
+    referenced_ids = {dep.tarea_id for dep in raw_dependencies} | {dep.depende_de_tarea_id for dep in raw_dependencies}
+    referenced_tasks = {
+        task.id: task for task in db.scalars(select(PMTarea).where(PMTarea.id.in_(referenced_ids))).all()
+    } if referenced_ids else {}
+    valid_dependencies: list[PMTareaDependenciaOut] = []
+    invalid_dependency_ids: list[str] = []
+    for dep in raw_dependencies:
+        successor = referenced_tasks.get(dep.tarea_id)
+        prerequisite = referenced_tasks.get(dep.depende_de_tarea_id)
+        valid = bool(
+            successor and prerequisite
+            and successor.empresa_id == empresa_id and prerequisite.empresa_id == empresa_id
+            and successor.proyecto_id == project_id and prerequisite.proyecto_id == project_id
+            and successor.activo and prerequisite.activo
+            and dep.tipo_dependencia in PM_TASK_DEPENDENCY_TYPES
+        )
+        if not valid:
+            invalid_dependency_ids.append(dep.id)
+            add_block("dependency_invalid", "Hay una dependencia inválida o ligada a otra tarea/proyecto.", dep.tarea_id, dep.id)
+            continue
+        valid_dependencies.append(PMTareaDependenciaOut(
+            id=dep.id,
+            empresa_id=dep.empresa_id,
+            proyecto_id=dep.proyecto_id,
+            tarea_id=dep.tarea_id,
+            tarea_titulo=successor.titulo,
+            depende_de_tarea_id=dep.depende_de_tarea_id,
+            depende_de_tarea_titulo=prerequisite.titulo,
+            depende_de_tarea_estatus=prerequisite.estatus,
+            tipo_dependencia=dep.tipo_dependencia,
+            lag_dias=int(dep.lag_dias or 0),
+            bloqueante=bool(dep.bloqueante),
+            notas=dep.notas,
+            activo=bool(dep.activo),
+            created_by=dep.created_by,
+            created_at=dep.created_at,
+            updated_at=dep.updated_at,
+        ))
+
+    critical_path = calculate_critical_path(
+        db, project_id=project_id, empresa_id=empresa_id, tasks=tasks, dependencies=valid_dependencies
+    )
+    if critical_path.has_cycle:
+        add_block("dependency_cycle", "Hay un ciclo de dependencias en el cronograma.")
+    dependency_states = calculate_task_dependency_state(
+        db, project_id=project_id, empresa_id=empresa_id, tasks=tasks, dependencies=valid_dependencies
+    )
+    blocked_tasks = sum(1 for state in dependency_states.values() if state.is_blocked)
+    suggestions = calculate_schedule_suggestions(
+        db,
+        project_id=project_id,
+        empresa_id=empresa_id,
+        tasks=tasks,
+        dependencies=valid_dependencies,
+        dependency_state_by_task_id=dependency_states,
+    )
+    out_of_sequence_ids = [task_id for task_id, item in suggestions.items() if item.fuera_de_secuencia]
+    for task_id in out_of_sequence_ids:
+        add_warning("task_out_of_sequence", suggestions[task_id].razon or "La tarea está fuera de secuencia.", task_id)
+
+    budget_items = db.scalars(
+        select(PMPresupuestoPartida)
+        .where(
+            PMPresupuestoPartida.empresa_id == empresa_id,
+            PMPresupuestoPartida.presupuesto_id == budget.id,
+            PMPresupuestoPartida.activo == True,
+        )
+        .order_by(PMPresupuestoPartida.orden.asc(), PMPresupuestoPartida.created_at.asc(), PMPresupuestoPartida.id.asc())
+    ).all() if budget else []
+    items_by_id = {item.id: item for item in budget_items}
+    chapters_by_id = {item.id: item for item in budget_items if item.tipo == "capitulo"}
+    links = db.scalars(
+        select(PMPresupuestoTaskLink)
+        .where(PMPresupuestoTaskLink.empresa_id == empresa_id, PMPresupuestoTaskLink.proyecto_id == project_id)
+        .order_by(PMPresupuestoTaskLink.created_at.asc(), PMPresupuestoTaskLink.id.asc())
+    ).all()
+    links_by_task = {link.tarea_id: link for link in links if link.tarea_id}
+    links_by_item = {link.source_partida_id: link for link in links if link.source_partida_id}
+    valid_generated_links: set[str] = set()
+    for link in links:
+        is_current = bool(budget and link.source_presupuesto_id == budget.id)
+        if link.sync_status == "conflict":
+            add_block("budget_link_conflict", "Hay vínculos del presupuesto con conflictos pendientes.", reference_id=link.id)
+        if not link.generated_from_budget:
+            continue
+        item = items_by_id.get(link.source_partida_id or "")
+        if not (
+            is_current and task_by_id.get(link.tarea_id or "") and item and item.tipo == "partida"
+            and link.sync_status == "linked" and item.lineage_id == link.lineage_id
+        ):
+            add_block("generated_task_link_invalid", "Una tarea generada desde presupuesto no tiene un vínculo vigente válido.", link.tarea_id, link.id)
+        else:
+            valid_generated_links.add(link.id)
+
+    if budget:
+        for item in budget_items:
+            if item.tipo == "capitulo":
+                if not item.fecha_inicio_sugerida or not item.fecha_fin_sugerida:
+                    add_warning("chapter_without_window", f"El capítulo {item.nombre} no tiene ventana objetivo.", reference_id=item.id)
+                continue
+            link = links_by_item.get(item.id)
+            if not link or link.id not in valid_generated_links or not link.tarea_id:
+                add_block("budget_part_without_task_link", f"La partida {item.nombre} no tiene una tarea operativa vinculada.", reference_id=item.id)
+                continue
+            task = task_by_id.get(link.tarea_id)
+            if not task:
+                add_block("generated_task_missing", f"La partida {item.nombre} no tiene una tarea activa válida.", reference_id=link.id)
+                continue
+            if decimal_or_zero(item.subtotal_costo) <= ZERO:
+                add_warning("task_without_estimated_cost", f"{task.titulo}: no tiene costo estimado asociado.", task.id, item.id)
+            chapter = chapters_by_id.get(item.parent_id or "")
+            if chapter and chapter.fecha_inicio_sugerida and task.fecha_inicio and task.fecha_inicio < chapter.fecha_inicio_sugerida:
+                add_warning("task_outside_chapter_window", f"{task.titulo} inicia antes de la ventana de {chapter.nombre}.", task.id, chapter.id)
+            if chapter and chapter.fecha_fin_sugerida and task.fecha_vencimiento and task.fecha_vencimiento > chapter.fecha_fin_sugerida:
+                add_warning("task_outside_chapter_window", f"{task.titulo} termina después de la ventana de {chapter.nombre}.", task.id, chapter.id)
+    for task in tasks:
+        if task.id not in links_by_task:
+            add_warning("manual_task_without_budget", f"{task.titulo}: tarea manual sin vínculo a presupuesto.", task.id)
+
+    alerts = db.scalars(
+        select(PMAlerta)
+        .where(
+            PMAlerta.empresa_id == empresa_id,
+            PMAlerta.proyecto_id == project_id,
+            PMAlerta.activa == True,
+            PMAlerta.estatus == "abierta",
+        )
+        .order_by(PMAlerta.created_at.asc(), PMAlerta.id.asc())
+    ).all()
+    for alert in alerts:
+        add_warning("open_alert", alert.titulo, alert.tarea_id, alert.id)
+    calendar = get_effective_work_calendar(db, empresa_id=empresa_id, project_id=project_id)
+
+    budget_payload = None
+    if budget:
+        budget_payload = {
+            "id": budget.id,
+            "version": int(budget.version or 0),
+            "status": budget.estatus,
+            "currency": budget.moneda,
+            "planned_cost": str(decimal_or_zero(budget.total_costo)),
+            "planned_sale": str(decimal_or_zero(budget.total_venta)),
+            "margin": str(decimal_or_zero(budget.margen_estimado)),
+            "updated_at": budget.updated_at.isoformat() if budget.updated_at else None,
+            "items": [{
+                "id": item.id, "lineage_id": item.lineage_id, "parent_id": item.parent_id,
+                "code": item.codigo, "name": item.nombre, "type": item.tipo,
+                "quantity": str(decimal_or_zero(item.cantidad)),
+                "cost": str(decimal_or_zero(item.subtotal_costo)),
+                "sale": str(decimal_or_zero(item.subtotal_venta)),
+                "start": item.fecha_inicio_sugerida.isoformat() if item.fecha_inicio_sugerida else None,
+                "end": item.fecha_fin_sugerida.isoformat() if item.fecha_fin_sugerida else None,
+                "updated_at": item.updated_at.isoformat() if item.updated_at else None,
+            } for item in budget_items],
+        }
+    source = {
+        "project_id": project.id,
+        "project": {
+            "name": project.nombre,
+            "status": project.estatus,
+            "start": project.fecha_inicio.isoformat() if project.fecha_inicio else None,
+            "planned_finish": project.fecha_fin_planificada.isoformat() if project.fecha_fin_planificada else None,
+            "progress": str(decimal_or_zero(project.porcentaje_avance)),
+        },
+        "tasks": [{
+            "id": task.id, "title": task.titulo,
+            "start": task.fecha_inicio.isoformat() if task.fecha_inicio else None,
+            "end": task.fecha_vencimiento.isoformat() if task.fecha_vencimiento else None,
+            "responsible_id": task.asignado_user_id, "responsible_name": task.asignado_nombre_snapshot,
+            "status": task.estatus, "progress": str(decimal_or_zero(task.porcentaje_avance)),
+            "hours": str(decimal_or_zero(task.estimacion_horas)), "order": int(task.orden or 0),
+            "blocked": bool(task.bloqueada), "updated_at": task.updated_at.isoformat() if task.updated_at else None,
+        } for task in tasks],
+        "dependencies": [{
+            "id": dep.id, "task_id": dep.tarea_id, "prerequisite_id": dep.depende_de_tarea_id,
+            "type": dep.tipo_dependencia, "lag": int(dep.lag_dias or 0),
+            "blocking": bool(dep.bloqueante), "updated_at": dep.updated_at.isoformat() if dep.updated_at else None,
+        } for dep in raw_dependencies],
+        "budget": budget_payload,
+        "links": [{
+            "id": link.id, "lineage_id": link.lineage_id, "task_id": link.tarea_id,
+            "budget_id": link.source_presupuesto_id, "item_id": link.source_partida_id,
+            "chapter_id": link.source_capitulo_id, "generated": bool(link.generated_from_budget),
+            "status": link.sync_status, "source_hash": link.source_hash,
+            "updated_at": link.updated_at.isoformat() if link.updated_at else None,
+        } for link in links],
+        "calendar": calendar.model_dump(mode="json"),
+        "alerts": [{"id": alert.id, "status": alert.estatus, "updated_at": alert.updated_at.isoformat() if alert.updated_at else None} for alert in alerts],
+    }
+    readiness_token = hashlib.sha256(json.dumps(source, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+    readiness = PMBaselineReadinessOut(
+        project_id=project.id,
+        ready=not blocks,
+        readiness_token=readiness_token,
+        blocking_issues=blocks,
+        warnings=warnings,
+        summary=PMBaselineReadinessSummaryOut(
+            total_tasks=len(tasks),
+            tasks_without_dates=tasks_without_dates,
+            tasks_without_responsible=tasks_without_responsible,
+            blocked_tasks=blocked_tasks,
+            dependency_conflicts=len(invalid_dependency_ids),
+            out_of_sequence=len(out_of_sequence_ids),
+            open_alerts=len(alerts),
+        ),
+        budget_context=PMBaselineReadinessBudgetOut(
+            budget_id=budget.id if budget else latest_budget.id if latest_budget else None,
+            budget_version=int(budget.version or 0) if budget else int(latest_budget.version or 0) if latest_budget else None,
+            budget_status=budget.estatus if budget else latest_budget.estatus if latest_budget else None,
+            planned_cost=decimal_or_zero(budget.total_costo) if budget else None,
+            planned_sale=decimal_or_zero(budget.total_venta) if budget else None,
+        ),
+        critical_path=[item.model_dump(mode="json") for item in critical_path.critical_path],
+        recommended_next_step=(
+            "configure_budget" if any(issue.code.startswith("budget_") for issue in blocks)
+            else "generate_plan" if not tasks
+            else "complete_schedule" if blocks
+            else "create_baseline"
+        ),
+    )
+    details = {
+        "project": project,
+        "tasks": tasks,
+        "dependencies": raw_dependencies,
+        "valid_dependencies": valid_dependencies,
+        "budget": budget,
+        "budget_items": budget_items,
+        "items_by_id": items_by_id,
+        "links": links,
+        "links_by_task": links_by_task,
+        "alerts": alerts,
+        "calendar": calendar,
+        "critical_path": critical_path,
+        "readiness_source": source,
+    }
+    return readiness, details
+
+
+def get_project_baseline_readiness(
+    db: Session,
+    pm_context: PMContext,
+    *,
+    project_id: str,
+) -> PMBaselineReadinessOut:
+    readiness, _details = build_project_baseline_readiness_context(
+        db, empresa_id=pm_context.empresa_id, project_id=project_id
+    )
+    return readiness
+
+
 def build_project_baseline_snapshot(
     db: Session,
     *,
@@ -12102,9 +12412,11 @@ def build_project_baseline_snapshot(
     tasks: list[PMTarea],
     project_costs,
     critical_path: PMCriticalPathOut,
+    budget_reference: dict | None = None,
+    operational_context: dict | None = None,
 ) -> dict:
     critical_ids = set(critical_path.critical_task_ids)
-    return {
+    snapshot = {
         "project": {
             "id": project.id,
             "nombre": project.nombre,
@@ -12142,6 +12454,11 @@ def build_project_baseline_snapshot(
             for task in tasks
         ],
     }
+    if budget_reference is not None:
+        snapshot["budget_reference"] = budget_reference
+    if operational_context is not None:
+        snapshot["operational"] = operational_context
+    return snapshot
 
 
 def create_project_baseline(
@@ -12152,41 +12469,146 @@ def create_project_baseline(
     nombre: str,
     descripcion: str | None,
     es_principal: bool,
+    confirm: bool,
+    expected_readiness_token: str,
+    confirm_presupuesto_borrador: bool,
     ip_address: str | None,
 ) -> PMLineaBaseDetailOut:
     ensure_pm_tasks_enabled(pm_context)
     ensure_pm_baseline_manage_access(pm_context)
-    project = get_project_for_company(db, pm_context.empresa_id, project_id)
+    readiness, details = build_project_baseline_readiness_context(
+        db,
+        empresa_id=pm_context.empresa_id,
+        project_id=project_id,
+    )
+    project = details["project"]
     ensure_project_is_operable(project)
-    tasks = list_project_tasks_for_planning(db, empresa_id=pm_context.empresa_id, project_id=project_id)
-    if not tasks:
+    if not confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirma la creación de la línea base.",
+        )
+    if expected_readiness_token != readiness.readiness_token:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Agrega al menos una tarea antes de crear la línea base del proyecto.",
+            detail="El plan cambió desde la última revisión. Actualiza la validación antes de crear la línea base.",
         )
-    dependencies = list_project_serialized_dependencies(db, empresa_id=pm_context.empresa_id, project_id=project_id)
-    project_costs = refresh_project_total_costs(db, empresa_id=pm_context.empresa_id, project_id=project_id)
-    critical_path = calculate_critical_path(
-        db,
-        project_id=project_id,
-        empresa_id=pm_context.empresa_id,
-        tasks=tasks,
-        dependencies=dependencies,
+    if readiness.blocking_issues:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El plan tiene bloqueos. Corrígelos y vuelve a validar antes de crear la línea base.",
+        )
+    budget = details["budget"]
+    if not budget:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="El proyecto necesita un presupuesto detallado vigente.")
+    if budget.estatus == "borrador" and not confirm_presupuesto_borrador:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Confirma que entiendes que el presupuesto está en borrador.",
+        )
+
+    # Repeated submissions with the same reviewed plan return the just-created baseline.
+    recent_baselines = db.scalars(
+        select(PMProyectoLineaBase)
+        .where(
+            PMProyectoLineaBase.empresa_id == pm_context.empresa_id,
+            PMProyectoLineaBase.proyecto_id == project_id,
+        )
+        .order_by(desc(PMProyectoLineaBase.created_at))
+        .limit(5)
+    ).all()
+    now = utcnow()
+    for existing in recent_baselines:
+        created_at = existing.created_at
+        if created_at and created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        if created_at and (now - created_at).total_seconds() <= 120:
+            existing_snapshot = json_loads_safe(existing.snapshot_json)
+            existing_token = (
+                existing_snapshot.get("readiness_token")
+                or (existing_snapshot.get("operational") or {}).get("readiness_token")
+            ) if isinstance(existing_snapshot, dict) else None
+            if existing_token == expected_readiness_token:
+                return serialize_baseline_detail(existing)
+
+    tasks = details["tasks"]
+    dependencies = details["dependencies"]
+    valid_dependencies = details["valid_dependencies"]
+    critical_path = details["critical_path"]
+    calendar = details["calendar"]
+    links_by_task = details["links_by_task"]
+    items_by_id = details["items_by_id"]
+    existing_costs = db.scalar(
+        select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.empresa_id == pm_context.empresa_id,
+            PMProyectoCostoResumen.proyecto_id == project_id,
+        )
+    )
+    planned_cost = decimal_or_zero(budget.total_costo)
+    planned_sale = decimal_or_zero(budget.total_venta)
+    project_costs = SimpleNamespace(
+        presupuesto_estimado=planned_cost,
+        presupuesto_detallado_costo=planned_cost,
+        presupuesto_detallado_venta=planned_sale,
+        costo_total_real=decimal_or_zero(existing_costs.costo_total_real if existing_costs else ZERO),
+        margen_estimado=decimal_or_zero(budget.margen_estimado),
     )
     next_version = get_next_project_baseline_version(db, empresa_id=pm_context.empresa_id, project_id=project_id)
     project_start, project_finish = get_effective_project_dates(project, tasks)
-    effective_budget = decimal_or_zero(project_costs.presupuesto_estimado or project.presupuesto_estimado)
-    detailed_cost = decimal_or_zero(project_costs.presupuesto_detallado_costo)
-    if detailed_cost <= 0:
-        detailed_cost = effective_budget
-    price_base = decimal_or_zero(project_costs.presupuesto_detallado_venta)
-    margin_base = decimal_or_zero(project_costs.margen_estimado)
+    detailed_cost = planned_cost
+    effective_budget = planned_cost
+    price_base = planned_sale
+    margin_base = decimal_or_zero(budget.margen_estimado)
+    budget_reference = {
+        "budget_id": budget.id,
+        "budget_version": int(budget.version or 0),
+        "budget_status": budget.estatus,
+        "currency": budget.moneda,
+        "planned_cost": str(planned_cost),
+        "planned_sale": str(planned_sale),
+        "created_at": now.isoformat(),
+    }
+    task_operational_snapshot = []
+    for task in tasks:
+        link = links_by_task.get(task.id)
+        source_item = items_by_id.get(link.source_partida_id or "") if link else None
+        task_operational_snapshot.append({
+            "task_id": task.id,
+            "title": task.titulo,
+            "start_date": task.fecha_inicio.isoformat() if task.fecha_inicio else None,
+            "end_date": task.fecha_vencimiento.isoformat() if task.fecha_vencimiento else None,
+            "responsible_user_id": task.asignado_user_id,
+            "responsible_name": task.asignado_nombre_snapshot,
+            "status": task.estatus,
+            "progress": str(decimal_or_zero(task.porcentaje_avance)),
+            "duration_days": calculate_span_days(task.fecha_inicio, task.fecha_vencimiento),
+            "planned_cost": str(decimal_or_zero(source_item.subtotal_costo)) if source_item else None,
+            "budget_id": link.source_presupuesto_id if link else None,
+            "budget_item_id": link.source_partida_id if link else None,
+            "budget_lineage_id": link.lineage_id if link else None,
+            "generated_from_budget": bool(link.generated_from_budget) if link else False,
+        })
+    operational_context = {
+        "readiness_token": expected_readiness_token,
+        "tasks": task_operational_snapshot,
+        "dependencies": [{
+            "id": dep.id,
+            "task_id": dep.tarea_id,
+            "prerequisite_task_id": dep.depende_de_tarea_id,
+            "type": dep.tipo_dependencia,
+            "lag_days": int(dep.lag_dias or 0),
+            "blocking": bool(dep.bloqueante),
+        } for dep in dependencies],
+        "calendar": calendar.model_dump(mode="json"),
+    }
     snapshot = build_project_baseline_snapshot(
         db,
         project=project,
         tasks=tasks,
         project_costs=project_costs,
         critical_path=critical_path,
+        budget_reference=budget_reference,
+        operational_context=operational_context,
     )
     baseline = PMProyectoLineaBase(
         empresa_id=pm_context.empresa_id,

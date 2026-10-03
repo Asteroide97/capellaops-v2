@@ -534,6 +534,46 @@ class PMLineaBaseCreate(BaseModel):
     nombre: str = Field(min_length=1, max_length=180)
     descripcion: str | None = Field(default=None, max_length=4000)
     es_principal: bool = True
+    confirm: bool
+    expected_readiness_token: str = Field(min_length=32, max_length=64)
+    confirm_presupuesto_borrador: bool = False
+
+
+class PMBaselineReadinessIssueOut(BaseModel):
+    code: str
+    message: str
+    task_id: str | None = None
+    reference_id: str | None = None
+
+
+class PMBaselineReadinessSummaryOut(BaseModel):
+    total_tasks: int = 0
+    tasks_without_dates: int = 0
+    tasks_without_responsible: int = 0
+    blocked_tasks: int = 0
+    dependency_conflicts: int = 0
+    out_of_sequence: int = 0
+    open_alerts: int = 0
+
+
+class PMBaselineReadinessBudgetOut(BaseModel):
+    budget_id: str | None = None
+    budget_version: int | None = None
+    budget_status: str | None = None
+    planned_cost: Decimal | None = None
+    planned_sale: Decimal | None = None
+
+
+class PMBaselineReadinessOut(BaseModel):
+    project_id: str
+    ready: bool
+    readiness_token: str
+    blocking_issues: list[PMBaselineReadinessIssueOut] = Field(default_factory=list)
+    warnings: list[PMBaselineReadinessIssueOut] = Field(default_factory=list)
+    summary: PMBaselineReadinessSummaryOut = Field(default_factory=PMBaselineReadinessSummaryOut)
+    budget_context: PMBaselineReadinessBudgetOut = Field(default_factory=PMBaselineReadinessBudgetOut)
+    critical_path: list[dict] = Field(default_factory=list)
+    recommended_next_step: str
 
 
 class PMLineaBaseTareaOut(BaseModel):
