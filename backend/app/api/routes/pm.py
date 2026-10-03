@@ -1,8 +1,11 @@
 import logging
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Callable, TypeVar
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -181,6 +184,7 @@ from app.services.pm import (
     deactivate_estimation_detail,
     dismiss_pm_alert,
     get_pm_context,
+    ensure_pm_budget_manage_access,
     get_pm_dashboard,
     get_pm_executive_report,
     get_simple_pm_summary,
@@ -271,7 +275,40 @@ from app.services.pm import (
 )
 from app.services.documents_pdf import build_pm_estimation_pdf, build_pm_simple_progress_report_pdf
 from app.schemas.procurement import RequisitionListResponse, RequisitionResponse
-from app.services.storage import StorageConfigurationError
+from app.services.storage import (
+    StorageBlobNotFoundError,
+    StorageConfigurationError,
+    StorageOperationError,
+    delete_pm_blob,
+    read_pm_blob,
+    restore_pm_blob,
+    upload_private_pm_import_file,
+)
+from app.services.storage import upload_pm_evidence_image
+from app.services.pm_excel_import import (
+    add_import_row,
+    bulk_add_budget_items,
+    cancel_import,
+    confirm_import,
+    create_estimation_evidence,
+    create_import_session,
+    create_staged_evidence,
+    deactivate_estimation_evidence,
+    get_estimation_evidence_for_delete,
+    get_pm_evidence_for_download,
+    get_import_session,
+    list_estimation_evidences,
+    serialize_import_session,
+    serialize_import_session_summary,
+    update_estimation_evidence,
+    update_staged_evidence,
+    update_import_mapping,
+    update_import_details,
+    update_import_row,
+    validate_staged_evidence_target,
+)
+from app.models.pm_imports import PMEstimacionEvidencia, PMExcelImportSession
+from app.services.pm_excel_parser import MAX_XLSX_BYTES, XLSX_CONTENT_TYPE
 
 
 router = APIRouter(prefix="/pm", tags=["pm"])
@@ -301,6 +338,32 @@ def run_pm_write(db: Session, action: str, operation: Callable[[], T]) -> T:
             status_code=status.HTTP_409_CONFLICT,
             detail="No se pudo completar la operacion de PM.",
         ) from exc
+
+
+def _restore_deleted_blobs(deleted: list[tuple[str, bool, bytes, str]]) -> None:
+    for blob_path, private, data, content_type in reversed(deleted):
+        try:
+            restore_pm_blob(blob_path=blob_path, private=private, data=data, content_type=content_type)
+        except Exception:
+            logger.exception("No se pudo compensar la eliminación de un archivo PM.")
+
+
+def _delete_blobs_with_compensation(blobs: list[tuple[str, bool, str]]) -> list[tuple[str, bool, bytes, str]]:
+    deleted: list[tuple[str, bool, bytes, str]] = []
+    seen: set[tuple[str, bool]] = set()
+    try:
+        for blob_path, private, content_type in blobs:
+            key = (blob_path, private)
+            if not blob_path or key in seen:
+                continue
+            seen.add(key)
+            existed, backup = delete_pm_blob(blob_path=blob_path, private=private)
+            if existed and backup is not None:
+                deleted.append((blob_path, private, backup, content_type))
+        return deleted
+    except Exception:
+        _restore_deleted_blobs(deleted)
+        raise
     except SQLAlchemyError as exc:
         db.rollback()
         logger.exception("Error de base de datos en PM durante %s.", action)
@@ -310,6 +373,454 @@ def run_pm_write(db: Session, action: str, operation: Callable[[], T]) -> T:
         ) from exc
 
 
+@router.post("/projects/{project_id}/budget-imports", status_code=status.HTTP_201_CREATED)
+async def create_budget_import_endpoint(
+    project_id: str,
+    file: UploadFile = File(...),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    uploaded_blob_path: str | None = None
+    try:
+        content = await file.read(MAX_XLSX_BYTES + 1)
+        if len(content) > MAX_XLSX_BYTES:
+            raise HTTPException(status_code=400, detail="El archivo excede el límite de 15 MB.")
+        filename = (file.filename or "presupuesto.xlsx").replace("\\", "/").split("/")[-1]
+        filename = "".join(character for character in filename if character >= " " and character != "\x7f")[:255] or "presupuesto.xlsx"
+        content_type = (file.content_type or "").strip().lower()
+        result = create_import_session(db, pm_context, project_id, filename, content, content_type)
+        session = db.scalar(select(PMExcelImportSession).where(
+            PMExcelImportSession.id == result["id"],
+            PMExcelImportSession.empresa_id == pm_context.empresa_id,
+        ))
+        if not session:
+            raise HTTPException(status_code=500, detail="No se pudo guardar la revisión del archivo.")
+        uploaded_blob_path = upload_private_pm_import_file(
+            empresa_id=pm_context.empresa_id,
+            project_id=project_id,
+            session_id=session.id,
+            data=content,
+            filename=filename,
+            content_type=XLSX_CONTENT_TYPE,
+        )
+        session.original_file_reference = uploaded_blob_path
+        session.original_file_size = len(content)
+        session.original_file_content_type = XLSX_CONTENT_TYPE
+        session.uploaded_at = datetime.now(timezone.utc)
+        result = serialize_import_session(db, session)
+        db.commit()
+        return result
+    except HTTPException:
+        db.rollback()
+        if uploaded_blob_path:
+            try:
+                delete_pm_blob(blob_path=uploaded_blob_path, private=True)
+            except Exception:
+                logger.exception("No se pudo limpiar el archivo de origen tras cancelar el alta de importación.")
+        raise
+    except StorageConfigurationError as exc:
+        db.rollback()
+        if uploaded_blob_path:
+            try:
+                delete_pm_blob(blob_path=uploaded_blob_path, private=True)
+            except Exception:
+                logger.exception("No se pudo limpiar el archivo de origen tras un error de almacenamiento.")
+        raise HTTPException(status_code=503, detail="El almacenamiento privado de documentos no está configurado.") from exc
+    except StorageOperationError as exc:
+        db.rollback()
+        if uploaded_blob_path:
+            try:
+                delete_pm_blob(blob_path=uploaded_blob_path, private=True)
+            except Exception:
+                logger.exception("No se pudo limpiar el archivo de origen tras un error de almacenamiento.")
+        raise HTTPException(status_code=503, detail="No se pudo guardar el archivo de origen.") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        if uploaded_blob_path:
+            try:
+                delete_pm_blob(blob_path=uploaded_blob_path, private=True)
+            except Exception:
+                logger.exception("No se pudo limpiar el archivo de origen tras un error de base de datos.")
+        logger.exception("Error de base de datos durante staging de Excel PM.")
+        raise HTTPException(status_code=500, detail="No se pudo guardar la revisión del archivo.") from exc
+    finally:
+        await file.close()
+
+
+@router.get("/projects/{project_id}/budget-imports")
+def list_budget_imports_endpoint(
+    project_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    sessions = db.scalars(select(PMExcelImportSession).where(
+        PMExcelImportSession.empresa_id == pm_context.empresa_id,
+        PMExcelImportSession.proyecto_id == project_id,
+    ).order_by(PMExcelImportSession.created_at.desc())).all()
+    return [serialize_import_session_summary(session) for session in sessions]
+
+
+@router.get("/projects/{project_id}/budget-imports/{session_id}")
+def get_budget_import_endpoint(
+    project_id: str,
+    session_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    result = get_import_session(db, pm_context, session_id)
+    if result["proyecto_id"] != project_id:
+        raise HTTPException(status_code=404, detail="Importación no encontrada.")
+    return result
+
+
+@router.get("/projects/{project_id}/budget-imports/{session_id}/source-file")
+def download_budget_import_source_endpoint(
+    project_id: str,
+    session_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> Response:
+    get_project_for_company(db, pm_context.empresa_id, project_id)
+    session = db.scalar(select(PMExcelImportSession).where(
+        PMExcelImportSession.id == session_id,
+        PMExcelImportSession.proyecto_id == project_id,
+        PMExcelImportSession.empresa_id == pm_context.empresa_id,
+    ))
+    if not session:
+        raise HTTPException(status_code=404, detail="Importación no encontrada.")
+    if not session.original_file_reference or session.status == "cancelled":
+        raise HTTPException(status_code=404, detail="El archivo de origen ya no está disponible.")
+    try:
+        content = read_pm_blob(blob_path=session.original_file_reference, private=True)
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="El almacenamiento privado de documentos no está configurado.") from exc
+    except StorageOperationError as exc:
+        logger.exception("No se pudo recuperar el archivo de origen de importación.")
+        raise HTTPException(status_code=503, detail="No se pudo recuperar el archivo de origen.") from exc
+    filename = (session.filename or "presupuesto.xlsx").replace("\\", "/").split("/")[-1].replace('"', "")
+    return Response(
+        content=content,
+        media_type=session.original_file_content_type or XLSX_CONTENT_TYPE,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.put("/budget-imports/{session_id}/mapping")
+def update_budget_import_mapping_endpoint(
+    session_id: str,
+    payload: dict,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    return run_pm_write(db, "pm_excel_import_mapping", lambda: update_import_mapping(
+        db, pm_context, session_id, selected_sheet=str(payload.get("selected_sheet") or ""),
+        mapping=payload.get("mapping") if isinstance(payload.get("mapping"), dict) else {},
+    ))
+
+
+@router.put("/budget-imports/{session_id}/details")
+def update_budget_import_details_endpoint(
+    session_id: str,
+    payload: dict,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    return run_pm_write(db, "pm_excel_import_details", lambda: update_import_details(db, pm_context, session_id, payload))
+
+
+@router.put("/budget-imports/{session_id}/rows/{row_id}")
+def update_budget_import_row_endpoint(
+    session_id: str,
+    row_id: str,
+    payload: dict,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    return run_pm_write(db, "pm_excel_import_row_update", lambda: update_import_row(db, pm_context, session_id, row_id, payload))
+
+
+@router.post("/budget-imports/{session_id}/rows", status_code=status.HTTP_201_CREATED)
+def add_budget_import_row_endpoint(
+    session_id: str,
+    payload: dict,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    return run_pm_write(db, "pm_excel_import_row_add", lambda: add_import_row(db, pm_context, session_id, payload))
+
+
+@router.post("/budget-imports/{session_id}/confirm")
+def confirm_budget_import_endpoint(
+    session_id: str,
+    payload: dict,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    return run_pm_write(db, "pm_excel_import_confirm", lambda: confirm_import(
+        db, pm_context, session_id, warnings_acknowledged=bool(payload.get("warnings_acknowledged")),
+    ))
+
+
+@router.post("/budget-imports/{session_id}/cancel")
+def cancel_budget_import_endpoint(
+    session_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    ensure_pm_budget_manage_access(pm_context)
+    session = db.scalar(select(PMExcelImportSession).where(
+        PMExcelImportSession.id == session_id,
+        PMExcelImportSession.empresa_id == pm_context.empresa_id,
+    ))
+    if not session:
+        raise HTTPException(status_code=404, detail="Importación no encontrada.")
+    if session.status == "imported":
+        raise HTTPException(status_code=409, detail="La importación confirmada no se puede cancelar.")
+    if session.status == "cancelled":
+        return serialize_import_session(db, session)
+    blobs: list[tuple[str, bool, str]] = []
+    if session.original_file_reference:
+        shared_original = db.scalar(select(func.count(PMExcelImportSession.id)).where(
+            PMExcelImportSession.original_file_reference == session.original_file_reference,
+            PMExcelImportSession.id != session.id,
+        )) or 0
+        if not shared_original:
+            blobs.append((session.original_file_reference, True, session.original_file_content_type or XLSX_CONTENT_TYPE))
+    staged_evidences = db.scalars(select(PMEstimacionEvidencia).where(
+        PMEstimacionEvidencia.empresa_id == pm_context.empresa_id,
+        PMEstimacionEvidencia.import_session_id == session.id,
+        PMEstimacionEvidencia.activo == True,
+    )).all()
+    for evidence in staged_evidences:
+        if not evidence.blob_path:
+            continue
+        shared = db.scalar(select(func.count(PMEstimacionEvidencia.id)).where(
+            PMEstimacionEvidencia.blob_path == evidence.blob_path,
+            PMEstimacionEvidencia.id != evidence.id,
+        )) or 0
+        if not shared:
+            blobs.append((evidence.blob_path, False, evidence.mime_type or "application/octet-stream"))
+    deleted: list[tuple[str, bool, bytes, str]] = []
+    try:
+        deleted = _delete_blobs_with_compensation(blobs)
+        result = cancel_import(db, pm_context, session_id)
+        db.commit()
+        return result
+    except HTTPException:
+        db.rollback()
+        _restore_deleted_blobs(deleted)
+        raise
+    except (StorageConfigurationError, StorageOperationError) as exc:
+        db.rollback()
+        _restore_deleted_blobs(deleted)
+        raise HTTPException(status_code=503, detail="No se pudieron limpiar los documentos de la revisión.") from exc
+    except Exception as exc:
+        db.rollback()
+        _restore_deleted_blobs(deleted)
+        logger.exception("No se pudo cancelar la revisión del presupuesto.")
+        raise HTTPException(status_code=500, detail="No se pudo cancelar la revisión del presupuesto.") from exc
+
+
+@router.post("/projects/{project_id}/budget-imports/{session_id}/evidences", status_code=status.HTTP_201_CREATED)
+async def upload_staged_evidence_endpoint(
+    project_id: str,
+    session_id: str,
+    file: UploadFile = File(...),
+    source_row: int | None = Form(None),
+    descripcion: str | None = Form(None),
+    ubicacion: str | None = Form(None),
+    fecha_evidencia: str | None = Form(None),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    upload = None
+
+    def cleanup_uploaded_blob() -> None:
+        if upload and upload.blob_path:
+            try:
+                delete_pm_blob(blob_path=upload.blob_path, private=False)
+            except Exception:
+                logger.exception("No se pudo limpiar una fotografía tras fallar su registro.")
+
+    try:
+        validate_staged_evidence_target(db, pm_context, project_id=project_id, session_id=session_id, source_row=source_row)
+        upload = await upload_pm_evidence_image(file, pm_context.empresa_id, project_id)
+        result = create_staged_evidence(db, pm_context, project_id=project_id, session_id=session_id,
+            upload=upload, source_row=source_row, description=descripcion, location=ubicacion, evidence_date=fecha_evidencia)
+        db.commit()
+        return result
+    except HTTPException:
+        db.rollback()
+        cleanup_uploaded_blob()
+        raise
+    except StorageConfigurationError as exc:
+        db.rollback()
+        cleanup_uploaded_blob()
+        raise HTTPException(status_code=503, detail="El almacenamiento de documentos no está configurado.") from exc
+    except StorageOperationError as exc:
+        db.rollback()
+        cleanup_uploaded_blob()
+        logger.exception("No se pudo completar el registro de la fotografía de revisión.")
+        raise HTTPException(status_code=503, detail="No se pudo guardar la fotografía.") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        cleanup_uploaded_blob()
+        logger.exception("Error al guardar evidencia en revisión de presupuesto.")
+        raise HTTPException(status_code=500, detail="No se pudo guardar la fotografía.") from exc
+    except Exception as exc:
+        db.rollback()
+        cleanup_uploaded_blob()
+        logger.exception("Error inesperado al guardar evidencia en revisión de presupuesto.")
+        raise HTTPException(status_code=500, detail="No se pudo guardar la fotografía.") from exc
+    finally:
+        await file.close()
+
+
+@router.put("/projects/{project_id}/budget-imports/{session_id}/evidences/{evidence_id}")
+def update_staged_evidence_endpoint(
+    project_id: str,
+    session_id: str,
+    evidence_id: str,
+    payload: dict,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    return run_pm_write(db, "pm_excel_import_evidence_update", lambda: update_staged_evidence(
+        db, pm_context, project_id=project_id, session_id=session_id, evidence_id=evidence_id, payload=payload,
+    ))
+
+
+@router.get("/evidences/{evidence_id}/download")
+def download_pm_evidence_endpoint(
+    evidence_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> StreamingResponse:
+    evidence = get_pm_evidence_for_download(db, pm_context, evidence_id)
+    content_type = (evidence.mime_type or "").strip().lower()
+    if content_type not in {"image/jpeg", "image/png"}:
+        raise HTTPException(status_code=404, detail="Evidencia no encontrada.")
+    try:
+        content = read_pm_blob(blob_path=evidence.blob_path, private=False, require_private_access=True)
+    except StorageBlobNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="El archivo de evidencia ya no está disponible.") from exc
+    except StorageConfigurationError as exc:
+        raise HTTPException(status_code=503, detail="El almacenamiento de documentos no está configurado.") from exc
+    except StorageOperationError as exc:
+        logger.exception("No se pudo recuperar evidencia PM.")
+        raise HTTPException(status_code=503, detail="No se pudo recuperar la fotografía.") from exc
+
+    raw_filename = (evidence.nombre_archivo or "evidencia").replace("\\", "/").split("/")[-1]
+    filename = "".join(character for character in raw_filename if ord(character) >= 32 and ord(character) != 127)
+    filename = filename.replace('"', "").strip()[:255] or "evidencia"
+    fallback_filename = "".join(
+        character if character.isascii() and (character.isalnum() or character in "._-") else "_"
+        for character in filename
+    ) or "evidencia"
+    return StreamingResponse(
+        iter((content,)),
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{fallback_filename}"; filename*=UTF-8\'\'{quote(filename)}',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.get("/estimations/{estimation_id}/evidences")
+def list_estimation_evidences_endpoint(
+    estimation_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> list[dict]:
+    return list_estimation_evidences(db, pm_context, estimation_id)
+
+
+@router.post("/estimations/{estimation_id}/evidences", status_code=status.HTTP_201_CREATED)
+async def upload_estimation_evidence_endpoint(
+    estimation_id: str,
+    file: UploadFile = File(...),
+    descripcion: str | None = Form(None),
+    ubicacion: str | None = Form(None),
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    try:
+        from app.models.pm import PMEstimacion
+        estimation = db.scalar(select(PMEstimacion).where(PMEstimacion.id == estimation_id, PMEstimacion.empresa_id == pm_context.empresa_id))
+        if not estimation:
+            raise HTTPException(status_code=404, detail="Estimación no encontrada.")
+        ensure_pm_budget_manage_access(pm_context)
+        if estimation.estatus != "borrador":
+            raise HTTPException(status_code=409, detail="Solo puedes agregar evidencias a una estimación en borrador.")
+        upload = await upload_pm_evidence_image(file, pm_context.empresa_id, estimation.proyecto_id)
+        result = create_estimation_evidence(db, pm_context, estimation_id=estimation_id, upload=upload, description=descripcion, location=ubicacion)
+        db.commit()
+        return result
+    except HTTPException:
+        db.rollback()
+        raise
+    except StorageConfigurationError as exc:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="El almacenamiento de documentos no está configurado.") from exc
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.exception("Error al guardar evidencia de estimación.")
+        raise HTTPException(status_code=500, detail="No se pudo guardar la fotografía.") from exc
+    finally:
+        await file.close()
+
+
+@router.put("/estimations/evidences/{evidence_id}")
+def update_estimation_evidence_endpoint(
+    evidence_id: str,
+    payload: dict,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    return run_pm_write(db, "pm_estimation_evidence_update", lambda: update_estimation_evidence(db, pm_context, evidence_id, payload))
+
+
+@router.delete("/estimations/evidences/{evidence_id}")
+def deactivate_estimation_evidence_endpoint(
+    evidence_id: str,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    evidence = get_estimation_evidence_for_delete(db, pm_context, evidence_id)
+    blob_path = evidence.blob_path
+    shared = 0
+    if blob_path:
+        shared = db.scalar(select(func.count(PMEstimacionEvidencia.id)).where(
+            PMEstimacionEvidencia.blob_path == blob_path,
+            PMEstimacionEvidencia.id != evidence.id,
+        )) or 0
+    deleted: list[tuple[str, bool, bytes, str]] = []
+    try:
+        if blob_path and not shared:
+            deleted = _delete_blobs_with_compensation([(blob_path, False, evidence.mime_type or "application/octet-stream")])
+        result = deactivate_estimation_evidence(db, pm_context, evidence_id)
+        db.commit()
+        return result
+    except HTTPException:
+        db.rollback()
+        _restore_deleted_blobs(deleted)
+        raise
+    except (StorageConfigurationError, StorageOperationError) as exc:
+        db.rollback()
+        _restore_deleted_blobs(deleted)
+        raise HTTPException(status_code=503, detail="No se pudo eliminar la fotografía.") from exc
+    except Exception as exc:
+        db.rollback()
+        _restore_deleted_blobs(deleted)
+        logger.exception("No se pudo eliminar evidencia PM.")
+        raise HTTPException(status_code=500, detail="No se pudo eliminar la fotografía.") from exc
 def build_portal_url(request: Request, token: str) -> str:
     settings = get_settings()
     frontend_origin = settings.public_frontend_origin or str(request.headers.get("origin") or "").strip().rstrip("/")
@@ -843,6 +1354,20 @@ def get_project_budget_endpoint(
     db: Session = Depends(get_db),
 ) -> PMProjectBudgetBundleOut:
     return get_project_budget(db, pm_context, project_id)
+
+
+@router.post("/budgets/{budget_id}/items/bulk")
+def bulk_create_budget_items_endpoint(
+    budget_id: str,
+    payload: dict,
+    request: Request,
+    pm_context: PMContext = Depends(get_pm_route_context),
+    db: Session = Depends(get_db),
+) -> dict:
+    items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    return run_pm_write(db, "pm_budget_items_bulk_paste", lambda: bulk_add_budget_items(
+        db, pm_context, budget_id, items, ip_address=request.client.host if request.client else None,
+    ))
 
 
 @router.post("/projects/{project_id}/budget", response_model=PMPresupuestoOut, status_code=status.HTTP_201_CREATED)

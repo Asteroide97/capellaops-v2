@@ -819,6 +819,16 @@ Inventario Fase 2 - Alertas, reportes y bajo stock operativo.
 - Gantt editable
 - Cualquier funcionalidad de mantenimiento
 
+## Importación de presupuesto PM desde Excel
+
+- La importación crea una revisión editable por proyecto; confirma un presupuesto en borrador y una estimación en borrador, sin crear tareas ni línea base.
+- El archivo original es un documento de origen: el presupuesto confirmado es la fuente operativa y el Excel no se vuelve a procesar automáticamente.
+- Las revisiones se guardan por sesión. Los mappings reutilizables por empresa y formato quedan pendientes.
+- El XLSX original se guarda fuera de SQL en un contenedor privado. Configurar `AZURE_STORAGE_PRIVATE_CONTAINER` con un contenedor distinto al de archivos públicos y con acceso público deshabilitado.
+- La descarga se hace mediante una ruta autenticada y aislada por empresa/proyecto. Al cancelar antes de confirmar, se elimina el archivo original y el staging editable; se conservan el hash, nombre y registro mínimo de auditoría.
+- Límites actuales: 15 MiB por archivo, 40 hojas, 5,000 filas totales, 100 columnas y 4,000 caracteres por celda. Se aceptan archivos XLSX sin macros; no se ejecutan fórmulas.
+- Si el presupuesto del proyecto ya tiene partidas detalladas, la importación se bloquea; no hace merge ni reemplazo silencioso.
+
 ## PM UX tipo Project Workspace
 
 - El detalle de proyecto en `/pm/projects/:id` ya opera como un workspace de proyecto más denso y menos fragmentado.

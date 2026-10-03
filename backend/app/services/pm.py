@@ -667,6 +667,11 @@ def quantize_rate(value: Decimal) -> Decimal:
     return decimal_or_zero(value).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
 
 
+def calculate_budget_sale_amount(quantity: Decimal, unit_price: Decimal) -> Decimal:
+    """Use persisted PM precision, then round each line before summation."""
+    return quantize_money(quantize_rate(quantity) * quantize_rate(unit_price))
+
+
 def hash_portal_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -8892,7 +8897,7 @@ def refresh_budget_item_totals(db: Session, item: PMPresupuestoPartida) -> PMPre
     item.costo_unitario = quantize_rate(unit_cost)
     item.precio_unitario = quantize_rate(price_unit)
     item.subtotal_costo = quantize_money(quantity * decimal_or_zero(item.costo_unitario))
-    item.subtotal_venta = quantize_money(quantity * decimal_or_zero(item.precio_unitario))
+    item.subtotal_venta = calculate_budget_sale_amount(quantity, decimal_or_zero(item.precio_unitario))
     return item
 
 

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     azure_sql_driver: str = Field(default="ODBC Driver 18 for SQL Server", alias="AZURE_SQL_DRIVER")
     azure_storage_connection_string: str | None = Field(default=None, alias="AZURE_STORAGE_CONNECTION_STRING")
     azure_storage_container: str | None = Field(default=None, alias="AZURE_STORAGE_CONTAINER")
+    azure_storage_private_container: str | None = Field(default=None, alias="AZURE_STORAGE_PRIVATE_CONTAINER")
     azure_storage_public_base_url: str | None = Field(default=None, alias="AZURE_STORAGE_PUBLIC_BASE_URL")
     twilio_account_sid: str | None = Field(default=None, alias="TWILIO_ACCOUNT_SID")
     twilio_auth_token: str | None = Field(default=None, alias="TWILIO_AUTH_TOKEN")

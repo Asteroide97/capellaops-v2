@@ -48,6 +48,7 @@ from app.models.pm import (
     PMTarea,
     PMTimeEntry,
 )
+from app.models.pm_imports import PMEstimacionEvidencia, PMExcelImportRow, PMExcelImportSession
 from app.models.procurement import (
     OrdenCompra,
     OrdenCompraDetalle,
@@ -86,8 +87,11 @@ __all__ = [
     "PMChecklistItem",
     "PMComentario",
     "PMDocumento",
+    "PMEstimacionEvidencia",
     "PMEstimacion",
     "PMEstimacionDetalle",
+    "PMExcelImportRow",
+    "PMExcelImportSession",
     "PMInvitadoExterno",
     "PMPortalAccessLog",
     "PMPresupuesto",
