@@ -4,6 +4,7 @@ import {
   CheckCheck,
   Eye,
   FileDown,
+  ImagePlus,
   Pencil,
   Plus,
   RefreshCw,
@@ -19,17 +20,21 @@ import {
   createPmProjectEstimation,
   deactivatePmEstimationDetail,
   downloadPmEstimationPdf,
+  deletePmEstimationEvidence,
   getPmEstimation,
   getPmProjectBudget,
   getPmProjectEstimationsSummary,
   listPmProjectChanges,
   listPmProjectEstimationCandidates,
   listPmProjectEstimations,
+  listPmEstimationEvidences,
   markPmEstimationCollected,
   markPmEstimationSent,
   rejectPmEstimation,
   returnPmEstimationToDraft,
   submitPmEstimation,
+  updatePmEstimationEvidence,
+  uploadPmEstimationEvidence,
   updatePmEstimation,
   updatePmEstimationDetail,
 } from "../../api/client";
@@ -48,12 +53,14 @@ import {
   formatNumber,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import {
   formatPercent,
   getEstimationStatusLabel,
   getEstimationStatusTone,
   normalizePmCopy,
 } from "./shared";
+import PMEvidencePreview from "./PMEvidencePreview";
 
 const defaultEstimationForm = {
   id: null,
@@ -100,8 +107,8 @@ function getErrorMessage(error, fallback) {
 }
 
 function formatEstimationPeriod(item) {
-  const start = safeDisplayText(formatDate(item?.periodo_inicio), "");
-  const end = safeDisplayText(formatDate(item?.periodo_fin), "");
+  const start = safeDisplayText(formatPmCalendarDate(item?.periodo_inicio), "");
+  const end = safeDisplayText(formatPmCalendarDate(item?.periodo_fin), "");
   if (start && end) {
     return `${start} — ${end}`;
   }
@@ -329,6 +336,8 @@ export default function PMProjectEstimationsTab({
   const [detailForm, setDetailForm] = useState(defaultDetailForm);
   const [collectForm, setCollectForm] = useState(defaultCollectForm);
   const [selectedEstimation, setSelectedEstimation] = useState(null);
+  const [estimationEvidences, setEstimationEvidences] = useState([]);
+  const [evidenceBusy, setEvidenceBusy] = useState(false);
   const [collectTarget, setCollectTarget] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [detailSubmitting, setDetailSubmitting] = useState(false);
@@ -499,6 +508,12 @@ export default function PMProjectEstimationsTab({
   async function loadEstimationDetail(estimationId, { open = true } = {}) {
     const detail = await getPmEstimation({ empresaId, estimationId, token });
     setSelectedEstimation(detail);
+    try {
+      const evidenceItems = await listPmEstimationEvidences({ empresaId, estimationId, token });
+      setEstimationEvidences(Array.isArray(evidenceItems) ? evidenceItems : []);
+    } catch {
+      setEstimationEvidences([]);
+    }
     if (open) {
       setDetailModalOpen(true);
     }
@@ -568,6 +583,44 @@ export default function PMProjectEstimationsTab({
   function closeDetailModal() {
     setDetailModalOpen(false);
     setSelectedEstimation(null);
+    setEstimationEvidences([]);
+  }
+
+  async function handleAddEvidence(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !selectedEstimation?.id) return;
+    setEvidenceBusy(true); setError("");
+    try {
+      const uploaded = await uploadPmEstimationEvidence({ estimationId: selectedEstimation.id, file, token, empresaId });
+      setEstimationEvidences((current) => [uploaded, ...current]);
+      setSuccess("Fotografía agregada a la estimación.");
+    } catch (uploadError) {
+      setError(getErrorMessage(uploadError, "No se pudo agregar la fotografía."));
+    } finally { setEvidenceBusy(false); }
+  }
+
+  async function handleSaveEvidence(evidence, payload) {
+    setEvidenceBusy(true); setError("");
+    try {
+      const updated = await updatePmEstimationEvidence({ evidenceId: evidence.id, token, empresaId, payload });
+      setEstimationEvidences((current) => current.map((item) => item.id === evidence.id ? updated : item));
+      setSuccess("Evidencia actualizada.");
+    } catch (saveError) {
+      setError(getErrorMessage(saveError, "No se pudo actualizar la evidencia."));
+    } finally { setEvidenceBusy(false); }
+  }
+
+  async function handleRemoveEvidence(evidence) {
+    if (!window.confirm("¿Quitar esta fotografía de la estimación?")) return;
+    setEvidenceBusy(true); setError("");
+    try {
+      await deletePmEstimationEvidence({ evidenceId: evidence.id, token, empresaId });
+      setEstimationEvidences((current) => current.filter((item) => item.id !== evidence.id));
+      setSuccess("Fotografía quitada.");
+    } catch (removeError) {
+      setError(getErrorMessage(removeError, "No se pudo quitar la fotografía."));
+    } finally { setEvidenceBusy(false); }
   }
 
   function closeDetailLineModal(force = false) {
@@ -1472,6 +1525,28 @@ export default function PMProjectEstimationsTab({
                 </tbody>
               </DataTable>
             )}
+            <section className="pm-estimation-evidences">
+              <div className="pm-estimation-evidence-head">
+                <div><h3>Evidencias</h3><p>Fotografías relacionadas con esta estimación o sus partidas.</p></div>
+                {estimationCanEdit(selectedEstimation) ? <label className="pm-estimation-evidence-upload"><ImagePlus size={15} /> {evidenceBusy ? "Guardando…" : "Agregar fotografías"}<input accept="image/jpeg,image/png" disabled={evidenceBusy} onChange={handleAddEvidence} type="file" /></label> : null}
+              </div>
+              {estimationEvidences.length ? <div className="pm-estimation-evidence-grid">{estimationEvidences.map((evidence) => <article className="pm-estimation-evidence-card" key={evidence.id}>
+                <PMEvidencePreview alt={evidence.descripcion || evidence.nombre_archivo} empresaId={empresaId} evidenceId={evidence.id} token={token} />
+                <div className="pm-estimation-evidence-copy">
+                  {estimationCanEdit(selectedEstimation) ? <input aria-label="Descripción de evidencia" defaultValue={evidence.descripcion ?? ""} onBlur={(event) => {
+                    if (event.currentTarget.value !== (evidence.descripcion ?? "")) handleSaveEvidence(evidence, { descripcion: event.currentTarget.value });
+                  }} placeholder="Descripción de la fotografía" /> : <strong>{safeDisplayText(evidence.descripcion, evidence.nombre_archivo)}</strong>}
+                  <small>{formatDate(evidence.fecha_evidencia || evidence.created_at)}</small>
+                  <label>Partida relacionada
+                    <select disabled={!estimationCanEdit(selectedEstimation) || evidenceBusy} onChange={(event) => handleSaveEvidence(evidence, { presupuesto_partida_id: event.target.value || null })} value={evidence.presupuesto_partida_id ?? ""}>
+                      <option value="">Estimación general</option>
+                      {(selectedEstimation.details ?? []).filter((detail) => detail.activo !== false).map((detail) => <option key={detail.presupuesto_partida_id} value={detail.presupuesto_partida_id}>{safeDisplayText(detail.codigo_snapshot ? `${detail.codigo_snapshot} · ${detail.concepto_snapshot}` : detail.concepto_snapshot)}</option>)}
+                    </select>
+                  </label>
+                  {estimationCanEdit(selectedEstimation) ? <ActionButton disabled={evidenceBusy} onClick={() => handleRemoveEvidence(evidence)} size="sm" tone="danger" type="button">Quitar</ActionButton> : null}
+                </div>
+              </article>)}</div> : <p className="table-note">No hay fotografías agregadas a esta estimación.</p>}
+            </section>
             <div className="inventory-metric-grid inventory-metric-grid-4">
               <MetricCard label="Monto bruto" meta="Periodo actual" tone="info" value={formatMoney(selectedEstimation.monto_bruto ?? 0)} />
               <MetricCard label="Anticipo aplicado" meta="Descuento simple" tone="warning" value={formatMoney(selectedEstimation.anticipo_aplicado ?? 0)} />

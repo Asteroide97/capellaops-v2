@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgeDollarSign,
   Calculator,
@@ -10,10 +10,12 @@ import {
   Plus,
   RefreshCw,
   TriangleAlert,
+  Upload,
 } from "lucide-react";
 
 import {
   approvePmBudget,
+  bulkAddPmBudgetItems,
   cancelPmBudget,
   createPmBudgetIndirect,
   createPmBudgetItem,
@@ -31,6 +33,7 @@ import {
   getPmProjectBudgetVsActual,
   getPmProjectCosts,
   listPmProjectMembers,
+  listPmBudgetImports,
   refreshPmProjectBudget,
   updatePmBudget,
   updatePmBudgetIndirect,
@@ -54,6 +57,8 @@ import {
 } from "../inventory/shared";
 import { formatPercent, normalizePmCopy, pmRateRoleOptions } from "./shared";
 import PMBudgetPlanPreviewModal from "./PMBudgetPlanPreviewModal";
+import PMBudgetSpreadsheetTable from "./PMBudgetSpreadsheetTable";
+import PMBudgetImportWizard from "./PMBudgetImportWizard";
 
 
 const defaultBudgetForm = {
@@ -368,6 +373,9 @@ export default function PMProjectBudgetTab({
   const [materialsCatalog, setMaterialsCatalog] = useState([]);
   const [activeBudgetModal, setActiveBudgetModal] = useState("");
   const [isPlanPreviewOpen, setIsPlanPreviewOpen] = useState(false);
+  const [budgetViewMode, setBudgetViewMode] = useState("spreadsheet");
+  const [importWizardOpen, setImportWizardOpen] = useState(false);
+  const [budgetImportSessions, setBudgetImportSessions] = useState([]);
 
   const [editingBudget, setEditingBudget] = useState(null);
   const [editingItem, setEditingItem] = useState(null);
@@ -390,9 +398,9 @@ export default function PMProjectBudgetTab({
   const vsActual = budgetVsActual ?? bundle?.vs_actual ?? null;
   const budgetContext = bundle?.budget_context ?? summary?.budget_context ?? vsActual?.budget_context ?? null;
   const hasDetailedBudget = Boolean(budgetContext?.has_detailed_budget);
-  const budgetSource = budgetContext?.budget_source ?? "none";
   const hasActiveBudgetItems = Boolean(budgetContext?.has_active_items);
   const budgetLoadError = loadErrors.budget;
+  const pendingBudgetImport = budgetImportSessions.find((session) => ["review", "ready", "importing"].includes(session.status));
   const costsLoadError = loadErrors.costs || loadErrors.vsActual;
   const items = useMemo(() => budget?.items ?? [], [budget]);
   const indirects = useMemo(() => budget?.indirects ?? [], [budget]);
@@ -534,12 +542,13 @@ export default function PMProjectBudgetTab({
     }
     setLoadErrors(defaultLoadErrors);
     try {
-      const [budgetResult, costsResult, vsActualResult, materialsResult, membersResult] = await Promise.allSettled([
+      const [budgetResult, costsResult, vsActualResult, materialsResult, membersResult, importSessionsResult] = await Promise.allSettled([
         getPmProjectBudget({ projectId, token, empresaId }),
         getPmProjectCosts({ projectId, token, empresaId }),
         getPmProjectBudgetVsActual({ projectId, token, empresaId }),
         getMaterials({ token, empresaId, filters: { activo: true, limit: 200, offset: 0 } }),
         listPmProjectMembers({ projectId, token, empresaId }),
+        listPmBudgetImports({ projectId, token, empresaId }),
       ]);
 
       const nextLoadErrors = { ...defaultLoadErrors };
@@ -611,6 +620,10 @@ export default function PMProjectBudgetTab({
           setProjectMembers([]);
         }
       }
+
+      setBudgetImportSessions(importSessionsResult.status === "fulfilled" && Array.isArray(importSessionsResult.value)
+        ? importSessionsResult.value
+        : []);
 
       setLoadErrors(nextLoadErrors);
     } finally {
@@ -1034,6 +1047,48 @@ export default function PMProjectBudgetTab({
     }
   }
 
+  async function handleSpreadsheetCellUpdate(item, field, value) {
+    if (!item?.id || !canEditBudget) return;
+    setError(""); setSuccess("");
+    try {
+      await updatePmBudgetItem({ itemId: item.id, token, empresaId, payload: { [field]: value } });
+      setSuccess("Cambios guardados.");
+      await loadBudgetTab({ background: true });
+      notifyChanged();
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, "No se pudo guardar el cambio."));
+      throw requestError;
+    }
+  }
+
+  async function handlePasteBudgetRows(rows) {
+    if (!budget?.id || !canEditBudget) throw new Error("Primero crea un presupuesto editable.");
+    setSaving(true); setError(""); setSuccess("");
+    try {
+      await bulkAddPmBudgetItems({ budgetId: budget.id, token, empresaId, items: rows.map((row, index) => ({
+        parent_id: null,
+        codigo: row.codigo || null,
+        nombre: row.nombre,
+        descripcion: null,
+        unidad: row.unidad || null,
+        cantidad: row.cantidad,
+        precio_unitario_manual: row.precio_unitario_manual,
+        orden: activeItems.length + index,
+      })) });
+      setSuccess(`${rows.length} filas agregadas al presupuesto.`);
+      await loadBudgetTab({ background: true });
+      notifyChanged();
+    } catch (requestError) {
+      setError(getErrorMessage(requestError, "No se pudieron agregar todas las filas."));
+      throw requestError;
+    } finally { setSaving(false); }
+  }
+
+  async function handleImportCompleted() {
+    await loadBudgetTab({ background: true });
+    await onChanged?.();
+  }
+
   async function handleDeactivateItem(item) {
     if (!canEditBudget) {
       setError("No tienes permiso para editar partidas en este proyecto.");
@@ -1294,19 +1349,14 @@ export default function PMProjectBudgetTab({
           <div className="inventory-actions inventory-actions-wrap">
             {!budget ? (
               <>
+                <ActionButton disabled={saving || !canEditBudget} icon={<Upload size={16} strokeWidth={1.9} />} onClick={() => setImportWizardOpen(true)} type="button">
+                  {pendingBudgetImport ? "Continuar importación" : "Importar Excel"}
+                </ActionButton>
+                {pendingBudgetImport ? null : (
                 <ActionButton disabled={saving || !canEditBudget} icon={<Plus size={16} strokeWidth={1.9} />} onClick={() => handleQuickCreateBudget()} tone="primary" type="button">
-                  Crear presupuesto
+                  Crear manualmente
                 </ActionButton>
-                <ActionButton
-                  disabled={saving || !canEditBudget}
-                  onClick={() => handleQuickCreateBudget({ useProjectBase: true })}
-                  type="button"
-                >
-                  Usar presupuesto base del proyecto
-                </ActionButton>
-                <ActionButton disabled={saving || !canEditBudget} onClick={openCreateBudgetModal} type="button">
-                  Configurar cabecera
-                </ActionButton>
+                )}
               </>
             ) : (
               <>
@@ -1338,7 +1388,7 @@ export default function PMProjectBudgetTab({
             action={(
               <div className="inventory-actions inventory-actions-wrap">
                 <ActionButton disabled={saving || !canEditBudget} onClick={() => handleQuickCreateBudget()} tone="primary" type="button">
-                  Crear presupuesto
+                  Crear presupuesto detallado
                 </ActionButton>
                 <ActionButton
                   disabled={saving || !canEditBudget}
@@ -1350,14 +1400,8 @@ export default function PMProjectBudgetTab({
               </div>
             )}
             compact
-            note={
-              budgetSource === "project_estimate" && Number(budgetContext?.reference_budget ?? 0) > 0
-                ? `El proyecto tiene un presupuesto de referencia por ${formatMoney(budgetContext?.reference_budget ?? 0)}, pero todavía no existe un presupuesto detallado con capítulos y partidas.`
-                : Number(project?.presupuesto_estimado ?? 0) > 0
-                  ? `Presupuesto base actual: ${formatMoney(project?.presupuesto_estimado ?? 0)}`
-                  : "Crea un presupuesto para organizar capítulos, partidas, materiales, mano de obra e indirectos."
-            }
-            title="Este proyecto aún no tiene presupuesto detallado"
+            note={`Presupuesto de referencia: ${formatMoney(budgetContext?.reference_budget ?? project?.presupuesto_estimado ?? 0)}. Todavía no existe un presupuesto detallado. Crea capítulos y partidas para construir la base económica del proyecto.`}
+            title="Todavía no existe un presupuesto detallado"
           />
         ) : !budget ? (
           <EmptyState
@@ -1454,7 +1498,14 @@ export default function PMProjectBudgetTab({
           title="Estructura del presupuesto"
         >
           {!budget && !budgetLoadError ? (
-            <EmptyState compact note="Primero crea el presupuesto del proyecto." title="Sin presupuesto" />
+            <EmptyState
+              action={canEditBudget ? <div className="inventory-actions inventory-actions-wrap">{pendingBudgetImport
+                ? <ActionButton onClick={() => setImportWizardOpen(true)} tone="primary" type="button">Continuar revisión</ActionButton>
+                : <><ActionButton onClick={() => setImportWizardOpen(true)} type="button">Importar Excel</ActionButton><ActionButton onClick={() => handleQuickCreateBudget()} tone="primary" type="button">Crear manualmente</ActionButton></>}</div> : null}
+              compact
+              note={pendingBudgetImport ? "Hay una importación pendiente. Continúa la revisión guardada antes de iniciar otra." : "Todavía no existe un presupuesto detallado. Puedes capturarlo en Capella o importar el Excel que ya utilizas."}
+              title={pendingBudgetImport ? "Importación pendiente" : "Sin presupuesto detallado"}
+            />
           ) : !budget ? (
             <EmptyState compact note="Intenta actualizar nuevamente." title="No se pudo cargar la estructura" />
           ) : activeItems.length === 0 ? (
@@ -1474,7 +1525,14 @@ export default function PMProjectBudgetTab({
               title="Sin estructura"
             />
           ) : (
-            <div className="pm-budget-tree">
+            <>
+              <div className="pm-budget-view-switch" role="tablist" aria-label="Vista de presupuesto">
+                <button aria-selected={budgetViewMode === "spreadsheet"} className={budgetViewMode === "spreadsheet" ? "is-active" : ""} onClick={() => setBudgetViewMode("spreadsheet")} role="tab" type="button">Presupuesto</button>
+                <button aria-selected={budgetViewMode === "tree"} className={budgetViewMode === "tree" ? "is-active" : ""} onClick={() => setBudgetViewMode("tree")} role="tab" type="button">Estructura</button>
+              </div>
+              {budgetViewMode === "spreadsheet" ? (
+                <PMBudgetSpreadsheetTable canEdit={canEditBudget} chapters={chapterOptions} items={activeItems} onPasteRows={handlePasteBudgetRows} onSelectItem={setSelectedItemId} onUpdateCell={handleSpreadsheetCellUpdate} />
+              ) : <div className="pm-budget-tree">
               {budgetTree.chapters.map(({ chapter, items: chapterItems }) => {
                 const chapterTotals = getChapterDisplayTotals(chapter, chapterItems);
                 return (
@@ -1569,7 +1627,8 @@ export default function PMProjectBudgetTab({
                   </div>
                 </div>
               ) : null}
-            </div>
+              </div>}
+            </>
           )}
         </DataCard>
 
@@ -2216,6 +2275,15 @@ export default function PMProjectBudgetTab({
         onClose={closePlanPreview}
         onOpenWorkPlan={onOpenWorkPlan}
         open={isPlanPreviewOpen}
+        token={token}
+      />
+      <PMBudgetImportWizard
+        empresaId={empresaId}
+        onClose={() => setImportWizardOpen(false)}
+        onContinuePlanning={onOpenWorkPlan}
+        onImported={handleImportCompleted}
+        open={importWizardOpen}
+        projectId={projectId}
         token={token}
       />
     </div>

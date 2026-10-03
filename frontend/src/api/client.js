@@ -308,7 +308,7 @@ function extractFilenameFromDisposition(value, fallback = "documento.pdf") {
 }
 
 
-export async function downloadFileRequest(path, { token, empresaId, filenameFallback = "documento.pdf" } = {}) {
+async function fetchAuthenticatedBlob(path, { token, empresaId } = {}) {
   const url = `${API_URL}${path}`;
   const headers = {};
 
@@ -349,8 +349,17 @@ export async function downloadFileRequest(path, { token, empresaId, filenameFall
     );
   }
 
-  const blob = await response.blob();
-  const filename = extractFilenameFromDisposition(response.headers.get("content-disposition"), filenameFallback);
+  return {
+    blob: await response.blob(),
+    disposition: response.headers.get("content-disposition"),
+  };
+}
+
+
+export async function downloadFileRequest(path, { token, empresaId, filenameFallback = "documento.pdf" } = {}) {
+  const { blob, disposition } = await fetchAuthenticatedBlob(path, { token, empresaId });
+
+  const filename = extractFilenameFromDisposition(disposition, filenameFallback);
   const objectUrl = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = objectUrl;
@@ -360,6 +369,12 @@ export async function downloadFileRequest(path, { token, empresaId, filenameFall
   document.body.removeChild(anchor);
   URL.revokeObjectURL(objectUrl);
   return { filename };
+}
+
+
+export function getPmEvidenceBlob({ evidenceId, token, empresaId }) {
+  return fetchAuthenticatedBlob(`/pm/evidences/${encodeURIComponent(evidenceId)}/download`, { token, empresaId })
+    .then(({ blob }) => blob);
 }
 
 
@@ -1395,6 +1410,106 @@ export function getPmProjectBudget({ projectId, token, empresaId }) {
 }
 
 
+export function createPmBudgetImport({ projectId, file, token, empresaId }) {
+  const formData = new FormData();
+  formData.append("file", file);
+  return uploadFormDataRequest(`/pm/projects/${projectId}/budget-imports`, { formData, token, empresaId });
+}
+
+
+export function listPmBudgetImports({ projectId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/budget-imports`, { token, empresaId });
+}
+
+
+export function getPmBudgetImport({ projectId, sessionId, token, empresaId }) {
+  return apiRequest(`/pm/projects/${projectId}/budget-imports/${sessionId}`, { token, empresaId });
+}
+
+
+export function downloadPmBudgetImportSource({ projectId, sessionId, token, empresaId, filename }) {
+  return downloadFileRequest(`/pm/projects/${projectId}/budget-imports/${sessionId}/source-file`, {
+    token,
+    empresaId,
+    filenameFallback: filename || "documento-origen.xlsx",
+  });
+}
+
+
+export function updatePmBudgetImportMapping({ sessionId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-imports/${sessionId}/mapping`, { method: "PUT", body: payload, token, empresaId });
+}
+
+
+export function updatePmBudgetImportDetails({ sessionId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-imports/${sessionId}/details`, { method: "PUT", body: payload, token, empresaId });
+}
+
+
+export function updatePmBudgetImportRow({ sessionId, rowId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-imports/${sessionId}/rows/${rowId}`, { method: "PUT", body: payload, token, empresaId });
+}
+
+
+export function addPmBudgetImportRow({ sessionId, token, empresaId, payload }) {
+  return apiRequest(`/pm/budget-imports/${sessionId}/rows`, { method: "POST", body: payload, token, empresaId });
+}
+
+
+export function confirmPmBudgetImport({ sessionId, token, empresaId, warnings_acknowledged = false }) {
+  return apiRequest(`/pm/budget-imports/${sessionId}/confirm`, {
+    method: "POST", body: { warnings_acknowledged }, token, empresaId,
+  });
+}
+
+
+export function cancelPmBudgetImport({ sessionId, token, empresaId }) {
+  return apiRequest(`/pm/budget-imports/${sessionId}/cancel`, { method: "POST", token, empresaId });
+}
+
+
+export function uploadPmBudgetImportEvidence({ projectId, sessionId, file, sourceRow, descripcion, ubicacion, fechaEvidencia, token, empresaId }) {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (sourceRow !== undefined && sourceRow !== null) formData.append("source_row", String(sourceRow));
+  if (descripcion) formData.append("descripcion", descripcion);
+  if (ubicacion) formData.append("ubicacion", ubicacion);
+  if (fechaEvidencia) formData.append("fecha_evidencia", fechaEvidencia);
+  return uploadFormDataRequest(`/pm/projects/${projectId}/budget-imports/${sessionId}/evidences`, { formData, token, empresaId });
+}
+
+
+export function updatePmBudgetImportEvidence({ projectId, sessionId, evidenceId, token, empresaId, payload }) {
+  return apiRequest(`/pm/projects/${projectId}/budget-imports/${sessionId}/evidences/${evidenceId}`, {
+    method: "PUT", body: payload, token, empresaId,
+  });
+}
+
+
+export function listPmEstimationEvidences({ estimationId, token, empresaId }) {
+  return apiRequest(`/pm/estimations/${estimationId}/evidences`, { token, empresaId });
+}
+
+
+export function uploadPmEstimationEvidence({ estimationId, file, descripcion, ubicacion, token, empresaId }) {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (descripcion) formData.append("descripcion", descripcion);
+  if (ubicacion) formData.append("ubicacion", ubicacion);
+  return uploadFormDataRequest(`/pm/estimations/${estimationId}/evidences`, { formData, token, empresaId });
+}
+
+
+export function updatePmEstimationEvidence({ evidenceId, token, empresaId, payload }) {
+  return apiRequest(`/pm/estimations/evidences/${evidenceId}`, { method: "PUT", body: payload, token, empresaId });
+}
+
+
+export function deletePmEstimationEvidence({ evidenceId, token, empresaId }) {
+  return apiRequest(`/pm/estimations/evidences/${evidenceId}`, { method: "DELETE", token, empresaId });
+}
+
+
 export function createPmProjectBudget({ projectId, token, empresaId, payload }) {
   return apiRequest(`/pm/projects/${projectId}/budget`, {
     method: "POST",
@@ -1438,6 +1553,13 @@ export function refreshPmProjectBudget({ projectId, token, empresaId }) {
     method: "POST",
     token,
     empresaId,
+  });
+}
+
+
+export function bulkAddPmBudgetItems({ budgetId, token, empresaId, items }) {
+  return apiRequest(`/pm/budgets/${budgetId}/items/bulk`, {
+    method: "POST", body: { items }, token, empresaId,
   });
 }
 

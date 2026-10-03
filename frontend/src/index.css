@@ -7412,3 +7412,198 @@ body.pm-is-dragging {
     flex-direction: column;
   }
 }
+.pm-budget-view-switch {
+  display: flex;
+  gap: 4px;
+  width: fit-content;
+  padding: 4px;
+  margin: 0 0 12px;
+  border: 1px solid #dce5e2;
+  border-radius: 10px;
+  background: #f6f8f7;
+}
+
+.pm-budget-view-switch button {
+  min-height: 32px;
+  padding: 0 13px;
+  border: 0;
+  border-radius: 7px;
+  color: #586a66;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.pm-budget-view-switch button.is-active {
+  color: #174b40;
+  background: #fff;
+  box-shadow: 0 1px 4px #153a3217;
+}
+
+.pm-budget-spreadsheet { min-width: 0; }
+.pm-budget-spreadsheet-head,
+.pm-excel-import-review-head,
+.pm-excel-import-section-title,
+.pm-estimation-evidence-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.pm-budget-spreadsheet-head { margin-bottom: 9px; }
+.pm-budget-spreadsheet-head h3,
+.pm-estimation-evidence-head h3 { margin: 2px 0 0; font-size: 15px; }
+.pm-budget-spreadsheet-head .pm-project-setup-eyebrow { display: inline-flex; align-items: center; gap: 6px; }
+.pm-budget-sheet-scroll,
+.pm-excel-import-table-wrap { max-width: 100%; overflow: auto; border: 1px solid #e1e8e5; border-radius: 9px; background: #fff; }
+.pm-budget-sheet-table,
+.pm-excel-import-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.pm-budget-sheet-table th,
+.pm-excel-import-table th { position: sticky; top: 0; z-index: 1; padding: 8px 10px; border-bottom: 1px solid #dce5e2; color: #60726d; background: #f5f8f7; text-align: left; white-space: nowrap; font-size: 10px; font-weight: 800; letter-spacing: .045em; text-transform: uppercase; }
+.pm-budget-sheet-table td,
+.pm-excel-import-table td { height: 35px; padding: 3px 7px; border-bottom: 1px solid #edf1ef; white-space: nowrap; }
+.pm-budget-sheet-table tr:last-child td,
+.pm-excel-import-table tr:last-child td { border-bottom: 0; }
+.pm-budget-sheet-table tr.is-chapter td { background: #f8faf9; font-weight: 750; }
+.pm-budget-sheet-table tr:hover td { background-color: #f7faf9; }
+.pm-budget-sheet-table td.is-number { text-align: right; font-variant-numeric: tabular-nums; }
+.pm-budget-sheet-cell { display: block; width: 100%; min-width: 68px; padding: 5px 4px; overflow: hidden; border: 1px solid transparent; border-radius: 5px; color: #263b36; background: transparent; font: inherit; text-align: left; text-overflow: ellipsis; cursor: text; }
+.pm-budget-sheet-cell.is-concept { min-width: 230px; }
+.pm-budget-sheet-cell:hover:not(:disabled) { border-color: #d5e2de; background: #fff; }
+.pm-budget-sheet-cell:disabled { cursor: default; }
+.pm-budget-sheet-cell-status,
+.pm-budget-sheet-cell-error { display: block; padding: 2px 5px; font-size: 10px; }
+.pm-budget-sheet-cell-status { color: #637972; }
+.pm-budget-sheet-cell-error { color: #a83a35; }
+.pm-budget-sheet-table input[aria-invalid="true"] { border-color: #c8443b; }
+.pm-budget-sheet-table td input { width: 100%; min-width: 70px; height: 28px; padding: 3px 6px; border: 1px solid #4d8b7d; border-radius: 5px; background: #fff; font: inherit; }
+.pm-budget-sheet-empty { padding: 24px !important; color: #6d7e79; text-align: center; }
+.pm-budget-sheet-hint { margin: 8px 2px 0; color: #71817d; font-size: 11px; }
+.pm-budget-paste-modal textarea { width: 100%; min-height: 150px; padding: 12px; border: 1px solid #d7e0dd; border-radius: 9px; font: inherit; font-size: 13px; resize: vertical; }
+.pm-budget-paste-mapping,
+.pm-excel-import-mapping-grid,
+.pm-excel-import-details-grid { display: grid; grid-template-columns: repeat(3, minmax(140px, 1fr)); gap: 10px; margin: 12px 0; }
+.pm-budget-paste-mapping label,
+.pm-excel-import-mapping-grid label,
+.pm-excel-import-details-grid label,
+.pm-excel-import-sheet-select { display: grid; gap: 5px; color: #60716d; font-size: 11px; font-weight: 700; }
+.pm-budget-paste-mapping select,
+.pm-excel-import-mapping-grid select,
+.pm-excel-import-details-grid input,
+.pm-excel-import-sheet-select select { width: 100%; min-width: 0; height: 34px; padding: 0 8px; border: 1px solid #dbe4e1; border-radius: 7px; background: #fff; color: #30443f; font: inherit; font-size: 12px; }
+.pm-budget-paste-preview { display: grid; gap: 8px; margin-top: 12px; }
+.pm-excel-import-footer { display: flex; align-items: center; gap: 8px; width: 100%; }
+.pm-excel-import-footer-spacer { flex: 1; }
+.pm-excel-import-start { display: grid; gap: 18px; }
+.pm-excel-import-upload-card { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 12px; padding: 16px; border: 1px dashed #a9c2bb; border-radius: 12px; background: #f5faf8; }
+.pm-excel-import-icon,
+.pm-excel-import-success-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 12px; color: #286555; background: #e4f2ed; }
+.pm-excel-import-upload-card p,
+.pm-excel-import-review-head p,
+.pm-excel-import-section-title p,
+.pm-estimation-evidence-head p { margin: 4px 0 0; color: #71817d; font-size: 12px; }
+.pm-excel-import-upload-form { display: flex; flex-wrap: wrap; grid-column: 1 / -1; align-items: center; gap: 10px; }
+.pm-excel-import-upload-form input { flex: 1 1 260px; min-width: 0; }
+.pm-excel-import-resumable { display: grid; gap: 8px; }
+.pm-excel-import-resumable h3 { margin: 0; font-size: 14px; }
+.pm-excel-import-resume-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #e0e8e5; border-radius: 9px; color: #2d423c; background: #fff; text-align: left; cursor: pointer; }
+.pm-excel-import-resume-row span { display: grid; gap: 3px; min-width: 0; }
+.pm-excel-import-resume-row small { color: #778681; }
+.pm-excel-import-review { display: grid; gap: 16px; max-height: min(70vh, 820px); overflow: auto; padding-right: 3px; }
+.pm-excel-import-steps { display: flex; flex-wrap: wrap; gap: 5px; padding: 0; margin: 0; list-style: none; }
+.pm-excel-import-steps li { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 1px solid #e2e9e6; border-radius: 999px; color: #788780; background: #fbfcfb; font-size: 10px; }
+.pm-excel-import-steps li span { display: inline-grid; width: 16px; height: 16px; place-items: center; border-radius: 50%; background: #e8eeeb; font-size: 9px; }
+.pm-excel-import-steps li.is-reviewed { color: #286e58; border-color: #cfe5da; background: #f3faf6; }
+.pm-excel-import-steps li.is-current { color: #fff; border-color: #286e58; background: #286e58; }
+.pm-excel-import-steps li.is-current span { color: #286e58; background: #fff; }
+.pm-excel-import-review-head h3 { margin: 4px 0 0; font-size: 16px; }
+.pm-excel-import-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.pm-excel-import-summary span { padding: 9px 11px; border: 1px solid #e2e9e6; border-radius: 8px; color: #687a75; background: #fafcfb; font-size: 11px; }
+.pm-excel-import-summary strong { display: block; color: #243b35; font-size: 18px; }
+.pm-excel-import-section { display: grid; gap: 10px; padding: 12px; border: 1px solid #e5ebe8; border-radius: 10px; background: #fff; }
+.pm-excel-import-section-title { align-items: flex-end; }
+.pm-excel-import-section-title h3 { margin: 0; font-size: 14px; }
+.pm-excel-import-section-title .inventory-actions { flex-wrap: wrap; }
+.pm-excel-import-mapping-grid { grid-template-columns: repeat(4, minmax(110px, 1fr)); }
+.pm-excel-import-table { min-width: 1050px; }
+.pm-excel-import-table input:not([type="checkbox"]),
+.pm-excel-import-table select { width: 100%; min-width: 72px; height: 28px; padding: 2px 5px; border: 1px solid #e1e8e5; border-radius: 5px; font: inherit; font-size: 11px; }
+.pm-excel-import-table td:nth-child(5) input { min-width: 175px; }
+.pm-excel-import-table tr.is-excluded { opacity: .46; }
+.pm-excel-import-details { padding: 10px 12px; border: 1px solid #e5ebe8; border-radius: 9px; }
+.pm-excel-import-details summary { color: #344b44; font-size: 13px; font-weight: 750; cursor: pointer; }
+.pm-excel-import-details-grid { margin-bottom: 0; }
+.pm-excel-import-reconciliation { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.pm-excel-import-reconciliation > div { display: grid; gap: 4px; padding: 10px 12px; border-radius: 8px; background: #f5f8f7; }
+.pm-excel-import-reconciliation span { color: #697b76; font-size: 11px; }
+.pm-excel-import-reconciliation strong { color: #244139; font-variant-numeric: tabular-nums; }
+.pm-excel-import-reconciliation.is-secondary > div { background: #fafbf9; }
+.pm-excel-import-row-actions { display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+.pm-excel-import-row-extra > td { padding: 8px 12px 12px; background: #f7faf8; }
+.pm-excel-import-row-extra-grid { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; }
+.pm-excel-import-row-extra-grid label,
+.pm-excel-import-evidence-fields label { display: grid; gap: 4px; color: #52645e; font-size: 11px; }
+.pm-excel-import-row-extra-grid input,
+.pm-excel-import-evidence-fields input,
+.pm-excel-import-evidence-fields select { min-width: 0; width: 100%; }
+.pm-excel-import-evidence-fields { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(160px, 1fr) minmax(160px, 1fr) auto; align-items: end; gap: 9px; }
+.pm-excel-warning-ack { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #f0d9a0; border-radius: 8px; color: #73571f; background: #fff9e9; font-size: 12px; }
+.pm-excel-warning-ack span { display: flex; align-items: center; gap: 7px; }
+.pm-excel-import-footnote { display: flex; align-items: center; gap: 6px; color: #778681; font-size: 11px; }
+.pm-excel-evidence-add,
+.pm-estimation-evidence-upload { position: relative; display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border: 1px solid #d6e2de; border-radius: 7px; color: #285b4e; background: #fff; font-size: 11px; font-weight: 750; cursor: pointer; }
+.pm-excel-evidence-add input,
+.pm-estimation-evidence-upload input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.pm-excel-evidence-grid,
+.pm-estimation-evidence-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 9px; }
+.pm-excel-evidence-card,
+.pm-estimation-evidence-card { overflow: hidden; border: 1px solid #e3eae7; border-radius: 9px; background: #fff; }
+.pm-excel-evidence-card img,
+.pm-estimation-evidence-card img { display: block; width: 100%; height: 125px; object-fit: cover; background: #f4f7f6; }
+.pm-evidence-preview-state { display: grid; min-height: 125px; place-items: center; padding: 12px; color: #687872; background: #f4f7f6; font-size: 11px; text-align: center; }
+.pm-excel-evidence-card > div,
+.pm-estimation-evidence-copy { display: grid; gap: 5px; padding: 8px; }
+.pm-excel-evidence-edit label { display: grid; gap: 4px; color: #788680; font-size: 10px; }
+.pm-excel-evidence-edit input,
+.pm-excel-evidence-edit select { width: 100%; min-width: 0; height: 31px; padding: 0 7px; border: 1px solid #dce5e2; border-radius: 6px; color: #364b45; background: #fff; font: inherit; font-size: 11px; }
+.pm-excel-evidence-card small,
+.pm-estimation-evidence-copy small { overflow: hidden; color: #768681; text-overflow: ellipsis; white-space: nowrap; }
+.pm-excel-import-result { display: grid; justify-items: center; gap: 10px; padding: 26px 12px; text-align: center; }
+.pm-excel-import-success-icon { width: 54px; height: 54px; border-radius: 50%; }
+.pm-excel-import-result h3 { margin: 0; font-size: 19px; }
+.pm-excel-import-result > strong { color: #1e4a3f; font-size: 24px; }
+.pm-estimation-evidences { display: grid; gap: 12px; margin: 16px 0; padding: 13px; border: 1px solid #e3eae7; border-radius: 10px; background: #fbfcfc; }
+.pm-estimation-evidence-copy input,
+.pm-estimation-evidence-copy select { width: 100%; min-width: 0; height: 31px; padding: 0 7px; border: 1px solid #dce5e2; border-radius: 6px; color: #364b45; background: #fff; font: inherit; font-size: 11px; }
+.pm-estimation-evidence-copy label { display: grid; gap: 4px; color: #788680; font-size: 10px; }
+
+@media (max-width: 800px) {
+  .pm-excel-import-mapping-grid,
+  .pm-excel-import-details-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pm-excel-import-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pm-excel-import-section-title { align-items: flex-start; flex-direction: column; }
+}
+
+@media (max-width: 560px) {
+  .pm-excel-import-mapping-grid,
+  .pm-excel-import-details-grid,
+  .pm-excel-import-reconciliation { grid-template-columns: 1fr; }
+  .pm-excel-import-review { max-height: 65vh; }
+  .pm-excel-import-footer { flex-wrap: wrap; }
+  .pm-excel-import-footer-spacer { flex-basis: 100%; }
+  .pm-estimation-evidence-head { align-items: flex-start; flex-direction: column; }
+}
+
+@media (max-width: 800px) {
+  .pm-excel-import-row-extra-grid,
+  .pm-excel-import-evidence-fields { grid-template-columns: repeat(2, minmax(120px, 1fr)); }
+}
+
+@media (max-width: 560px) {
+  .pm-excel-import-row-extra-grid,
+  .pm-excel-import-evidence-fields { grid-template-columns: 1fr; }
+  .pm-excel-import-row-actions { flex-wrap: wrap; }
+}
