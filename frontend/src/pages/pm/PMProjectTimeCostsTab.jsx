@@ -26,6 +26,7 @@ import {
   formatNumber,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import { getRateSourceLabel, getRateSourceTone } from "./shared";
 
 
@@ -258,7 +259,7 @@ export default function PMProjectTimeCostsTab({
             <tbody>
               {timeEntries.map((entry) => (
                 <tr key={entry.id}>
-                  <td>{safeDisplayText(formatDate(entry.fecha), "—")}</td>
+                  <td>{safeDisplayText(formatPmCalendarDate(entry.fecha), "—")}</td>
                   <td>
                     <div className="inventory-cell-main">{safeDisplayText(entry.usuario_nombre_snapshot, "Sin usuario")}</div>
                     <div className="inventory-cell-sub">{safeDisplayText(entry.usuario_email_snapshot, "—")}</div>

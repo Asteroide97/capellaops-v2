@@ -25,6 +25,7 @@ import {
   formatDate,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import {
   getPriorityLabel,
   getPriorityTone,
@@ -741,7 +742,7 @@ export default function PMTaskDetailModal({
             <div className="pm-meta-list">
               <div>
                 <strong>Vence</strong>
-                <span>{safeDisplayText(formatDate(task?.fecha_vencimiento), "—")}</span>
+                <span>{safeDisplayText(formatPmCalendarDate(task?.fecha_vencimiento), "—")}</span>
               </div>
               <div>
                 <strong>Asignado</strong>

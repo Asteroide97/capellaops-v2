@@ -31,6 +31,7 @@ import {
   safeDisplayText,
 } from "../inventory/shared";
 import { pmRateRoleOptions } from "./shared";
+import { formatPmCalendarDate } from "./dateOnly";
 
 
 const defaultUserRateForm = {
@@ -346,8 +347,8 @@ export default function PMRatesPage() {
                   </td>
                   <td>{formatMoney(rate.tarifa_hora)}</td>
                   <td>{safeDisplayText(rate.moneda, "MXN")}</td>
-                  <td>{safeDisplayText(formatDate(rate.effective_from), "—")}</td>
-                  <td>{safeDisplayText(formatDate(rate.effective_to), "—")}</td>
+                  <td>{safeDisplayText(formatPmCalendarDate(rate.effective_from), "—")}</td>
+                  <td>{safeDisplayText(formatPmCalendarDate(rate.effective_to), "—")}</td>
                   <td><StatusBadge tone={rate.activa ? "success" : "neutral"}>{rate.activa ? "Activa" : "Inactiva"}</StatusBadge></td>
                   <td>
                     <div className="table-actions">
@@ -386,8 +387,8 @@ export default function PMRatesPage() {
                   <td>{safeDisplayText(pmRateRoleOptions.find((item) => item.value === rate.rol)?.label ?? rate.rol)}</td>
                   <td>{formatMoney(rate.tarifa_hora)}</td>
                   <td>{safeDisplayText(rate.moneda, "MXN")}</td>
-                  <td>{safeDisplayText(formatDate(rate.effective_from), "—")}</td>
-                  <td>{safeDisplayText(formatDate(rate.effective_to), "—")}</td>
+                  <td>{safeDisplayText(formatPmCalendarDate(rate.effective_from), "—")}</td>
+                  <td>{safeDisplayText(formatPmCalendarDate(rate.effective_to), "—")}</td>
                   <td><StatusBadge tone={rate.activa ? "success" : "neutral"}>{rate.activa ? "Activa" : "Inactiva"}</StatusBadge></td>
                   <td>
                     <div className="table-actions">

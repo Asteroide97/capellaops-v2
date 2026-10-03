@@ -1,4 +1,5 @@
 import { formatNumber } from "../inventory/shared";
+import { pmCalendarDayNumber } from "./dateOnly";
 
 export const projectStatusOptions = [
   { value: "borrador", label: "Borrador" },
@@ -428,11 +429,10 @@ export function isTaskOverdue(task) {
   if (["completada", "cancelada"].includes(String(task?.estatus ?? "").toLowerCase())) {
     return false;
   }
-  const due = new Date(task.fecha_vencimiento);
   const today = new Date();
-  due.setHours(0, 0, 0, 0);
-  today.setHours(0, 0, 0, 0);
-  return due < today;
+  const dueDay = pmCalendarDayNumber(task.fecha_vencimiento);
+  const todayDay = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) / 86400000;
+  return dueDay !== null && dueDay < todayDay;
 }
 
 export function getRateSourceLabel(value) {

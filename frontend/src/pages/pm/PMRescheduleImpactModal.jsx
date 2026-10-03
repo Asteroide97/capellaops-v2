@@ -12,6 +12,7 @@ import {
   safeDisplayText,
 } from "../inventory/shared";
 import { getTaskStatusLabel, getTaskStatusTone, normalizePmCopy } from "./shared";
+import { formatPmCalendarDate } from "./dateOnly";
 
 function toDateInput(value) {
   return value ? String(value).slice(0, 10) : "";
@@ -115,13 +116,13 @@ export default function PMRescheduleImpactModal({
   const hasDependentsImpact = (impact?.total_affected ?? 0) > 0;
   const canSubmit = Boolean(fechaInicio && fechaFin && !saving && !baselineChecking);
   const currentRangeCopy = useMemo(() => {
-    const startLabel = safeDisplayText(formatDate(initialStart), "—");
-    const endLabel = safeDisplayText(formatDate(initialEnd), "—");
+    const startLabel = safeDisplayText(formatPmCalendarDate(initialStart), "—");
+    const endLabel = safeDisplayText(formatPmCalendarDate(initialEnd), "—");
     return `${startLabel} → ${endLabel}`;
   }, [initialEnd, initialStart]);
   const nextRangeCopy = useMemo(() => {
-    const startLabel = safeDisplayText(formatDate(fechaInicio), "—");
-    const endLabel = safeDisplayText(formatDate(fechaFin), "—");
+    const startLabel = safeDisplayText(formatPmCalendarDate(fechaInicio), "—");
+    const endLabel = safeDisplayText(formatPmCalendarDate(fechaFin), "—");
     return `${startLabel} → ${endLabel}`;
   }, [fechaFin, fechaInicio]);
   const modalTitle = mode === "drag" ? "Confirmar cambio de fechas" : mode === "suggestion" ? "Aplicar fecha sugerida" : "Editar fechas de tarea";
@@ -226,7 +227,7 @@ export default function PMRescheduleImpactModal({
           <p className="table-note">Fechas propuestas: {nextRangeCopy}</p>
           {suggestionStart || suggestionEnd ? (
             <p className="table-note">
-              Sugerido por planeación: {safeDisplayText(formatDate(suggestionStart), "—")} → {safeDisplayText(formatDate(suggestionEnd), "—")}
+              Sugerido por planeación: {safeDisplayText(formatPmCalendarDate(suggestionStart), "—")} → {safeDisplayText(formatPmCalendarDate(suggestionEnd), "—")}
             </p>
           ) : null}
         </div>
@@ -294,9 +295,9 @@ export default function PMRescheduleImpactModal({
                   <div>
                     <strong>{normalizePmCopy(safeDisplayText(item.titulo))}</strong>
                     <span>
-                      {safeDisplayText(formatDate(item.fecha_inicio_actual), "—")} → {safeDisplayText(formatDate(item.fecha_fin_actual), "—")}
+                      {safeDisplayText(formatPmCalendarDate(item.fecha_inicio_actual), "—")} → {safeDisplayText(formatPmCalendarDate(item.fecha_fin_actual), "—")}
                       {" · "}
-                      Sugerido: {safeDisplayText(formatDate(item.fecha_inicio_sugerida), "—")} → {safeDisplayText(formatDate(item.fecha_fin_sugerida), "—")}
+                      Sugerido: {safeDisplayText(formatPmCalendarDate(item.fecha_inicio_sugerida), "—")} → {safeDisplayText(formatPmCalendarDate(item.fecha_fin_sugerida), "—")}
                     </span>
                   </div>
                   <div className="pm-inline-metadata">

@@ -33,6 +33,7 @@ import {
   formatNumber,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import {
   formatPercent,
   getPriorityLabel,
@@ -421,14 +422,14 @@ export default function PMTaskDetailPanel({
                 <div>
                   <span>Actual</span>
                   <strong>
-                    {safeDisplayText(formatDate(task.fecha_inicio), "—")} → {safeDisplayText(formatDate(task.fecha_vencimiento), "—")}
+                    {safeDisplayText(formatPmCalendarDate(task.fecha_inicio), "—")} → {safeDisplayText(formatPmCalendarDate(task.fecha_vencimiento), "—")}
                   </strong>
                 </div>
                 <div>
                   <span>Sugerido</span>
                   <strong>
-                    {safeDisplayText(formatDate(scheduleSuggestion.fecha_inicio_sugerida), "—")} →{" "}
-                    {safeDisplayText(formatDate(scheduleSuggestion.fecha_fin_sugerida), "—")}
+                    {safeDisplayText(formatPmCalendarDate(scheduleSuggestion.fecha_inicio_sugerida), "—")} →{" "}
+                    {safeDisplayText(formatPmCalendarDate(scheduleSuggestion.fecha_fin_sugerida), "—")}
                   </strong>
                 </div>
               </div>
@@ -455,11 +456,11 @@ export default function PMTaskDetailPanel({
             </div>
             <div>
               <span>Inicio</span>
-              <strong>{safeDisplayText(formatDate(task.fecha_inicio), "—")}</strong>
+              <strong>{safeDisplayText(formatPmCalendarDate(task.fecha_inicio), "—")}</strong>
             </div>
             <div>
               <span>Fin</span>
-              <strong>{safeDisplayText(formatDate(task.fecha_vencimiento), "—")}</strong>
+              <strong>{safeDisplayText(formatPmCalendarDate(task.fecha_vencimiento), "—")}</strong>
             </div>
             <div>
               <span>Horas estimadas</span>
@@ -477,17 +478,17 @@ export default function PMTaskDetailPanel({
                 <div>
                   <span>Fecha base</span>
                   <strong>
-                    {safeDisplayText(formatDate(baselineTaskComparison.fecha_inicio_base), "—")}
+                    {safeDisplayText(formatPmCalendarDate(baselineTaskComparison.fecha_inicio_base), "—")}
                     {" → "}
-                    {safeDisplayText(formatDate(baselineTaskComparison.fecha_fin_base), "—")}
+                    {safeDisplayText(formatPmCalendarDate(baselineTaskComparison.fecha_fin_base), "—")}
                   </strong>
                 </div>
                 <div>
                   <span>Fecha actual</span>
                   <strong>
-                    {safeDisplayText(formatDate(baselineTaskComparison.fecha_inicio_actual), "—")}
+                    {safeDisplayText(formatPmCalendarDate(baselineTaskComparison.fecha_inicio_actual), "—")}
                     {" → "}
-                    {safeDisplayText(formatDate(baselineTaskComparison.fecha_fin_actual), "—")}
+                    {safeDisplayText(formatPmCalendarDate(baselineTaskComparison.fecha_fin_actual), "—")}
                   </strong>
                 </div>
                 <div>
@@ -635,7 +636,7 @@ export default function PMTaskDetailPanel({
                     <div className="pm-detail-list-item" key={entry.id}>
                       <div>
                         <strong>{safeDisplayText(entry.usuario_nombre_snapshot, "Registro manual")}</strong>
-                        <span>{safeDisplayText(formatDate(entry.fecha), "—")} · {formatNumber(entry.horas)} h</span>
+                        <span>{safeDisplayText(formatPmCalendarDate(entry.fecha), "—")} · {formatNumber(entry.horas)} h</span>
                       </div>
                       <strong>{formatMoney(entry.costo_total_snapshot)}</strong>
                     </div>

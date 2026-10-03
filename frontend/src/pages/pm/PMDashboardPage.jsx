@@ -28,6 +28,7 @@ import {
   formatMoney,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import {
   canManagePmRole,
   getPriorityLabel,
@@ -297,7 +298,7 @@ export default function PMDashboardPage() {
                 <tr key={`critical-${item.task_id}-${item.fecha}`}>
                   <td>{safeDisplayText(item.titulo)}</td>
                   <td>{safeDisplayText(item.proyecto_nombre)}</td>
-                  <td>{safeDisplayText(formatDate(item.fecha), "-")}</td>
+                  <td>{safeDisplayText(formatPmCalendarDate(item.fecha), "-")}</td>
                   <td>
                     <StatusBadge tone={getPriorityTone(item.prioridad)}>{getPriorityLabel(item.prioridad)}</StatusBadge>
                   </td>
@@ -334,7 +335,7 @@ export default function PMDashboardPage() {
                       <div className="inventory-cell-main">{safeDisplayText(item.proyecto_nombre)}</div>
                       <div className="inventory-cell-sub">{safeDisplayText(item.titulo)}</div>
                     </td>
-                    <td>{safeDisplayText(formatDate(item.fecha), "-")}</td>
+                    <td>{safeDisplayText(formatPmCalendarDate(item.fecha), "-")}</td>
                     <td>
                       <StatusBadge tone={getPriorityTone(item.prioridad)}>{getPriorityLabel(item.prioridad)}</StatusBadge>
                     </td>
@@ -371,7 +372,7 @@ export default function PMDashboardPage() {
                       <div className="inventory-cell-main">{safeDisplayText(item.titulo)}</div>
                       <div className="inventory-cell-sub">{safeDisplayText(item.proyecto_nombre)}</div>
                     </td>
-                    <td>{safeDisplayText(formatDate(item.fecha), "-")}</td>
+                    <td>{safeDisplayText(formatPmCalendarDate(item.fecha), "-")}</td>
                     <td>
                       <StatusBadge tone={getTaskStatusTone(item.estatus)}>{getTaskStatusLabel(item.estatus)}</StatusBadge>
                     </td>

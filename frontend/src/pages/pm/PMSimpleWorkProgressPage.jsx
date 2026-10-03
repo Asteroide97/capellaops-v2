@@ -43,6 +43,7 @@ import {
   safeDisplayText,
   DEFAULT_PAGE_SIZE,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import { canEditPmProjectRole } from "./shared";
 
 
@@ -522,7 +523,7 @@ export default function PMSimpleWorkProgressPage() {
                         </StatusBadge>
                       </td>
                       <td>{formatPercentValue(row.avance_porcentaje)}</td>
-                      <td>{formatDate(row.fecha_compromiso)}</td>
+                      <td>{formatPmCalendarDate(row.fecha_compromiso)}</td>
                       <td>{safeDisplayText(row.proximo_paso, "Sin siguiente paso")}</td>
                       <td>{safeDisplayText(row.bloqueo_actual, "Sin bloqueo")}</td>
                       <td>{formatDateTime(row.ultima_actualizacion_avance_at)}</td>
@@ -761,7 +762,7 @@ export default function PMSimpleWorkProgressPage() {
                   </div>
                   <div>
                     <span>Fecha compromiso</span>
-                    <strong>{formatDate(item.fecha_compromiso)}</strong>
+                    <strong>{formatPmCalendarDate(item.fecha_compromiso)}</strong>
                   </div>
                   <div>
                     <span>Evidencia</span>

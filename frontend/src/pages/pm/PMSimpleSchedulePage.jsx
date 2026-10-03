@@ -38,6 +38,7 @@ import {
   formatMoney,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import { canEditPmProjectRole } from "./shared";
 
 const operationalStatusOptions = [
@@ -379,7 +380,7 @@ function getTimelineBarData(row, timelineRange) {
 }
 
 function getVisualStartLabel(row) {
-  return formatDate(row?.fecha_inicio ?? row?.created_at);
+  return row?.fecha_inicio ? formatPmCalendarDate(row.fecha_inicio) : formatDate(row?.created_at);
 }
 
 function stopEvent(event, callback) {
@@ -860,7 +861,7 @@ export default function PMSimpleSchedulePage() {
                           <span>{getOperationalStatusLabel(row.estado_operativo)}</span>
                         </div>
                         <div className="pm-schedule-cell">
-                          <strong>{formatDate(row.fecha_compromiso)}</strong>
+                          <strong>{formatPmCalendarDate(row.fecha_compromiso)}</strong>
                           <span>{formatOptionalMoney(row.saldo_pendiente)} pendiente</span>
                         </div>
                         <div className="pm-schedule-cell">
@@ -1023,7 +1024,7 @@ export default function PMSimpleSchedulePage() {
             </div>
             <div className="pm-schedule-detail-card">
               <span>Fecha compromiso</span>
-              <strong>{formatDate(selectedRow.fecha_compromiso)}</strong>
+              <strong>{formatPmCalendarDate(selectedRow.fecha_compromiso)}</strong>
             </div>
             <div className="pm-schedule-detail-card">
               <span>Proximo paso</span>
@@ -1241,7 +1242,7 @@ export default function PMSimpleSchedulePage() {
                   </div>
                   <div>
                     <span>Fecha compromiso</span>
-                    <strong>{formatDate(item.fecha_compromiso)}</strong>
+                    <strong>{formatPmCalendarDate(item.fecha_compromiso)}</strong>
                   </div>
                   <div>
                     <span>Evidencia</span>

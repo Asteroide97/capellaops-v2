@@ -29,6 +29,7 @@ import {
   formatMoney,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import {
   formatPercent,
   getExecutiveHealthLabel,
@@ -491,11 +492,11 @@ export default function PMExecutiveReportPage() {
                     </div>
                   </td>
                   <td>{formatPercent(item.porcentaje_avance ?? 0)}</td>
-                  <td>{formatDate(item.fecha_fin_planificada)}</td>
+                  <td>{formatPmCalendarDate(item.fecha_fin_planificada)}</td>
                   <td>
                     <div className="pm-executive-numeric-cell">
                       <strong>{safeDisplayText(item.desviacion_dias, 0)} días</strong>
-                      <span className="table-note">Fin actual: {formatDate(item.fecha_fin_actual)}</span>
+                      <span className="table-note">Fin actual: {formatPmCalendarDate(item.fecha_fin_actual)}</span>
                     </div>
                   </td>
                   <td>

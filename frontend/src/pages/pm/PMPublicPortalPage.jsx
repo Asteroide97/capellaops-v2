@@ -14,6 +14,7 @@ import {
   safeDisplayText,
 } from "../inventory/shared";
 import { formatPercent, getTaskStatusLabel, getTaskStatusTone } from "./shared";
+import { formatPmCalendarDate } from "./dateOnly";
 
 
 function getErrorMessage(error, fallback) {
@@ -146,11 +147,11 @@ export default function PMPublicPortalPage() {
             </div>
             <div>
               <strong>Inicio</strong>
-              <span>{formatDate(portalProject?.fecha_inicio)}</span>
+              <span>{formatPmCalendarDate(portalProject?.fecha_inicio)}</span>
             </div>
             <div>
               <strong>Fin planificado</strong>
-              <span>{formatDate(portalProject?.fecha_fin_planificada)}</span>
+              <span>{formatPmCalendarDate(portalProject?.fecha_fin_planificada)}</span>
             </div>
             <div>
               <strong>Acceso</strong>
@@ -169,7 +170,7 @@ export default function PMPublicPortalPage() {
                     <StatusBadge tone={getTaskStatusTone(task.estatus)}>{getTaskStatusLabel(task.estatus)}</StatusBadge>
                   </div>
                   <div className="pm-public-task-meta">
-                    <span><Calendar size={14} strokeWidth={1.9} /> {formatDate(task.fecha_vencimiento)}</span>
+                    <span><Calendar size={14} strokeWidth={1.9} /> {formatPmCalendarDate(task.fecha_vencimiento)}</span>
                     <span>{formatPercent(task.porcentaje_avance)}</span>
                   </div>
                 </article>
