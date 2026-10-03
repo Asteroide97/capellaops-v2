@@ -24,6 +24,7 @@ import {
   formatNumber,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate, pmCalendarDayNumber } from "./dateOnly";
 import PMProjectAlertsPanel from "./PMProjectAlertsPanel";
 import PMProjectGanttLite from "./PMProjectGanttLite";
 import PMTaskDetailPanel from "./PMTaskDetailPanel";
@@ -37,11 +38,9 @@ import {
 } from "./shared";
 
 function diffInDays(startValue, endValue) {
-  const start = new Date(startValue);
-  const end = new Date(endValue);
-  start.setHours(0, 0, 0, 0);
-  end.setHours(0, 0, 0, 0);
-  return Math.round((end - start) / (1000 * 60 * 60 * 24));
+  const start = pmCalendarDayNumber(startValue);
+  const end = pmCalendarDayNumber(endValue);
+  return start === null || end === null ? 0 : end - start;
 }
 
 function getDurationLabel(task) {
@@ -234,6 +233,7 @@ export default function PMProjectWorkPlanView({
   onEditTaskDates,
   onGanttNotice,
   onInlineTaskUpdate,
+  onOpenBudget,
   onPreviewReschedule,
   onRefresh,
   onRecalculatePlanning,
@@ -326,28 +326,19 @@ export default function PMProjectWorkPlanView({
             <strong>Cronograma y etapas</strong>
             <span>Fechas, responsables, bloqueos y avance del trabajo.</span>
           </div>
-          <div className="inventory-actions inventory-actions-wrap">{headerActions}</div>
+          <div className="inventory-actions inventory-actions-wrap">
+            <ActionButton onClick={onRefresh} type="button">Actualizar</ActionButton>
+          </div>
         </div>
 
-        <DataCard subtitle="El Gantt y la tabla se activan cuando este trabajo ya tiene etapas o tareas." title="Cronograma del trabajo">
+        <DataCard subtitle="Primero define el presupuesto. Después podrás convertir sus partidas en pendientes de trabajo." title="Plan de trabajo">
           <EmptyState
-            action={(
-              canEditTasks ? (
-                <ActionButton onClick={onCreateTask} tone="primary" type="button">
-                  Crear primera tarea
-                </ActionButton>
-              ) : null
-            )}
-            note="Agrega tareas con fechas para visualizar el plan, las dependencias y la ruta critica."
-            title="Sin tareas"
+            action={<ActionButton onClick={onOpenBudget} tone="primary" type="button">Ir a Presupuesto</ActionButton>}
+            note="Comienza preparando el presupuesto. Después Capella puede convertir sus partidas en pendientes para el tablero y el cronograma."
+            title="Este proyecto todavía no tiene un plan de trabajo."
           />
+          {canEditTasks ? <div className="pm-workplan-manual-secondary"><ActionButton onClick={onCreateTask} type="button">Crear tarea manual</ActionButton></div> : null}
         </DataCard>
-
-        {canEditTasks ? (
-          <ActionButton className="pm-workplan-fab" icon={<Plus size={18} strokeWidth={2} />} onClick={onCreateTask} tone="primary" type="button">
-            + Tarea
-          </ActionButton>
-        ) : null}
       </section>
     );
   }
@@ -361,8 +352,8 @@ export default function PMProjectWorkPlanView({
     <div className="pm-task-detail-collapsed">
       <div className="pm-task-detail-collapsed-row">
         <strong className="pm-task-detail-collapsed-title">{normalizePmCopy(safeDisplayText(selectedTask.titulo, "Tarea seleccionada"))}</strong>
-        <span>Inicio: {safeDisplayText(formatDate(selectedTask.fecha_inicio), "-")}</span>
-        <span>Fin: {safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "-")}</span>
+        <span>Inicio: {safeDisplayText(formatPmCalendarDate(selectedTask.fecha_inicio), "-")}</span>
+        <span>Fin: {safeDisplayText(formatPmCalendarDate(selectedTask.fecha_vencimiento), "-")}</span>
         <span>Avance: {formatPercent(selectedTask.porcentaje_avance)}</span>
         <StatusBadge tone={getTaskStatusTone(selectedTask.estatus)}>{getTaskStatusLabel(selectedTask.estatus)}</StatusBadge>
       </div>
@@ -505,6 +496,7 @@ export default function PMProjectWorkPlanView({
             onEditTask={onEditTask}
             onEditTaskDates={onEditTaskDates}
             onInlineTaskUpdate={onInlineTaskUpdate}
+            onOpenBudget={onOpenBudget}
             onPreviewReschedule={onPreviewReschedule}
             onSelectTask={onSelectTask}
             onSetTaskStatus={onSetTaskStatus}
@@ -577,11 +569,11 @@ export default function PMProjectWorkPlanView({
                   </div>
 
                   <div className="pm-task-table-cell" data-label="Inicio">
-                    {safeDisplayText(formatDate(task.fecha_inicio), "-")}
+                    {safeDisplayText(formatPmCalendarDate(task.fecha_inicio), "-")}
                   </div>
 
                   <div className="pm-task-table-cell" data-label="Fin">
-                    {safeDisplayText(formatDate(task.fecha_vencimiento), "-")}
+                    {safeDisplayText(formatPmCalendarDate(task.fecha_vencimiento), "-")}
                   </div>
 
                   <div className="pm-task-table-cell" data-label="Alerta">

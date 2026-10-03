@@ -78,6 +78,8 @@ import PMProjectDocumentsTab from "./PMProjectDocumentsTab";
 import PMProjectApprovalsTab from "./PMProjectApprovalsTab";
 import PMProjectBaselineTab from "./PMProjectBaselineTab";
 import PMProjectPortalTab from "./PMProjectPortalTab";
+import PMProjectOnboardingModal from "./PMProjectOnboardingModal";
+import PMProjectSetupProgress from "./PMProjectSetupProgress";
 import PMRescheduleImpactModal from "./PMRescheduleImpactModal";
 import PMTaskDetailModal from "./PMTaskDetailModal";
 import PMWorkCalendarModal from "./PMWorkCalendarModal";
@@ -341,9 +343,12 @@ export default function PMProjectDetailPage() {
   const { empresaId, token, membership, user } = useAuth();
   const requestedView = projectViews.some((view) => view.key === location.state?.pmView)
     ? location.state?.pmView
-    : "plan";
+    : location.state?.showProjectOnboarding ? "general" : "plan";
 
   const [activeView, setActiveView] = useState(requestedView);
+  const [projectOnboardingOpen, setProjectOnboardingOpen] = useState(false);
+  const [autoReviewBudgetStructure, setAutoReviewBudgetStructure] = useState(false);
+  const [autoValidateProjectBaseline, setAutoValidateProjectBaseline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -394,6 +399,21 @@ export default function PMProjectDetailPage() {
   useEffect(() => {
     setActiveView(requestedView);
   }, [requestedView, id]);
+
+  useEffect(() => {
+    if (!location.state?.showProjectOnboarding) return;
+    setProjectOnboardingOpen(true);
+    navigate(`${location.pathname}${location.search}`, {
+      replace: true,
+      state: { pmView: "general" },
+    });
+  }, [id, location.pathname, location.search, location.state?.showProjectOnboarding, navigate]);
+
+  function openProjectBudget({ reviewStructure = false, validateBaseline = false } = {}) {
+    setAutoReviewBudgetStructure(reviewStructure);
+    setAutoValidateProjectBaseline(validateBaseline);
+    setActiveView("presupuesto");
+  }
 
   function setTaskLoading(taskId, action, isLoading) {
     const key = getTaskActionKey(taskId, action);
@@ -1732,6 +1752,17 @@ export default function PMProjectDetailPage() {
         />
       </section>
 
+      <PMProjectSetupProgress
+        empresaId={empresaId}
+        onOpenBaseline={() => openProjectBudget({ validateBaseline: true })}
+        onOpenBudget={() => openProjectBudget()}
+        onOpenExecution={() => setActiveView("plan")}
+        onReviewStructure={() => openProjectBudget({ reviewStructure: true })}
+        project={project}
+        tasks={resolvedTasks}
+        token={token}
+      />
+
       <div className="pm-view-switcher">
         {projectViews.map((view) => {
           const Icon = view.icon;
@@ -2027,7 +2058,7 @@ export default function PMProjectDetailPage() {
       {activeView === "kanban" ? (
         <DataCard
           actions={
-            canEditActiveProjectUi ? (
+            canEditActiveProjectUi && (tasks ?? []).length > 0 ? (
               <ActionButton onClick={openNewTaskModal} tone="primary" type="button">
                 Nueva tarea
               </ActionButton>
@@ -2037,7 +2068,17 @@ export default function PMProjectDetailPage() {
           title="Kanban"
         >
           {(tasks ?? []).length === 0 ? (
-            <EmptyState compact note="Crea tareas para ver el flujo del proyecto." title="Sin tareas" />
+            <EmptyState
+              action={(
+                <div className="inventory-actions inventory-actions-wrap">
+                  <ActionButton onClick={() => setActiveView("presupuesto")} tone="primary" type="button">Preparar presupuesto</ActionButton>
+                  {canEditActiveProjectUi ? <ActionButton onClick={openNewTaskModal} type="button">Crear tarea manual</ActionButton> : null}
+                </div>
+              )}
+              compact
+              note="Al generar el plan desde las partidas, las tareas aparecerán aquí."
+              title="Aún no hay tareas para mostrar."
+            />
           ) : (
             <div className="pm-kanban-grid">
               {["pendiente", "en_progreso", "en_revision", "completada"].map((statusKey) => (
@@ -2206,9 +2247,15 @@ export default function PMProjectDetailPage() {
 
       {activeView === "presupuesto" ? (
         <PMProjectBudgetTab
+          autoReviewStructure={autoReviewBudgetStructure}
+          autoValidateBaseline={autoValidateProjectBaseline}
           empresaId={empresaId}
           canManage={canManagePmUi}
+          onAutoReviewOpened={() => setAutoReviewBudgetStructure(false)}
+          onAutoValidationOpened={() => setAutoValidateProjectBaseline(false)}
           onChanged={() => loadProjectBundle({ background: true })}
+          onOpenBaseline={() => setActiveView("baseline")}
+          onOpenOverview={() => setActiveView("general")}
           onOpenWorkPlan={async () => {
             setActiveView("plan");
             await loadProjectBundle({ background: true });
@@ -2453,6 +2500,15 @@ export default function PMProjectDetailPage() {
           </div>
         </form>
       </ModalShell>
+
+      <PMProjectOnboardingModal
+        onClose={() => setProjectOnboardingOpen(false)}
+        onStartBudget={() => {
+          setProjectOnboardingOpen(false);
+          openProjectBudget();
+        }}
+        open={projectOnboardingOpen}
+      />
 
       <PMTaskDetailModal
         empresaId={empresaId}

@@ -17,6 +17,7 @@ import {
   formatDate,
   safeDisplayText,
 } from "../inventory/shared";
+import { formatPmCalendarDate } from "./dateOnly";
 import {
   formatPercent,
   getTaskStatusLabel,
@@ -346,6 +347,7 @@ function GanttBody({
   onEditTask,
   onEditTaskDates,
   onInlineTaskUpdate,
+  onOpenBudget,
   onPreviewReschedule,
   onSelectTask,
   onSetTaskStatus,
@@ -906,7 +908,7 @@ function GanttBody({
 
   function renderDateCell(task, field) {
     const value = field === "start" ? task?.fecha_inicio : task?.fecha_vencimiento;
-    const label = safeDisplayText(formatDate(value), "Sin fecha");
+    const label = safeDisplayText(formatPmCalendarDate(value), "Sin fecha");
     const title = field === "start" ? "Editar inicio" : "Editar fecha compromiso";
 
     return (
@@ -923,7 +925,14 @@ function GanttBody({
   }
 
   if (tasks.length === 0) {
-    return <EmptyState compact note="Crea la primera etapa o tarea para ver el cronograma del trabajo." title="Sin tareas" />;
+    return (
+      <EmptyState
+        action={<ActionButton onClick={onOpenBudget} tone="primary" type="button">Configurar proyecto</ActionButton>}
+        compact
+        note="El cronograma se construirá cuando el proyecto tenga tareas con fechas."
+        title="Sin tareas"
+      />
+    );
   }
 
   return (
@@ -937,8 +946,8 @@ function GanttBody({
             </div>
             <div className="pm-project-gantt-summary-meta">
               <span>Responsable: {safeDisplayText(selectedTask.asignado_nombre_snapshot, "Sin responsable")}</span>
-              <span>Inicio: {safeDisplayText(formatDate(selectedTask.fecha_inicio), "Sin fecha")}</span>
-              <span>Fin: {safeDisplayText(formatDate(selectedTask.fecha_vencimiento), "Sin fecha")}</span>
+              <span>Inicio: {safeDisplayText(formatPmCalendarDate(selectedTask.fecha_inicio), "Sin fecha")}</span>
+              <span>Fin: {safeDisplayText(formatPmCalendarDate(selectedTask.fecha_vencimiento), "Sin fecha")}</span>
               <span>{getTaskCompactAlert(selectedTask, getTaskVisualMeta(selectedTask))}</span>
             </div>
             <div className="pm-project-gantt-summary-badges">

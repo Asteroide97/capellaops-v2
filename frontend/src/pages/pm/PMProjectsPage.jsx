@@ -39,6 +39,7 @@ import {
   priorityOptions,
   projectStatusOptions,
 } from "./shared";
+import { formatPmCalendarDate, toPmDateInputValue } from "./dateOnly";
 
 
 const defaultProjectForm = {
@@ -79,9 +80,9 @@ function projectToForm(project) {
     tipo_proyecto: project.tipo_proyecto ?? "",
     estatus: project.estatus ?? "borrador",
     prioridad: project.prioridad ?? "media",
-    fecha_inicio: project.fecha_inicio ?? "",
-    fecha_fin_planificada: project.fecha_fin_planificada ?? "",
-    fecha_fin_real: project.fecha_fin_real ?? "",
+    fecha_inicio: toPmDateInputValue(project.fecha_inicio),
+    fecha_fin_planificada: toPmDateInputValue(project.fecha_fin_planificada),
+    fecha_fin_real: toPmDateInputValue(project.fecha_fin_real),
     porcentaje_avance: project.porcentaje_avance ?? "0",
     responsable_nombre_snapshot: project.responsable_nombre_snapshot ?? "",
     cliente_nombre_snapshot: project.cliente_nombre_snapshot ?? "",
@@ -91,8 +92,8 @@ function projectToForm(project) {
 }
 
 
-function toProjectPayload(form) {
-  return {
+function toProjectPayload(form, { creating = false } = {}) {
+  const payload = {
     nombre: form.nombre.trim(),
     codigo: form.codigo.trim() || null,
     descripcion: form.descripcion.trim() || null,
@@ -101,12 +102,18 @@ function toProjectPayload(form) {
     prioridad: form.prioridad,
     fecha_inicio: form.fecha_inicio || null,
     fecha_fin_planificada: form.fecha_fin_planificada || null,
-    fecha_fin_real: form.fecha_fin_real || null,
-    porcentaje_avance: Number(form.porcentaje_avance || 0),
-    responsable_nombre_snapshot: form.responsable_nombre_snapshot.trim() || null,
     cliente_nombre_snapshot: form.cliente_nombre_snapshot.trim() || null,
     presupuesto_estimado: Number(form.presupuesto_estimado || 0),
     activo: Boolean(form.activo),
+  };
+  if (creating) {
+    return { ...payload, estatus: "borrador", fecha_fin_real: null, porcentaje_avance: 0 };
+  }
+  return {
+    ...payload,
+    fecha_fin_real: form.fecha_fin_real || null,
+    porcentaje_avance: Number(form.porcentaje_avance || 0),
+    responsable_nombre_snapshot: form.responsable_nombre_snapshot.trim() || null,
   };
 }
 
@@ -191,12 +198,18 @@ export default function PMProjectsPage() {
     setSaving(true);
     resetFeedback();
     try {
-      const payload = toProjectPayload(projectForm);
+      const payload = toProjectPayload(projectForm, { creating: !editingProject?.id });
       if (editingProject?.id) {
         await updatePmProject({ projectId: editingProject.id, token, empresaId, payload });
         setSuccess("Proyecto actualizado.");
       } else {
-        await createPmProject({ token, empresaId, payload });
+        const created = await createPmProject({ token, empresaId, payload });
+        await loadProjects(filters);
+        closeModal(true);
+        if (created?.id) {
+          navigate(`/pm/projects/${created.id}`, { state: { showProjectOnboarding: true, pmView: "general" } });
+          return;
+        }
         setSuccess("Proyecto creado.");
       }
       await loadProjects(filters);
@@ -366,7 +379,7 @@ export default function PMProjectsPage() {
                         {project.task_stats?.completadas ?? 0}/{project.task_stats?.total ?? 0} tareas
                       </div>
                     </td>
-                    <td>{safeDisplayText(formatDate(project.fecha_fin_planificada), "-")}</td>
+                    <td>{safeDisplayText(formatPmCalendarDate(project.fecha_fin_planificada), "-")}</td>
                     <td>
                       <div className="inventory-actions">
                         <ActionButton onClick={() => navigate(`/pm/projects/${project.id}`)} size="sm" tone="primary" type="button">
@@ -414,7 +427,7 @@ export default function PMProjectsPage() {
         onClose={closeModal}
         open={modalOpen}
         size="wide"
-        subtitle="Base operativa para proyectos, tareas, miembros y comentarios."
+        subtitle={editingProject ? "Actualiza la información del proyecto." : "Registra lo esencial. Después prepararás el presupuesto y el plan de trabajo."}
         title={editingProject ? "Editar proyecto" : "Nuevo proyecto"}
       >
         {error ? (
@@ -440,18 +453,20 @@ export default function PMProjectsPage() {
                 value={projectForm.codigo}
               />
             </Field>
-            <Field label="Estatus">
-              <select
-                onChange={(event) => setProjectForm((current) => ({ ...current, estatus: event.target.value }))}
-                value={projectForm.estatus}
-              >
-                {projectStatusOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </Field>
+            {editingProject ? (
+              <Field label="Estatus">
+                <select
+                  onChange={(event) => setProjectForm((current) => ({ ...current, estatus: event.target.value }))}
+                  value={projectForm.estatus}
+                >
+                  {projectStatusOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
             <Field label="Prioridad">
               <select
                 onChange={(event) => setProjectForm((current) => ({ ...current, prioridad: event.target.value }))}
@@ -467,28 +482,36 @@ export default function PMProjectsPage() {
             <Field label="Tipo de proyecto">
               <input
                 onChange={(event) => setProjectForm((current) => ({ ...current, tipo_proyecto: event.target.value }))}
+                required={!editingProject}
                 type="text"
                 value={projectForm.tipo_proyecto}
               />
             </Field>
-            <Field label="Responsable">
-              <input
-                onChange={(event) => setProjectForm((current) => ({ ...current, responsable_nombre_snapshot: event.target.value }))}
-                type="text"
-                value={projectForm.responsable_nombre_snapshot}
-              />
-            </Field>
+            {editingProject ? (
+              <Field label="Responsable">
+                <input
+                  onChange={(event) => setProjectForm((current) => ({ ...current, responsable_nombre_snapshot: event.target.value }))}
+                  type="text"
+                  value={projectForm.responsable_nombre_snapshot}
+                />
+              </Field>
+            ) : null}
             <Field label="Cliente">
               <input
                 onChange={(event) => setProjectForm((current) => ({ ...current, cliente_nombre_snapshot: event.target.value }))}
+                required={!editingProject}
                 type="text"
                 value={projectForm.cliente_nombre_snapshot}
               />
             </Field>
-            <Field label="Presupuesto estimado">
+            <Field
+              hint={!editingProject ? "Es una referencia inicial. El presupuesto detallado se construirá después con capítulos y partidas." : undefined}
+              label={editingProject ? "Presupuesto estimado" : "Presupuesto de referencia"}
+            >
               <input
                 min="0"
                 onChange={(event) => setProjectForm((current) => ({ ...current, presupuesto_estimado: event.target.value }))}
+                required={!editingProject}
                 step="0.01"
                 type="number"
                 value={projectForm.presupuesto_estimado}
@@ -497,34 +520,39 @@ export default function PMProjectsPage() {
             <Field label="Fecha inicio">
               <input
                 onChange={(event) => setProjectForm((current) => ({ ...current, fecha_inicio: event.target.value }))}
+                required={!editingProject}
                 type="date"
                 value={projectForm.fecha_inicio}
               />
             </Field>
-            <Field label="Fecha fin planificada">
+            <Field hint={!editingProject ? "Puedes definirla ahora o dejar que el cronograma la determine después." : undefined} label="Fecha fin planificada">
               <input
                 onChange={(event) => setProjectForm((current) => ({ ...current, fecha_fin_planificada: event.target.value }))}
                 type="date"
                 value={projectForm.fecha_fin_planificada}
               />
             </Field>
-            <Field label="Fecha fin real">
-              <input
-                onChange={(event) => setProjectForm((current) => ({ ...current, fecha_fin_real: event.target.value }))}
-                type="date"
-                value={projectForm.fecha_fin_real}
-              />
-            </Field>
-            <Field hint="Si el proyecto ya tiene tareas activas, el backend recalcula este valor." label="Avance manual (%)">
-              <input
-                max="100"
-                min="0"
-                onChange={(event) => setProjectForm((current) => ({ ...current, porcentaje_avance: event.target.value }))}
-                step="1"
-                type="number"
-                value={projectForm.porcentaje_avance}
-              />
-            </Field>
+            {editingProject && (projectForm.estatus === "completado" || projectForm.fecha_fin_real) ? (
+              <Field label="Fecha fin real">
+                <input
+                  onChange={(event) => setProjectForm((current) => ({ ...current, fecha_fin_real: event.target.value }))}
+                  type="date"
+                  value={projectForm.fecha_fin_real}
+                />
+              </Field>
+            ) : null}
+            {editingProject ? (
+              <Field hint="Ajuste avanzado; el avance operativo se calcula desde tareas cuando aplica." label="Avance manual (%)">
+                <input
+                  max="100"
+                  min="0"
+                  onChange={(event) => setProjectForm((current) => ({ ...current, porcentaje_avance: event.target.value }))}
+                  step="1"
+                  type="number"
+                  value={projectForm.porcentaje_avance}
+                />
+              </Field>
+            ) : null}
             <Field label="Descripción" span={2}>
               <textarea
                 onChange={(event) => setProjectForm((current) => ({ ...current, descripcion: event.target.value }))}
@@ -533,10 +561,12 @@ export default function PMProjectsPage() {
               />
             </Field>
           </FormGrid>
-          <div className="inventory-form-note">
-            <strong>Presupuesto</strong>
-            <p className="table-note">Presupuesto estimado actual: {formatMoney(projectForm.presupuesto_estimado || 0)}</p>
-          </div>
+          {!editingProject ? (
+            <div className="inventory-form-note">
+              <strong>Presupuesto de referencia</strong>
+              <p className="table-note">{formatMoney(projectForm.presupuesto_estimado || 0)} · no crea capítulos ni partidas.</p>
+            </div>
+          ) : null}
         </form>
       </ModalShell>
     </div>

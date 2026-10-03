@@ -7456,6 +7456,217 @@ body.pm-is-dragging {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
+.pm-onboarding-steps {
+  display: grid;
+  gap: 0.5rem;
+  max-height: min(62vh, 560px);
+  overflow: auto;
+  padding: 0.1rem 0.15rem;
+}
+
+.pm-onboarding-step {
+  display: grid;
+  grid-template-columns: 24px 26px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.68);
+}
+
+.pm-onboarding-step.is-current {
+  border-color: rgba(16, 120, 85, 0.25);
+  background: rgba(236, 253, 245, 0.68);
+}
+
+.pm-onboarding-step-state,
+.pm-onboarding-step-icon,
+.pm-onboarding-step-number {
+  display: grid;
+  place-items: center;
+  color: #64748b;
+}
+
+.pm-onboarding-step.is-current .pm-onboarding-step-state,
+.pm-onboarding-step.is-current .pm-onboarding-step-icon {
+  color: #08734f;
+}
+
+.pm-onboarding-step-copy {
+  display: grid;
+  gap: 0.18rem;
+  min-width: 0;
+}
+
+.pm-onboarding-step-copy strong {
+  color: var(--text-main, #0f172a);
+  font-size: 0.9rem;
+}
+
+.pm-onboarding-step-copy span {
+  color: var(--text-soft, #64748b);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.pm-onboarding-step-number {
+  font-size: 0.76rem;
+}
+
+.pm-project-setup {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0.3rem 0 1.2rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(100, 116, 139, 0.18);
+  border-radius: 15px;
+  background: linear-gradient(110deg, rgba(248, 250, 252, 0.96), rgba(255, 255, 255, 0.92));
+}
+
+.pm-project-setup-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.pm-project-setup-head > div:first-child {
+  display: grid;
+  gap: 0.12rem;
+}
+
+.pm-project-setup-eyebrow {
+  color: #64748b;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pm-project-setup-head h2 {
+  margin: 0;
+  color: var(--text-main, #0f172a);
+  font-size: 1rem;
+}
+
+.pm-project-setup-head p,
+.pm-project-setup-error {
+  margin: 0;
+  color: var(--text-soft, #64748b);
+  font-size: 0.78rem;
+}
+
+.pm-project-setup-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.pm-project-setup-list {
+  display: grid;
+  gap: 0.32rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pm-project-setup-row {
+  display: grid;
+  grid-template-columns: 22px minmax(145px, 0.7fr) minmax(180px, 1.8fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 34px;
+  padding: 0.3rem 0.45rem;
+  border-radius: 8px;
+  color: #64748b;
+  font-size: 0.79rem;
+}
+
+.pm-project-setup-row strong {
+  color: #334155;
+  font-size: 0.8rem;
+}
+
+.pm-project-setup-row > span:nth-child(3) {
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.pm-project-setup-row.is-complete {
+  background: rgba(236, 253, 245, 0.55);
+}
+
+.pm-project-setup-row.is-warning {
+  background: rgba(255, 247, 237, 0.75);
+}
+
+.pm-project-setup-row.is-complete .pm-project-setup-check {
+  color: #07805b;
+}
+
+.pm-project-setup-row.is-warning .pm-project-setup-check {
+  color: #b45309;
+}
+
+.pm-project-setup-check {
+  display: grid;
+  place-items: center;
+  color: #94a3b8;
+}
+
+.pm-project-setup-error {
+  color: #a16207;
+}
+
+.pm-project-setup-next-label {
+  margin: -0.45rem 0 0;
+  color: #64748b;
+  font-size: 0.76rem;
+  text-align: right;
+}
+
+.pm-workplan-manual-secondary {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 760px) {
+  .pm-project-setup-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pm-project-setup-actions {
+    justify-content: flex-start;
+  }
+
+  .pm-project-setup-row {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+    gap: 0.4rem;
+  }
+
+  .pm-project-setup-row > span:nth-child(3) {
+    grid-column: 2 / -1;
+  }
+
+  .pm-project-setup-row > :last-child {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .pm-onboarding-step {
+    grid-template-columns: 22px minmax(0, 1fr) 20px;
+  }
+
+  .pm-onboarding-step-icon {
+    display: none;
+  }
+}
+
 @media (min-width: 1080px) {
   .crm-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
