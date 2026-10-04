@@ -26,6 +26,12 @@ from app.services.pm import (
     get_project_costs,
     get_project_estimations_summary,
     list_project_estimation_candidates,
+    add_budget_item_labor,
+    add_budget_indirect,
+    update_budget_item,
+    get_project_baseline_readiness,
+    get_budget_plan_preview,
+    apply_budget_plan,
 )
 
 
@@ -224,6 +230,63 @@ class PMBudgetCurrentResolutionTestCase(unittest.TestCase):
         self.assertEqual(vs_actual.reference_budget, Decimal("1096.00"))
         self.assertEqual(vs_actual.presupuesto_detallado_costo, Decimal("0"))
 
+    def test_quantity_edit_persists_current_economics_before_readiness(self) -> None:
+        self.db.expire_on_commit = False
+        project = self._create_project(self.company_a, name="Economic regression")
+        budget = self._create_budget(project)
+        item = self._create_budget_item(
+            budget, parent_id=None, codigo="QA", nombre="Installation",
+            tipo="partida", cantidad=Decimal("2"),
+            precio_unitario_manual=Decimal("125.55"),
+        )
+        add_budget_item_labor(
+            self.db, self.pm_context_a, item_id=item.id, rol=None,
+            descripcion="Labor", horas_por_unidad=Decimal("1"),
+            tarifa_hora=Decimal("50"), ip_address=None,
+        )
+        add_budget_indirect(
+            self.db, self.pm_context_a, budget_id=budget.id, nombre="Freight",
+            tipo="monto", porcentaje=None, monto=Decimal("20"), ip_address=None,
+        )
+        self.db.commit()
+        self.assertEqual(budget.total_costo, Decimal("120.00"))
+        self.assertEqual(budget.total_venta, Decimal("251.10"))
+        update_budget_item(
+            self.db, self.pm_context_a, item_id=item.id,
+            cantidad=Decimal("3"), provided_fields={"cantidad"}, ip_address=None,
+            parent_id=None, codigo=None, nombre=None, descripcion=None,
+            tipo=None, unidad=None, margen_pct=None, precio_unitario_manual=None,
+        )
+        self.db.commit()
+        project_id, budget_id = project.id, budget.id
+        config_id, user_id = self.pm_context_a.config.id, self.user_a.id
+        # Independent request: do not let a budget GET repair the persisted header.
+        self.db.close()
+        self.db = self.SessionLocal()
+        self.pm_context_a = PMContext(
+            user=self.db.get(Usuario, user_id), empresa_id=self.company_a.id,
+            membership_role="admin", config=self.db.get(EmpresaPMConfig, config_id),
+        )
+        current = get_current_project_budget_row(self.db, self.company_a.id, project_id)
+        self.assertEqual(current.total_costo, Decimal("170.00"))
+        self.assertEqual(current.total_venta, Decimal("376.65"))
+        readiness = get_project_baseline_readiness(self.db, self.pm_context_a, project_id=project_id)
+        self.assertEqual(readiness.budget_context.planned_cost, Decimal("170.00"))
+        self.assertEqual(readiness.budget_context.planned_sale, Decimal("376.65"))
+        preview = get_budget_plan_preview(self.db, self.pm_context_a, budget_id=budget_id)
+        self.assertEqual(preview.budget_id, current.id)
+        applied = apply_budget_plan(
+            self.db, self.pm_context_a, budget_id=budget_id,
+            expected_preview_token=preview.preview_token,
+            confirm=True, allow_draft=True, ip_address=None,
+        )
+        self.assertEqual(current.total_costo, Decimal("170.00"))
+        self.assertEqual(current.total_venta, Decimal("376.65"))
+        self.assertEqual(applied.budget_id, current.id)
+        bundle = get_project_budget(self.db, self.pm_context_a, project_id)
+        self.assertEqual(bundle.budget.total_costo, current.total_costo)
+        self.assertEqual(bundle.budget.total_venta, current.total_venta)
+
     def test_draft_budget_exposes_consistent_context_and_estimation_readiness(self) -> None:
         project = self._create_project(self.company_a, name="Borrador operativo", presupuesto_estimado=Decimal("500"))
         budget = self._create_budget(project, status_name="borrador", version=1)
@@ -305,6 +368,36 @@ class PMBudgetCurrentResolutionTestCase(unittest.TestCase):
         self.assertIsNone(resolved)
         self.assertFalse(bundle.budget_context.has_detailed_budget)
         self.assertEqual(bundle.budget_context.budget_source, "project_estimate")
+
+    def test_replaced_budget_and_other_tenant_are_never_current(self) -> None:
+        project = self._create_project(self.company_a, name="Replacement")
+        old = self._create_budget(project, status_name="aprobado", version=1, active=False)
+        current = self._create_budget(project, version=2)
+        self.db.flush()
+        self.assertEqual(get_current_project_budget_row(self.db, self.company_a.id, project.id).id, current.id)
+        self.assertIsNone(get_current_project_budget_row(self.db, self.company_b.id, project.id))
+        current.activo = False
+        self.db.flush()
+        self.assertIsNone(get_current_project_budget_row(self.db, self.company_a.id, project.id))
+        readiness = get_project_baseline_readiness(self.db, self.pm_context_a, project_id=project.id)
+        self.assertIsNone(readiness.budget_context.planned_cost)
+        self.assertIsNone(readiness.budget_context.planned_sale)
+        self.assertFalse(readiness.ready)
+        self.assertNotEqual(old.id, current.id)
+
+    def test_current_budget_ties_have_stable_id_order(self) -> None:
+        project = self._create_project(self.company_a, name="Stable order")
+        first = self._create_budget(project)
+        second = self._create_budget(project)
+        stamp = datetime(2026, 10, 4, tzinfo=timezone.utc)
+        for budget in (first, second):
+            budget.created_at = stamp
+            budget.updated_at = stamp
+        self.db.flush()
+        self.assertEqual(
+            get_current_project_budget_row(self.db, self.company_a.id, project.id).id,
+            max(first.id, second.id),
+        )
 
     def test_estimations_without_active_items_report_sin_partidas(self) -> None:
         project = self._create_project(self.company_a, name="Sin partidas")

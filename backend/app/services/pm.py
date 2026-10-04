@@ -8801,6 +8801,7 @@ def get_current_project_budget_row(db: Session, empresa_id: str, project_id: str
             desc(PMPresupuesto.version),
             desc(PMPresupuesto.updated_at),
             desc(PMPresupuesto.created_at),
+            desc(PMPresupuesto.id),
         )
     )
 
@@ -8956,6 +8957,8 @@ def refresh_project_budget_totals(
     for item in chapter_items:
         refresh_budget_item_totals(db, item)
 
+    # Sessions disable autoflush: SQL aggregates must see the recalculated rows.
+    db.flush()
     subtotal_cost = db.scalar(
         select(func.coalesce(func.sum(PMPresupuestoPartida.subtotal_costo), 0)).where(
             PMPresupuestoPartida.empresa_id == empresa_id,
