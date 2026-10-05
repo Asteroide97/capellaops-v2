@@ -214,6 +214,7 @@ class PMBudgetDiagnosticsTestCase(unittest.TestCase):
         for statement in statements:
             for dialect in (mssql.dialect(), sqlite.dialect()):
                 compiled = str(statement.compile(dialect=dialect)).upper()
+                self.assertNotRegex(compiled, r"\bIS\s+[01]\b")
                 for forbidden in ("PRAGMA", "ROWID", "NULLS FIRST", "NULLS LAST", "BEGIN IMMEDIATE"):
                     self.assertNotIn(forbidden, compiled)
 

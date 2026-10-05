@@ -14,7 +14,8 @@ from sqlalchemy.dialects import mssql, sqlite
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import Empresa, EmpresaUsuario, Plan, Usuario
-from app.models.pm import EmpresaPMConfig, PMPresupuesto, PMPresupuestoPartida, PMPresupuestoTaskLink, PMProyecto
+from app.models.pm import EmpresaPMConfig, PMPresupuesto, PMPresupuestoPartida, PMPresupuestoTaskLink, PMProyecto, PMProyectoCostoResumen
+from app.services.pm_budget_diagnostics import calculate_expected_header
 from app.services.pm import (
     PMContext,
     build_budget_prerequisite_rows_query,
@@ -27,6 +28,7 @@ from app.services.pm import (
     get_project_estimations_summary,
     list_project_estimation_candidates,
     add_budget_item_labor,
+    add_budget_item_material,
     add_budget_indirect,
     update_budget_item,
     get_project_baseline_readiness,
@@ -230,6 +232,90 @@ class PMBudgetCurrentResolutionTestCase(unittest.TestCase):
         self.assertEqual(vs_actual.reference_budget, Decimal("1096.00"))
         self.assertEqual(vs_actual.presupuesto_detallado_costo, Decimal("0"))
 
+    def _check_component_add_with_loaded_collection(self, component_type: str) -> None:
+        project = self._create_project(self.company_a, name="Loaded component regression")
+        budget = self._create_budget(project)
+        item = self._create_budget_item(
+            budget, parent_id=None, codigo="QA", nombre="Installation",
+            tipo="partida", cantidad=Decimal("2"), precio_unitario_manual=Decimal("125.55"),
+        )
+        add_budget_item_labor(
+            self.db, self.pm_context_a, item_id=item.id, rol=None, descripcion="Labor",
+            horas_por_unidad=Decimal("1"), tarifa_hora=Decimal("50"), ip_address=None,
+        )
+        add_budget_indirect(
+            self.db, self.pm_context_a, budget_id=budget.id, nombre="Freight",
+            tipo="monto", porcentaje=None, monto=Decimal("20"), ip_address=None,
+        )
+        self.db.commit()
+        self.assertEqual(budget.total_costo, Decimal("120.00"))
+        self.assertEqual(budget.total_venta, Decimal("251.10"))
+        # Reading these collections is legitimate and must not change later writes.
+        list(item.materials)
+        list(item.labor_components)
+        if component_type == "labor":
+            add_budget_item_labor(
+                self.db, self.pm_context_a, item_id=item.id, rol=None, descripcion="Extra labor",
+                horas_por_unidad=Decimal("1"), tarifa_hora=Decimal("25"), ip_address=None,
+            )
+        else:
+            add_budget_item_material(
+                self.db, self.pm_context_a, item_id=item.id, material_id=None,
+                material_nombre_snapshot="Manual material", material_sku_snapshot=None, unidad="pz",
+                cantidad_por_unidad=Decimal("1"), costo_unitario=Decimal("25"),
+                proveedor_nombre_snapshot=None, ip_address=None,
+            )
+        budget_id, project_id, company_id = budget.id, project.id, project.empresa_id
+        self.db.commit()
+        # Read persisted values in an independent session, without a repairing GET.
+        with self.SessionLocal() as reader:
+            stored = reader.get(PMPresupuesto, budget_id)
+            expected = calculate_expected_header(reader, stored)
+            summary = reader.scalar(select(PMProyectoCostoResumen).where(
+                PMProyectoCostoResumen.empresa_id == company_id,
+                PMProyectoCostoResumen.proyecto_id == project_id,
+            ))
+            self.assertEqual(expected["total_costo"], Decimal("170.00"))
+            self.assertEqual(stored.total_costo, expected["total_costo"])
+            self.assertEqual(stored.total_venta, expected["total_venta"])
+            self.assertEqual(summary.presupuesto_detallado_costo, expected["total_costo"])
+            self.assertEqual(summary.presupuesto_detallado_venta, expected["total_venta"])
+            self.assertEqual(summary.margen_estimado, expected["margen_estimado"])
+
+    def test_add_labor_refreshes_preloaded_components_and_persisted_summary(self) -> None:
+        self._check_component_add_with_loaded_collection("labor")
+
+    def test_add_material_refreshes_preloaded_components_and_persisted_summary(self) -> None:
+        self._check_component_add_with_loaded_collection("material")
+
+    def test_control_budget_economics_remain_consistent(self) -> None:
+        project = self._create_project(self.company_a, name="Control economics")
+        budget = self._create_budget(project)
+        item = self._create_budget_item(
+            budget, parent_id=None, codigo=None, nombre="Cimientos", tipo="partida",
+            cantidad=Decimal("1"), precio_unitario_manual=Decimal("15000"),
+        )
+        add_budget_item_labor(
+            self.db, self.pm_context_a, item_id=item.id, rol=None, descripcion="Obrero",
+            horas_por_unidad=Decimal("8"), tarifa_hora=Decimal("137"), ip_address=None,
+        )
+        self._create_budget_item(
+            budget, parent_id=None, codigo=None, nombre="Demo 2", tipo="partida",
+            cantidad=Decimal("10"), precio_unitario_manual=Decimal("1000"),
+        )
+        budget_id, project_id, company_id = budget.id, project.id, project.empresa_id
+        self.db.commit()
+        with self.SessionLocal() as reader:
+            stored = reader.get(PMPresupuesto, budget_id)
+            summary = reader.scalar(select(PMProyectoCostoResumen).where(
+                PMProyectoCostoResumen.empresa_id == company_id,
+                PMProyectoCostoResumen.proyecto_id == project_id,
+            ))
+            self.assertEqual(stored.total_costo, Decimal("1096.00"))
+            self.assertEqual(stored.total_venta, Decimal("25000.00"))
+            self.assertEqual(summary.presupuesto_detallado_costo, stored.total_costo)
+            self.assertEqual(summary.presupuesto_detallado_venta, stored.total_venta)
+
     def test_quantity_edit_persists_current_economics_before_readiness(self) -> None:
         self.db.expire_on_commit = False
         project = self._create_project(self.company_a, name="Economic regression")
@@ -270,6 +356,14 @@ class PMBudgetCurrentResolutionTestCase(unittest.TestCase):
         current = get_current_project_budget_row(self.db, self.company_a.id, project_id)
         self.assertEqual(current.total_costo, Decimal("170.00"))
         self.assertEqual(current.total_venta, Decimal("376.65"))
+        expected = calculate_expected_header(self.db, current)
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.empresa_id == self.company_a.id,
+            PMProyectoCostoResumen.proyecto_id == project_id,
+        ))
+        self.assertEqual(summary.presupuesto_detallado_costo, expected["total_costo"])
+        self.assertEqual(summary.presupuesto_detallado_venta, expected["total_venta"])
+        self.assertEqual(summary.margen_estimado, expected["margen_estimado"])
         readiness = get_project_baseline_readiness(self.db, self.pm_context_a, project_id=project_id)
         self.assertEqual(readiness.budget_context.planned_cost, Decimal("170.00"))
         self.assertEqual(readiness.budget_context.planned_sale, Decimal("376.65"))

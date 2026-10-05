@@ -32,7 +32,7 @@ def calculate_expected_header(db: Session, budget: PMPresupuesto) -> dict:
         PMPresupuestoPartida.empresa_id == budget.empresa_id,
         PMPresupuestoPartida.presupuesto_id == budget.id,
         PMPresupuestoPartida.proyecto_id == budget.proyecto_id,
-        PMPresupuestoPartida.activo.is_(True), PMPresupuestoPartida.tipo == "partida",
+        PMPresupuestoPartida.activo == True, PMPresupuestoPartida.tipo == "partida",
     )).all()
     costs = {item.id: Decimal("0") for item in items}
     for model, quantity_field in (
@@ -41,10 +41,10 @@ def calculate_expected_header(db: Session, budget: PMPresupuesto) -> dict:
     ):
         rows = db.scalars(select(model).join(PMPresupuestoPartida, model.partida_id == PMPresupuestoPartida.id).where(
             model.empresa_id == budget.empresa_id, model.proyecto_id == budget.proyecto_id,
-            model.activo.is_(True), PMPresupuestoPartida.empresa_id == budget.empresa_id,
+            model.activo == True, PMPresupuestoPartida.empresa_id == budget.empresa_id,
             PMPresupuestoPartida.proyecto_id == budget.proyecto_id,
             PMPresupuestoPartida.presupuesto_id == budget.id,
-            PMPresupuestoPartida.activo.is_(True), PMPresupuestoPartida.tipo == "partida",
+            PMPresupuestoPartida.activo == True, PMPresupuestoPartida.tipo == "partida",
         )).all()
         for row in rows:
             rate = row.costo_unitario if model is PMPresupuestoPartidaMaterial else row.tarifa_hora
@@ -57,7 +57,7 @@ def calculate_expected_header(db: Session, budget: PMPresupuesto) -> dict:
     indirects = db.scalars(select(PMPresupuestoIndirecto).where(
         PMPresupuestoIndirecto.empresa_id == budget.empresa_id,
         PMPresupuestoIndirecto.proyecto_id == budget.proyecto_id,
-        PMPresupuestoIndirecto.presupuesto_id == budget.id, PMPresupuestoIndirecto.activo.is_(True),
+        PMPresupuestoIndirecto.presupuesto_id == budget.id, PMPresupuestoIndirecto.activo == True,
     )).all()
     amounts = [quantize_money(subtotal_cost * decimal_or_zero(row.porcentaje) / Decimal("100"))
                if row.tipo == "porcentaje" else quantize_money(row.monto) for row in indirects]
@@ -162,7 +162,7 @@ def repair_budget_headers(db: Session, *, empresa_id: str, budget_ids: set[str])
     _assert_clean(db)
     selected = db.scalars(select(PMPresupuesto).where(
         PMPresupuesto.empresa_id == empresa_id, PMPresupuesto.id.in_(budget_ids),
-        PMPresupuesto.activo.is_(True), PMPresupuesto.estatus.in_(["aprobado", "borrador"]),
+        PMPresupuesto.activo == True, PMPresupuesto.estatus.in_(["aprobado", "borrador"]),
     )).all()
     if {budget.id for budget in selected} != budget_ids or any(
         get_current_project_budget_row(db, empresa_id, budget.proyecto_id).id != budget.id for budget in selected
@@ -174,7 +174,7 @@ def repair_budget_headers(db: Session, *, empresa_id: str, budget_ids: set[str])
         expected = calculate_expected_header(db, budget)
         result = db.execute(update(PMPresupuesto).where(
             PMPresupuesto.id == row["presupuesto_id"], PMPresupuesto.empresa_id == empresa_id,
-            PMPresupuesto.activo.is_(True), PMPresupuesto.estatus == row["estado"],
+            PMPresupuesto.activo == True, PMPresupuesto.estatus == row["estado"],
             PMPresupuesto.total_costo == row["total_costo_guardado"],
             PMPresupuesto.total_venta == row["total_venta_guardado"],
         ).values(**expected, updated_at=budget.updated_at).execution_options(synchronize_session=False))

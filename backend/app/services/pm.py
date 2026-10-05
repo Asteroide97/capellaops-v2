@@ -10003,6 +10003,8 @@ def add_budget_item_material(
     )
     db.add(component)
     db.flush()
+    # FK assignment does not invalidate a previously loaded parent collection.
+    db.expire(item, ["materials"])
     refresh_budget_item_tree(db, item)
     refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=item.proyecto_id)
     db.add(
@@ -10144,6 +10146,8 @@ def add_budget_item_labor(
     )
     db.add(component)
     db.flush()
+    # FK assignment does not invalidate a previously loaded parent collection.
+    db.expire(item, ["labor_components"])
     refresh_budget_item_tree(db, item)
     refresh_project_budget_totals(db, empresa_id=pm_context.empresa_id, project_id=item.proyecto_id)
     db.add(
