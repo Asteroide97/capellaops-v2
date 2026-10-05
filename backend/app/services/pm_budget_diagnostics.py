@@ -1,6 +1,10 @@
 """Portable inspection; repair callers own a serializable transaction."""
 from decimal import Decimal
 from types import SimpleNamespace
+import hashlib
+import json
+from datetime import datetime, timezone
+from uuid import UUID
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
@@ -11,6 +15,7 @@ from app.models.pm import (
     PMProyectoMaterialPlan, PMProyectoMaterialConsumo, PMTimeEntry,
 )
 from app.models.inventory import Almacen, MovimientoInventario
+from app.models.company import Empresa
 from app.services.pm import (
     calculate_budget_leaf_totals, calculate_budget_header_totals,
     decimal_or_zero, quantize_rate, quantize_money, get_current_project_budget_row,
@@ -21,6 +26,50 @@ SUMMARY_FIELDS = (
     "presupuesto_estimado", "presupuesto_detallado_costo", "presupuesto_detallado_venta",
     "margen_estimado", "variacion_presupuesto", "variacion_vs_presupuesto_detallado", "presupuesto_origen",
 )
+
+REPAIR_FINGERPRINT_FIELDS = {
+    PMProyecto: ("id", "empresa_id", "presupuesto_estimado", "activo", "updated_at"),
+    PMPresupuesto: ("id", "empresa_id", "proyecto_id", "version", "estatus", "activo", "moneda",
+                   "subtotal_costo", "subtotal_venta", "indirectos_pct", "indirectos_monto",
+                   "total_costo", "total_venta", "utilidad_pct", "utilidad_monto", "margen_estimado",
+                   "created_at", "updated_at"),
+    PMProyectoCostoResumen: ("id", "empresa_id", "proyecto_id", *SUMMARY_FIELDS,
+                            "costo_materiales_real", "costo_horas_real", "costo_total_real", "updated_at"),
+    PMPresupuestoPartida: ("id", "empresa_id", "proyecto_id", "presupuesto_id", "parent_id", "tipo",
+                          "cantidad", "costo_unitario", "precio_unitario", "precio_unitario_manual",
+                          "subtotal_costo", "subtotal_venta", "margen_pct", "activo", "updated_at"),
+    PMPresupuestoPartidaMaterial: ("id", "empresa_id", "proyecto_id", "partida_id", "material_id",
+                                  "cantidad_por_unidad", "costo_unitario", "costo_total", "activo", "updated_at"),
+    PMPresupuestoPartidaManoObra: ("id", "empresa_id", "proyecto_id", "partida_id", "horas_por_unidad",
+                                 "tarifa_hora", "costo_total", "activo", "updated_at"),
+    PMPresupuestoIndirecto: ("id", "empresa_id", "proyecto_id", "presupuesto_id", "tipo",
+                            "porcentaje", "monto", "activo", "updated_at"),
+}
+
+
+def fingerprint_repair_state(state: dict) -> str:
+    """Canonical economic state; legacy naive timestamps follow the app's UTC convention."""
+    def canonical(value, key=""):
+        if isinstance(value, Decimal):
+            if value == 0:
+                return "0"
+            numeric = format(value, "f")
+            return numeric.rstrip("0").rstrip(".") if "." in numeric else numeric
+        if isinstance(value, datetime):
+            utc = (value if value.tzinfo else value.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+            return utc.isoformat(timespec="microseconds")
+        if isinstance(value, UUID):
+            return str(value)
+        if isinstance(value, str) and (key == "id" or key.endswith("_id")):
+            return str(UUID(value))
+        if isinstance(value, dict):
+            return {field: canonical(item, field) for field, item in sorted(value.items())}
+        if isinstance(value, list):
+            rows = [canonical(item) for item in value]
+            return sorted(rows, key=lambda row: row["id"])
+        return value
+    serialized = json.dumps(canonical(state), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 def _assert_clean(db: Session) -> None:
@@ -182,6 +231,10 @@ def diagnose_project_economics(db: Session, *, empresa_id: str, budget_ids: set[
             states.append({**identity, "status": "both_inconsistent" if bad_header and bad_summary
                            else "header_inconsistent" if bad_header else "summary_inconsistent" if bad_summary
                            else "consistent", "requires_summary_repair": bad_summary})
+            states[-1]["repair_fingerprint"] = build_existing_summary_repair_plan(
+                db, empresa_id=empresa_id, project_id=project.id,
+                budget_id=budget.id, summary_id=summary.id,
+            )["fingerprint"]
     return {"budget_header_discrepancies": headers,
             "project_cost_summary_discrepancies": summaries, "project_states": states,
             "requires_summary_repair": bool(summaries),
@@ -290,3 +343,88 @@ def repair_missing_project_summaries(db: Session, *, empresa_id: str, project_id
             created.append({"empresa_id": empresa_id, "proyecto_id": project.id})
     db.flush()
     return created
+
+
+def build_existing_summary_repair_plan(db: Session, *, empresa_id: str, project_id: str,
+                                     budget_id: str, summary_id: str) -> dict:
+    """Read-only exact selection, official calculations and source-state fingerprint."""
+    _assert_clean(db)
+    if any(not value or not value.strip() for value in (empresa_id, project_id, budget_id, summary_id)):
+        raise ValueError("Selecciona empresa, proyecto, presupuesto y resumen explicitamente.")
+    if db.scalar(select(Empresa.id).where(Empresa.id == empresa_id)) is None:
+        raise ValueError("Empresa no encontrada.")
+    selected = []
+    for model, identity in ((PMProyecto, project_id), (PMPresupuesto, budget_id),
+                            (PMProyectoCostoResumen, summary_id)):
+        conditions = [model.id == identity, model.empresa_id == empresa_id]
+        if model is not PMProyecto:
+            conditions.append(model.proyecto_id == project_id)
+        row = db.scalar(select(model).where(*conditions).execution_options(populate_existing=True))
+        if row is None:
+            raise ValueError("Los IDs no corresponden a la empresa y proyecto seleccionados.")
+        selected.append(row)
+    project, budget, summary = selected
+    current = get_current_project_budget_row(db, empresa_id, project_id)
+    if current is None or current.id != budget_id or not project_summary_requirement_reasons(db, project):
+        raise ValueError("El presupuesto no es vigente o el resumen no es requerido.")
+    snapshots = {}
+    for row in selected:
+        table = row.__table__
+        snapshots[table.name] = dict(db.execute(select(table).where(table.c.id == row.id)).mappings().one())
+    sources = {}
+    for model in (PMPresupuesto, PMPresupuestoPartida, PMPresupuestoPartidaMaterial,
+                  PMPresupuestoPartidaManoObra, PMPresupuestoIndirecto):
+        table = model.__table__
+        sources[table.name] = [dict(row) for row in db.execute(select(table).where(
+            table.c.empresa_id == empresa_id, table.c.proyecto_id == project_id,
+        ).order_by(table.c.id)).mappings()]
+    economic_selected = {row.__tablename__: {field: snapshots[row.__tablename__][field]
+                         for field in REPAIR_FINGERPRINT_FIELDS[type(row)]} for row in selected}
+    economic_sources = {model.__tablename__: [{field: row[field] for field in REPAIR_FINGERPRINT_FIELDS[model]}
+                        for row in sources[model.__tablename__]] for model in
+                        (PMPresupuesto, PMPresupuestoPartida, PMPresupuestoPartidaMaterial,
+                         PMPresupuestoPartidaManoObra, PMPresupuestoIndirecto)}
+    fingerprint = fingerprint_repair_state({"selected": economic_selected, "sources": economic_sources})
+    header = calculate_expected_header(db, budget)
+    projected = SimpleNamespace(
+        presupuesto_detallado_costo=header["total_costo"],
+        presupuesto_detallado_venta=header["total_venta"], margen_estimado=header["margen_estimado"],
+        costo_materiales_real=summary.costo_materiales_real, costo_horas_real=summary.costo_horas_real,
+    )
+    recalculate_project_cost_summary_totals(project, projected)
+    derived_summary = {field: getattr(projected, field) for field in (*SUMMARY_FIELDS, "costo_total_real")}
+    return {"fingerprint": fingerprint, "before": snapshots,
+            "header_after": header, "summary_after": derived_summary,
+            "requires_repair": any(getattr(budget, field) != value for field, value in header.items())
+            or any(getattr(summary, field) != value for field, value in derived_summary.items())}
+
+
+def repair_existing_project_summary(db: Session, *, empresa_id: str, project_id: str,
+                                    budget_id: str, summary_id: str, expected_fingerprint: str) -> list[dict]:
+    """Caller owns SERIALIZABLE transaction; CAS updates only the two selected rows."""
+    plan = build_existing_summary_repair_plan(
+        db, empresa_id=empresa_id, project_id=project_id, budget_id=budget_id, summary_id=summary_id,
+    )
+    if not expected_fingerprint or expected_fingerprint != plan["fingerprint"]:
+        raise ValueError("Los datos cambiaron desde el diagnostico; vuelve a revisarlos.")
+    if not plan["requires_repair"]:
+        return []
+    for model, values in ((PMPresupuesto, plan["header_after"]),
+                          (PMProyectoCostoResumen, plan["summary_after"])):
+        before = plan["before"][model.__tablename__]
+        if all(before[field] == value for field, value in values.items()):
+            continue
+        # Avoid equality on legacy SQL Server TEXT columns; the transaction holds
+        # the read set and CAS covers identities, timestamps and economic values.
+        guard_fields = {"id", "empresa_id", "proyecto_id", "updated_at", *values}
+        guard_fields.update({"estatus", "activo", "version", "indirectos_pct"}
+                            if model is PMPresupuesto else {"costo_materiales_real", "costo_horas_real"})
+        conditions = [getattr(model, field) == before[field] for field in sorted(guard_fields)]
+        result = db.execute(update(model).where(*conditions).values(**values)
+                            .execution_options(synchronize_session=False))
+        if result.rowcount != 1:
+            raise ValueError("Los datos cambiaron durante la reparacion; cancela toda la transaccion.")
+    db.flush()
+    db.expire_all()
+    return [{"empresa_id": empresa_id, "proyecto_id": project_id,
+             "presupuesto_id": budget_id, "resumen_id": summary_id}]

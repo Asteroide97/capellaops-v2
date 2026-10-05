@@ -172,7 +172,52 @@ no se activa por un proyecto vacio ni por su importe simple de referencia. Apply
 mantiene su respuesta anterior (lista de encabezados reparados). Su segunda
 ejecucion puede dar cero cambios aunque el resumen siga desactualizado.
 
-### Resumen requerido y reparacion opt-in de ausencias
+### Reparacion atomica de encabezado y resumen existente
+
+Modo separado: --apply --repair-inconsistent-summary exige exactamente una
+empresa, un --proyecto-id, un --presupuesto-id, un --resumen-id y
+--expected-fingerprint con la huella SHA-256 de un diagnostico reciente.
+No admite combinacion con --repair-missing-summaries, IDs multiples ni comodines.
+El apply anterior sigue limitado a encabezados. No se ejecuta este modo en este gate.
+
+El dry-run agrega repair_fingerprint al project_state con presupuesto vigente
+y resumen existente. La huella incluye encabezado, resumen, proyecto y fuentes
+del presupuesto: partidas, componentes, indirectos e historial de presupuestos.
+No contiene credenciales ni imprime snapshots completos.
+La lista blanca exacta esta en REPAIR_FINGERPRINT_FIELDS: identidades y relaciones,
+estatus/activo/version del presupuesto; cantidades, tarifas/precios, margenes,
+subtotales, indirectos; costos materiales/horas y derivados del resumen;
+presupuesto simple del proyecto y timestamps de concurrencia/seleccion.
+Se excluyen nombres, contactos, notas, descripciones y metadata de usuarios.
+Decimal se canoniza sin ceros fraccionarios sobrantes; UUID en formato canonico;
+datetime en UTC con microsegundos (naive se interpreta UTC segun el dominio).
+Los diccionarios y las colecciones por ID se ordenan antes de SHA-256.
+Una huella anterior se rechaza si cualquiera de esas fuentes ha cambiado.
+Para repetir tras un apply exitoso, obtener primero la huella nueva: si ya esta
+consistente, devuelve cero cambios. Reutilizar la huella vieja aborta sin writes.
+
+Se verifican todos los IDs y el presupuesto vigente antes de escribir.
+La transaccion SERIALIZABLE del wrapper mantiene el read set; actualizaciones
+SQLAlchemy compare-and-set validan identidades, timestamps y cifras anteriores.
+Un fallo, incluso despues del UPDATE del header, revierte ambos cambios.
+El aislamiento se configura con Connection.execution_options antes del begin,
+no en el engine global. SQLAlchemy registra la restauracion al devolver esa
+conexion al pool y el wrapper dispone su engine dedicado. Se prueba restauracion
+tras commit y excepcion. No hay retry silencioso ante deadlock/serialization failure.
+No se llama refresh_project_budget_totals directamente porque ese flujo tambien
+modifica partidas, capitulos e indirectos. Se reutilizan calculate_expected_header
+(que usa los helpers oficiales) y recalculate_project_cost_summary_totals sobre
+una proyeccion no persistida, sin formulas nuevas.
+
+Solo se actualizan los ocho derivados del header y SUMMARY_FIELDS mas
+costo_total_real (suma oficial de los costos materiales/horas persistidos).
+Se conservan identidad, metadata y costos fuente. updated_at sigue el onupdate
+normal del modelo; no se fuerza su preservacion en este modo.
+No crea ni elimina resumenes. No repara ni recalcula costos reales fuente.
+La compatibilidad SQL Server se valida por compilacion; concurrencia/driver
+reales requieren un gate posterior autorizado. Nunca ejecutar sin revision.
+
+### Ausencias requeridas
 
 La evidencia se limita al tenant: cualquier presupuesto historico (tambien
 cancelado/inactivo), plan de materiales, consumo PM o registro de horas;

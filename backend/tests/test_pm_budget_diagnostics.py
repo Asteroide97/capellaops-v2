@@ -1,17 +1,21 @@
 from decimal import Decimal
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from uuid import UUID
+import copy
 import unittest
 from unittest.mock import patch
 import io
 import hashlib
 import json
 
-from sqlalchemy import event, select, update, text
+from sqlalchemy import create_engine, event, select, update, text
 from sqlalchemy.dialects import mssql, sqlite
-from app.models.pm import PMPresupuesto, PMTarea, PMProyectoLineaBase, PMProyectoCostoResumen
+from app.models.pm import PMPresupuesto, PMPresupuestoPartida, PMTarea, PMProyectoLineaBase, PMProyectoCostoResumen
 from app.models.inventory import Almacen, Material, MovimientoInventario
 from app.services.pm import add_budget_item_labor, add_budget_indirect, get_project_budget, get_project_baseline_readiness, create_project_time_entry, add_project_material_plan, create_project_material_consumption_manual, refresh_project_material_costs
 from app.services.pm_budget_diagnostics import diagnose_budget_headers, diagnose_project_economics, repair_budget_headers, repair_missing_project_summaries
+from app.services.pm_budget_diagnostics import build_existing_summary_repair_plan, repair_existing_project_summary
+from app.services.pm_budget_diagnostics import fingerprint_repair_state, REPAIR_FINGERPRINT_FIELDS
 from app.scripts.diagnose_pm_budget_totals import main, read_only_guard
 from tests import test_pm_budget_current_resolution as fixtures
 
@@ -49,6 +53,322 @@ class PMBudgetDiagnosticsTestCase(unittest.TestCase):
     def snapshot(self):
         return {name: [tuple(str(value) for value in row) for row in self.db.execute(select(table)).all()]
                 for name, table in PMPresupuesto.metadata.tables.items()}
+
+    def test_atomic_existing_summary_repairs_both_rows(self):
+        project, budget = self.fixture()
+        self.stale(budget)
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        summary.presupuesto_detallado_costo = Decimal("120")
+        summary.presupuesto_detallado_venta = Decimal("251.10")
+        summary.presupuesto_estimado = Decimal("120")
+        summary.margen_estimado = Decimal("131.10")
+        self.db.commit()
+        summary_id = summary.id
+        plan = build_existing_summary_repair_plan(self.db, empresa_id=self.company_a.id,
+            project_id=project.id, budget_id=budget.id, summary_id=summary.id)
+        before = self.snapshot()
+        repair_existing_project_summary(self.db, empresa_id=self.company_a.id,
+            project_id=project.id, budget_id=budget.id, summary_id=summary.id,
+            expected_fingerprint=plan["fingerprint"])
+        self.db.commit()
+        self.assertEqual(summary.id, summary_id)
+        self.assertEqual(summary.presupuesto_detallado_costo, Decimal("170"))
+        self.assertEqual(summary.presupuesto_detallado_venta, Decimal("376.65"))
+        self.assertEqual(summary.margen_estimado, Decimal("206.65"))
+        self.assertEqual(summary.presupuesto_estimado, Decimal("170"))
+        self.assertEqual(summary.variacion_presupuesto, Decimal("170"))
+        self.assertEqual(summary.variacion_vs_presupuesto_detallado, Decimal("170"))
+        after = self.snapshot()
+        for table in before:
+            if table not in {"pm_presupuestos", "pm_proyecto_costo_resumen"}:
+                self.assertEqual(before[table], after[table], table)
+        for model, derived in ((PMPresupuesto, plan["header_after"]),
+                               (PMProyectoCostoResumen, plan["summary_after"])):
+            old = plan["before"][model.__tablename__]
+            current = self.db.get(model, old["id"])
+            for field, value in old.items():
+                if field not in {*derived, "updated_at"}:
+                    self.assertEqual(getattr(current, field), value, field)
+        report = diagnose_project_economics(self.db, empresa_id=self.company_a.id)
+        self.assertEqual(report["project_states"][0]["status"], "consistent")
+        fresh = build_existing_summary_repair_plan(self.db, empresa_id=self.company_a.id,
+            project_id=project.id, budget_id=budget.id, summary_id=summary.id)
+        self.assertNotEqual(plan["fingerprint"], fresh["fingerprint"])
+        with self.assertRaisesRegex(ValueError, "cambiaron"):
+            repair_existing_project_summary(self.db, empresa_id=self.company_a.id,
+                project_id=project.id, budget_id=budget.id, summary_id=summary.id,
+                expected_fingerprint=plan["fingerprint"])
+        self.assertEqual(after, self.snapshot())
+        self.assertEqual(repair_existing_project_summary(self.db, empresa_id=self.company_a.id,
+            project_id=project.id, budget_id=budget.id, summary_id=summary.id,
+            expected_fingerprint=fresh["fingerprint"]), [])
+        self.db.commit()
+        self.assertEqual(after, self.snapshot())
+
+    def atomic_fixture(self):
+        project, budget = self.fixture()
+        self.stale(budget)
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        kwargs = dict(empresa_id=self.company_a.id, project_id=project.id,
+                      budget_id=budget.id, summary_id=summary.id)
+        plan = build_existing_summary_repair_plan(self.db, **kwargs)
+        self.db.rollback()
+        return kwargs, plan
+
+    def test_fingerprint_real_plan_is_stable_across_reload_and_collection_order(self):
+        kwargs, _ = self.atomic_fixture()
+        budget = self.db.get(PMPresupuesto, kwargs["budget_id"])
+        self._create_budget_item(budget, parent_id=None, codigo="ORDER", nombre="Order test",
+            tipo="partida", cantidad=Decimal("1"), precio_unitario_manual=Decimal("0"))
+        self.db.commit()
+        captured = []
+        def capture(state):
+            captured.append(copy.deepcopy(state))
+            return fingerprint_repair_state(state)
+        with patch("app.services.pm_budget_diagnostics.fingerprint_repair_state", side_effect=capture):
+            first = build_existing_summary_repair_plan(self.db, **kwargs)
+        self.db.rollback()
+        self.db.expire_all()
+        second = build_existing_summary_repair_plan(self.db, **kwargs)
+        self.assertEqual(first["fingerprint"], second["fingerprint"])
+        state = captured[0]
+        self.assertGreaterEqual(len(state["sources"]["pm_presupuesto_partidas"]), 2)
+        for rows in state["sources"].values():
+            rows.reverse()
+        state = dict(reversed(list(state.items())))
+        self.assertEqual(first["fingerprint"], fingerprint_repair_state(state))
+        self.assertFalse(any("notas" in fields or "descripcion" in fields or "nombre" in fields
+                             for fields in REPAIR_FINGERPRINT_FIELDS.values()))
+
+    def test_fingerprint_canonical_decimal_uuid_and_utc_timestamp(self):
+        identity = "6fc6f285-b36e-4b7b-9f59-31b993ad8083"
+        state = {"id": identity, "cost": Decimal("170.00"),
+                 "updated_at": datetime(2026, 10, 5, 12, tzinfo=timezone.utc)}
+        expected = fingerprint_repair_state(state)
+        equivalent = {"updated_at": datetime(2026, 10, 5, 6,
+                      tzinfo=timezone(timedelta(hours=-6))), "cost": Decimal("170"), "id": UUID(identity)}
+        self.assertEqual(expected, fingerprint_repair_state(equivalent))
+        equivalent["updated_at"] = datetime(2026, 10, 5, 12)
+        self.assertEqual(expected, fingerprint_repair_state(equivalent))
+        equivalent["cost"] = Decimal("171")
+        self.assertNotEqual(expected, fingerprint_repair_state(equivalent))
+
+    def test_cli_isolation_reset_after_commit_and_failure_no_silent_retry(self):
+        kwargs, plan = self.atomic_fixture()
+        args = ["--sqlite-path", str(self.db_path), "--apply", "--repair-inconsistent-summary",
+                "--empresa-id", kwargs["empresa_id"], "--proyecto-id", kwargs["project_id"],
+                "--presupuesto-id", kwargs["budget_id"], "--resumen-id", kwargs["summary_id"],
+                "--expected-fingerprint", plan["fingerprint"]]
+        for failure in (False, True):
+            engine = create_engine(f"sqlite:///{self.db_path.as_posix()}", isolation_level="READ UNCOMMITTED")
+            calls = []
+            original = engine.dialect.set_isolation_level
+            def set_isolation(connection, level):
+                calls.append(level)
+                return original(connection, level)
+            def repair(db, **selected):
+                self.assertEqual(db.connection().get_isolation_level(), "SERIALIZABLE")
+                if failure:
+                    raise RuntimeError("Simulated serialization failure")
+                return []
+            with patch("app.scripts.diagnose_pm_budget_totals.create_engine", return_value=engine), \
+                    patch.object(engine.dialect, "set_isolation_level", side_effect=set_isolation), \
+                    patch("app.services.pm_budget_diagnostics.repair_existing_project_summary", side_effect=repair) as repair_mock, \
+                    patch("sys.stdout", new_callable=io.StringIO):
+                self.assertEqual(main(args), 1 if failure else 0)
+            self.assertEqual(repair_mock.call_count, 1)
+            self.assertIn("SERIALIZABLE", calls)
+            self.assertEqual(calls[-1], "READ UNCOMMITTED")
+            engine.dispose()
+
+    def test_atomic_wrong_ids_abort_without_writes(self):
+        kwargs, plan = self.atomic_fixture()
+        other, other_budget = self.fixture(self.company_b)
+        other_summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == other.id))
+        wrong = dict(empresa_id=self.company_b.id, project_id=other.id,
+                     budget_id=other_budget.id, summary_id=other_summary.id)
+        before = self.snapshot()
+        for field in kwargs:
+            with self.assertRaises(ValueError):
+                repair_existing_project_summary(self.db, **{**kwargs, field: wrong[field]},
+                                                expected_fingerprint=plan["fingerprint"])
+        self.assertEqual(before, self.snapshot())
+        local_other, _ = self.fixture()
+        local_summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == local_other.id))
+        before = self.snapshot()
+        for field, identity in (("project_id", local_other.id), ("summary_id", local_summary.id)):
+            with self.assertRaises(ValueError):
+                repair_existing_project_summary(self.db, **{**kwargs, field: identity},
+                                                expected_fingerprint=plan["fingerprint"])
+        self.assertEqual(before, self.snapshot())
+
+    def test_atomic_stale_fingerprint_rejects_header_summary_and_source_changes(self):
+        kwargs, plan = self.atomic_fixture()
+        budget = self.db.get(PMPresupuesto, kwargs["budget_id"])
+        budget.total_costo = Decimal("121")
+        self.db.commit()
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "cambiaron"):
+            repair_existing_project_summary(self.db, **kwargs, expected_fingerprint=plan["fingerprint"])
+        self.assertEqual(before, self.snapshot())
+        for model, field, value in ((PMProyectoCostoResumen, "costo_horas_real", Decimal("1")),
+                                    (PMPresupuesto, "indirectos_pct", Decimal("1"))):
+            plan = build_existing_summary_repair_plan(self.db, **kwargs)
+            identity = kwargs["summary_id"] if model is PMProyectoCostoResumen else kwargs["budget_id"]
+            setattr(self.db.get(model, identity), field, value)
+            self.db.commit()
+            before = self.snapshot()
+            with self.assertRaisesRegex(ValueError, "cambiaron"):
+                repair_existing_project_summary(self.db, **kwargs, expected_fingerprint=plan["fingerprint"])
+            self.assertEqual(before, self.snapshot())
+
+    def test_atomic_empty_project_and_missing_summary_are_rejected(self):
+        kwargs, plan = self.atomic_fixture()
+        empty = self._create_project(self.company_a, name="Empty")
+        self.db.commit()
+        before = self.snapshot()
+        with self.assertRaises(ValueError):
+            repair_existing_project_summary(self.db, **{**kwargs, "project_id": empty.id},
+                                            expected_fingerprint=plan["fingerprint"])
+        summary = self.db.get(PMProyectoCostoResumen, kwargs["summary_id"])
+        self.db.delete(summary)
+        self.db.commit()
+        missing_before = self.snapshot()
+        with self.assertRaises(ValueError):
+            repair_existing_project_summary(self.db, **kwargs, expected_fingerprint=plan["fingerprint"])
+        self.assertEqual(missing_before, self.snapshot())
+
+    def test_atomic_cas_queries_are_portable_and_zero_rowcount_rolls_back(self):
+        kwargs, plan = self.atomic_fixture()
+        summary = self.db.get(PMProyectoCostoResumen, kwargs["summary_id"])
+        summary.presupuesto_detallado_costo = Decimal("120")
+        self.db.commit()
+        plan = build_existing_summary_repair_plan(self.db, **kwargs)
+        before = self.snapshot()
+        self.db.rollback()
+        original = self.db.execute
+        statements = []
+        def execute(statement, *args, **kw):
+            if getattr(statement, "is_update", False):
+                statements.append(statement)
+                if statement.table.name == "pm_proyecto_costo_resumen":
+                    from types import SimpleNamespace
+                    return SimpleNamespace(rowcount=0)
+            return original(statement, *args, **kw)
+        with patch.object(self.db, "execute", side_effect=execute):
+            with self.assertRaisesRegex(ValueError, "durante"), self.db.begin():
+                repair_existing_project_summary(self.db, **kwargs, expected_fingerprint=plan["fingerprint"])
+        self.assertEqual(before, self.snapshot())
+        self.assertEqual(len(statements), 2)
+        for statement in statements:
+            sql = str(statement.compile(dialect=mssql.dialect())).upper()
+            self.assertNotRegex(sql, r"\bIS\s+[01]\b")
+            self.assertNotIn("NOTAS =", sql)
+
+    def test_atomic_no_longer_current_budget_is_rejected(self):
+        kwargs, plan = self.atomic_fixture()
+        budget = self.db.get(PMPresupuesto, kwargs["budget_id"])
+        budget.estatus = "cancelado"
+        self.db.commit()
+        before = self.snapshot()
+        with self.assertRaises(ValueError):
+            repair_existing_project_summary(self.db, **kwargs, expected_fingerprint=plan["fingerprint"])
+        self.assertEqual(before, self.snapshot())
+
+    def test_atomic_changed_partida_rejects_old_diagnostic(self):
+        kwargs, plan = self.atomic_fixture()
+        item = self.db.scalar(select(PMPresupuestoPartida).where(
+            PMPresupuestoPartida.presupuesto_id == kwargs["budget_id"]))
+        item.cantidad = Decimal("4")
+        self.db.commit()
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "cambiaron"):
+            repair_existing_project_summary(self.db, **kwargs, expected_fingerprint=plan["fingerprint"])
+        self.assertEqual(before, self.snapshot())
+
+    def test_atomic_repair_preserves_separate_control_1096_25000(self):
+        kwargs, plan = self.atomic_fixture()
+        project = self._create_project(self.company_a, name="Control")
+        budget = self._create_budget(project)
+        item = self._create_budget_item(budget, parent_id=None, codigo="CONTROL", nombre="Control",
+            tipo="partida", cantidad=Decimal("1"), precio_unitario_manual=Decimal("25000"))
+        add_budget_item_labor(self.db, self.pm_context_a, item_id=item.id, rol=None, descripcion=None,
+            horas_por_unidad=Decimal("8"), tarifa_hora=Decimal("137"), ip_address=None)
+        self.db.commit()
+        self.assertEqual(budget.total_costo, Decimal("1096"))
+        self.assertEqual(budget.total_venta, Decimal("25000"))
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        before = {model.__tablename__: dict(self.db.execute(select(model.__table__).where(
+            model.id == row.id)).mappings().one()) for model, row in
+            ((PMPresupuesto, budget), (PMProyectoCostoResumen, summary))}
+        repair_existing_project_summary(self.db, **kwargs, expected_fingerprint=plan["fingerprint"])
+        self.db.commit()
+        for model, row in ((PMPresupuesto, budget), (PMProyectoCostoResumen, summary)):
+            self.assertEqual(before[model.__tablename__], dict(self.db.execute(select(model.__table__).where(
+                model.id == row.id)).mappings().one()))
+
+    def test_atomic_failure_rolls_back_header_and_summary(self):
+        kwargs, plan = self.atomic_fixture()
+        summary = self.db.get(PMProyectoCostoResumen, kwargs["summary_id"])
+        summary.presupuesto_detallado_costo = Decimal("120")
+        self.db.commit()
+        plan = build_existing_summary_repair_plan(self.db, **kwargs)
+        before = self.snapshot()
+        self.db.rollback()
+        def fail_summary(conn, cursor, statement, parameters, context, executemany):
+            if statement.lstrip().upper().startswith("UPDATE PM_PROYECTO_COSTO_RESUMEN"):
+                raise ValueError("Injected summary failure")
+        event.listen(self.engine, "before_cursor_execute", fail_summary)
+        try:
+            with self.assertRaisesRegex(ValueError, "Injected"), self.db.begin():
+                repair_existing_project_summary(self.db, **kwargs, expected_fingerprint=plan["fingerprint"])
+        finally:
+            event.remove(self.engine, "before_cursor_execute", fail_summary)
+        self.assertEqual(before, self.snapshot())
+
+    def test_atomic_consistent_summary_and_control_are_untouched(self):
+        project, budget = self.fixture()
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        kwargs = dict(empresa_id=self.company_a.id, project_id=project.id,
+                      budget_id=budget.id, summary_id=summary.id)
+        plan = build_existing_summary_repair_plan(self.db, **kwargs)
+        before = self.snapshot()
+        self.assertEqual(repair_existing_project_summary(self.db, **kwargs,
+            expected_fingerprint=plan["fingerprint"]), [])
+        self.db.commit()
+        self.assertEqual(before, self.snapshot())
+
+    def test_atomic_cli_rejects_incomplete_or_mixed_modes_before_connection(self):
+        for args in (["--repair-inconsistent-summary"],
+                     ["--apply", "--repair-inconsistent-summary"],
+                     ["--apply", "--repair-inconsistent-summary", "--repair-missing-summaries"]):
+            with self.assertRaises(SystemExit), patch("sys.stderr", new_callable=io.StringIO), \
+                    patch("app.scripts.diagnose_pm_budget_totals.create_engine") as engine:
+                main(["--empresa-id", self.company_a.id, *args])
+            engine.assert_not_called()
+        valid = ["--apply", "--repair-inconsistent-summary", "--proyecto-id", self.company_a.id,
+                 "--presupuesto-id", self.company_a.id, "--resumen-id", self.company_a.id,
+                 "--expected-fingerprint", "0" * 64]
+        for flag in ("--proyecto-id", "--presupuesto-id", "--resumen-id", "--expected-fingerprint"):
+            invalid = valid.copy()
+            at = invalid.index(flag)
+            del invalid[at:at + 2]
+            with self.assertRaises(SystemExit), patch("sys.stderr", new_callable=io.StringIO), \
+                    patch("app.scripts.diagnose_pm_budget_totals.create_engine") as engine:
+                main(["--empresa-id", self.company_a.id, *invalid])
+            engine.assert_not_called()
+        for flag, value in (("--empresa-id", self.company_a.id), ("--resumen-id", self.company_a.id),
+                            ("--expected-fingerprint", "0" * 64)):
+            with self.assertRaises(SystemExit), patch("sys.stderr", new_callable=io.StringIO), \
+                    patch("app.scripts.diagnose_pm_budget_totals.create_engine") as engine:
+                main(["--empresa-id", self.company_a.id, *valid, flag, value])
+            engine.assert_not_called()
 
     def test_consistent_budget_is_omitted_and_dry_run_has_no_writes(self):
         self.fixture()

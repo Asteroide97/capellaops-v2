@@ -3,6 +3,9 @@ import argparse
 from contextlib import contextmanager
 import json
 import os
+import re
+import sys
+from uuid import UUID
 from pathlib import Path
 
 from sqlalchemy import create_engine, event
@@ -40,11 +43,15 @@ def read_only_guard(engine, db):
 
 
 def main(argv=None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description="Diagnostico PM SQLAlchemy, solo lectura por defecto.")
     parser.add_argument("--sqlite-path", help="Archivo SQLite local opcional en lugar de DATABASE_URL.")
     parser.add_argument("--empresa-id", required=True)
     parser.add_argument("--presupuesto-id", action="append", default=[])
     parser.add_argument("--proyecto-id", action="append", default=[])
+    parser.add_argument("--resumen-id")
+    parser.add_argument("--expected-fingerprint")
+    parser.add_argument("--repair-inconsistent-summary", action="store_true")
     parser.add_argument("--repair-missing-summaries", action="store_true",
                         help="Opt-in: crear solo resumenes ausentes de proyectos explicitamente seleccionados.")
     parser.add_argument("--apply", action="store_true", help="Reparar solo IDs seleccionados; usar primero dry-run y copia de seguridad.")
@@ -52,11 +59,26 @@ def main(argv=None) -> int:
     empresa_id = args.empresa_id.strip()
     ids = {value.strip() for value in args.presupuesto_id}
     project_ids = {value.strip() for value in args.proyecto_id}
+    if args.repair_inconsistent_summary:
+        if any(sum(option.split("=", 1)[0] == flag for option in argv) != 1
+               for flag in ("--empresa-id", "--resumen-id", "--expected-fingerprint")):
+            parser.error("Empresa, resumen y huella deben indicarse una sola vez.")
+        if (not args.apply or args.repair_missing_summaries or len(args.proyecto_id) != 1
+                or len(args.presupuesto_id) != 1 or not args.resumen_id
+                or not re.fullmatch(r"[0-9a-f]{64}", args.expected_fingerprint or "")):
+            parser.error("La reparacion atomica requiere --apply, cuatro IDs y --expected-fingerprint; no admite otros modos.")
+        try:
+            for value in (empresa_id, *project_ids, *ids, args.resumen_id):
+                UUID(value)
+        except ValueError:
+            parser.error("Los cuatro IDs deben ser UUID explicitos, sin comodines.")
+    elif args.resumen_id or args.expected_fingerprint:
+        parser.error("Resumen y huella requieren --repair-inconsistent-summary.")
     if not empresa_id or "" in ids or "" in project_ids:
         parser.error("Empresa e IDs deben ser explicitos y no vacios.")
     if args.repair_missing_summaries and (not args.apply or not project_ids or ids):
         parser.error("La reparacion de resumenes requiere --apply y --proyecto-id; no se mezcla con encabezados.")
-    if project_ids and not args.repair_missing_summaries:
+    if project_ids and not (args.repair_missing_summaries or args.repair_inconsistent_summary):
         parser.error("--proyecto-id requiere --repair-missing-summaries.")
     if args.apply and not ids and not args.repair_missing_summaries:
         parser.error("--apply requiere al menos un --presupuesto-id revisado.")
@@ -79,19 +101,28 @@ def main(argv=None) -> int:
         parser.error("Solo se admiten SQLite y SQL Server.")
     engine = None
     try:
-        from app.services.pm_budget_diagnostics import diagnose_project_economics, repair_budget_headers, repair_missing_project_summaries
-        engine = create_engine(url, echo=False, hide_parameters=True,
-                               **({"isolation_level": "SERIALIZABLE"} if args.apply else {}))
-        with Session(engine, autoflush=False) as db:
+        from app.services.pm_budget_diagnostics import diagnose_project_economics, repair_budget_headers, repair_missing_project_summaries, repair_existing_project_summary
+        engine = create_engine(url, echo=False, hide_parameters=True)
+        with engine.connect() as connection:
             if args.apply:
-                with db.begin():
-                    rows = (repair_missing_project_summaries(db, empresa_id=empresa_id, project_ids=project_ids)
-                            if args.repair_missing_summaries else
-                            repair_budget_headers(db, empresa_id=empresa_id, budget_ids=ids))
-            else:
-                with read_only_guard(engine, db):
-                    rows = diagnose_project_economics(db, empresa_id=empresa_id, budget_ids=ids or None)
-            print(json.dumps(rows, default=str, ensure_ascii=True, indent=2))
+                connection = connection.execution_options(isolation_level="SERIALIZABLE")
+            with Session(connection, autoflush=False) as db:
+                if args.apply:
+                    with db.begin():
+                        if args.repair_inconsistent_summary:
+                            rows = repair_existing_project_summary(
+                                db, empresa_id=empresa_id, project_id=next(iter(project_ids)),
+                                budget_id=next(iter(ids)), summary_id=args.resumen_id,
+                                expected_fingerprint=args.expected_fingerprint,
+                            )
+                        else:
+                            rows = (repair_missing_project_summaries(db, empresa_id=empresa_id, project_ids=project_ids)
+                                if args.repair_missing_summaries else
+                                repair_budget_headers(db, empresa_id=empresa_id, budget_ids=ids))
+                else:
+                    with read_only_guard(engine, db):
+                        rows = diagnose_project_economics(db, empresa_id=empresa_id, budget_ids=ids or None)
+                print(json.dumps(rows, default=str, ensure_ascii=True, indent=2))
         return 0
     except Exception:
         print("No se pudo completar la revision. La transaccion no se confirmo.")
