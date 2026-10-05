@@ -2,13 +2,15 @@
 from decimal import Decimal
 from types import SimpleNamespace
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.pm import (
     PMPresupuesto, PMPresupuestoPartida, PMPresupuestoPartidaMaterial,
     PMPresupuestoPartidaManoObra, PMPresupuestoIndirecto, PMProyecto, PMProyectoCostoResumen,
+    PMProyectoMaterialPlan, PMProyectoMaterialConsumo, PMTimeEntry,
 )
+from app.models.inventory import Almacen, MovimientoInventario
 from app.services.pm import (
     calculate_budget_leaf_totals, calculate_budget_header_totals,
     decimal_or_zero, quantize_rate, quantize_money, get_current_project_budget_row,
@@ -24,6 +26,33 @@ SUMMARY_FIELDS = (
 def _assert_clean(db: Session) -> None:
     if db.new or db.dirty or db.deleted:
         raise ValueError("El diagnostico requiere una sesion sin cambios pendientes.")
+
+
+def project_summary_requirement_reasons(db: Session, project: PMProyecto) -> list[str]:
+    """Persisted economic flows create a summary even when later deactivated."""
+    reasons = []
+    for model, reason in (
+        (PMPresupuesto, "budget_history"),
+        (PMProyectoMaterialPlan, "material_plans"),
+        (PMProyectoMaterialConsumo, "material_consumptions"),
+        (PMTimeEntry, "time_entries"),
+    ):
+        if db.scalar(select(model.id).where(
+            model.empresa_id == project.empresa_id, model.proyecto_id == project.id,
+        ).limit(1)) is not None:
+            reasons.append(reason)
+    if db.scalar(select(MovimientoInventario.id).where(
+        MovimientoInventario.empresa_id == project.empresa_id,
+        MovimientoInventario.proyecto_id == project.id,
+        MovimientoInventario.es_proyecto == True,
+        MovimientoInventario.estatus == "confirmado",
+        or_(MovimientoInventario.tipo == "salida", and_(
+            MovimientoInventario.tipo == "entrada",
+            MovimientoInventario.referencia_tipo == "DEVOLUCION_PROYECTO",
+        )),
+    ).limit(1)) is not None:
+        reasons.append("project_inventory_movements")
+    return reasons
 
 
 def calculate_expected_header(db: Session, budget: PMPresupuesto) -> dict:
@@ -112,9 +141,16 @@ def diagnose_project_economics(db: Session, *, empresa_id: str, budget_ids: set[
                         "presupuesto_id": budget.id if budget else None,
                         "resumen_id": summary.id if summary else None}
             if summary is None:
+                reasons = project_summary_requirement_reasons(db, project)
+                if not reasons:
+                    states.append({**identity, "status": "summary_not_required",
+                                   "requires_summary_repair": False, "summary_required": False,
+                                   "summary_requirement_reasons": [], "summary_economics_checked": False})
+                    continue
                 summaries.append({**identity, "status": "missing_summary", "campo": None,
                                   "valor_guardado": None, "valor_recalculado": None, "diferencia": None})
                 states.append({**identity, "status": "missing_summary", "requires_summary_repair": True,
+                               "summary_required": True, "summary_requirement_reasons": reasons,
                                "header_inconsistent": budget.id in bad_headers if budget else False})
                 continue
             if budget is None:
@@ -183,3 +219,74 @@ def repair_budget_headers(db: Session, *, empresa_id: str, budget_ids: set[str])
     db.flush()
     db.expire_all()
     return rows
+
+
+def repair_missing_project_summaries(db: Session, *, empresa_id: str, project_ids: set[str]) -> list[dict]:
+    """Opt-in creation only: existing summaries and economic sources stay untouched."""
+    if not empresa_id or not empresa_id.strip() or not project_ids or any(not value.strip() for value in project_ids):
+        raise ValueError("Selecciona empresa y proyectos explicitamente para reparar resumenes ausentes.")
+    if len(project_ids) > 1000:
+        raise ValueError("Selecciona como maximo 1000 IDs por transaccion.")
+    _assert_clean(db)
+    projects = db.scalars(select(PMProyecto).where(
+        PMProyecto.empresa_id == empresa_id, PMProyecto.id.in_(project_ids),
+    ).order_by(PMProyecto.id)).all()
+    if {project.id for project in projects} != project_ids:
+        raise ValueError("Todos los proyectos deben pertenecer a la empresa seleccionada.")
+    created = []
+    with db.no_autoflush:
+        for project in projects:
+            if db.scalar(select(PMProyectoCostoResumen.id).where(
+                PMProyectoCostoResumen.empresa_id == empresa_id,
+                PMProyectoCostoResumen.proyecto_id == project.id,
+            )) is not None or not project_summary_requirement_reasons(db, project):
+                continue
+            summary = PMProyectoCostoResumen(empresa_id=empresa_id, proyecto_id=project.id)
+            plans = db.scalars(select(PMProyectoMaterialPlan).where(
+                PMProyectoMaterialPlan.empresa_id == empresa_id,
+                PMProyectoMaterialPlan.proyecto_id == project.id, PMProyectoMaterialPlan.activo == True,
+            )).all()
+            consumptions = db.scalars(select(PMProyectoMaterialConsumo).where(
+                PMProyectoMaterialConsumo.empresa_id == empresa_id,
+                PMProyectoMaterialConsumo.proyecto_id == project.id,
+                PMProyectoMaterialConsumo.activo == True, PMProyectoMaterialConsumo.movimiento_id.is_(None),
+            )).all()
+            movements = db.scalars(select(MovimientoInventario).join(
+                Almacen, MovimientoInventario.almacen_id == Almacen.id,
+            ).where(
+                MovimientoInventario.empresa_id == empresa_id, MovimientoInventario.proyecto_id == project.id,
+                MovimientoInventario.es_proyecto == True, MovimientoInventario.estatus == "confirmado",
+                or_(MovimientoInventario.tipo == "salida", and_(
+                    MovimientoInventario.tipo == "entrada",
+                    MovimientoInventario.referencia_tipo == "DEVOLUCION_PROYECTO",
+                )),
+            )).all()
+            # Same source snapshots as refresh_project_material_costs; no plan status writes.
+            summary.costo_materiales_estimado = sum((decimal_or_zero(p.costo_total_estimado) for p in plans), Decimal("0"))
+            summary.total_materiales_planeados = sum((decimal_or_zero(p.cantidad_planificada) for p in plans), Decimal("0"))
+            summary.costo_materiales_real = sum((decimal_or_zero(c.costo_total_snapshot) for c in consumptions), Decimal("0"))
+            summary.total_materiales_consumidos = sum((decimal_or_zero(c.cantidad_consumida) for c in consumptions), Decimal("0"))
+            for movement in movements:
+                sign = Decimal("1") if movement.tipo == "salida" else Decimal("-1")
+                quantity = decimal_or_zero(movement.cantidad)
+                summary.costo_materiales_real += sign * quantity * decimal_or_zero(
+                    movement.costo_promedio_snapshot or movement.costo_unitario_snapshot)
+                summary.total_materiales_consumidos += sign * quantity
+            summary.variacion_materiales = summary.costo_materiales_real - summary.costo_materiales_estimado
+            entries = db.scalars(select(PMTimeEntry).where(
+                PMTimeEntry.empresa_id == empresa_id, PMTimeEntry.proyecto_id == project.id,
+                PMTimeEntry.activo == True,
+            )).all()
+            summary.costo_horas_real = sum((decimal_or_zero(e.costo_total_snapshot) for e in entries), Decimal("0"))
+            summary.horas_totales = sum((decimal_or_zero(e.horas) for e in entries), Decimal("0"))
+            summary.horas_sin_tarifa = sum((decimal_or_zero(e.horas) for e in entries if e.fuente_tarifa == "sin_tarifa"), Decimal("0"))
+            budget = get_current_project_budget_row(db, empresa_id, project.id)
+            totals = calculate_expected_header(db, budget) if budget else None
+            summary.presupuesto_detallado_costo = totals["total_costo"] if totals else Decimal("0")
+            summary.presupuesto_detallado_venta = totals["total_venta"] if totals else Decimal("0")
+            summary.margen_estimado = totals["margen_estimado"] if totals else None
+            recalculate_project_cost_summary_totals(project, summary)
+            db.add(summary)
+            created.append({"empresa_id": empresa_id, "proyecto_id": project.id})
+    db.flush()
+    return created

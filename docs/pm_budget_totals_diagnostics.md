@@ -159,16 +159,44 @@ La comprobacion de origen es textual y su diferencia numerica es null. Valores
 guardados null conservan null: no se inventa una diferencia numerica.
 
 Estados por proyecto: consistent, header_inconsistent, summary_inconsistent,
-both_inconsistent, missing_summary. Consistent se limita a los campos enumerados
+both_inconsistent, missing_summary, summary_not_required. Consistent se limita a los campos enumerados
 en checked_summary_fields y los dos totales de encabezado. Un resumen ausente
-reporta IDs y valores null, requiere revision/creacion futura y no se inserta.
+reporta IDs y valores null solo si existe evidencia de un flujo economico que exige resumen.
+El dry-run nunca lo inserta. summary_not_required se incluye solo en project_states,
+con requires_summary_repair=false; no se incluye como discrepancia.
 Sin presupuesto detallado vigente, summary_economics_checked=false y estado
 no_current_detailed_budget: no se compara contra un presupuesto viejo.
 
-requires_summary_repair=true si hay discrepancia de resumen o ausencia; es
-solo informativo. No amplia apply y no provoca correcciones automaticas. Apply
+requires_summary_repair=true si hay discrepancia de resumen existente o ausencia requerida;
+no se activa por un proyecto vacio ni por su importe simple de referencia. Apply
 mantiene su respuesta anterior (lista de encabezados reparados). Su segunda
 ejecucion puede dar cero cambios aunque el resumen siga desactualizado.
+
+### Resumen requerido y reparacion opt-in de ausencias
+
+La evidencia se limita al tenant: cualquier presupuesto historico (tambien
+cancelado/inactivo), plan de materiales, consumo PM o registro de horas;
+ademas, movimientos confirmados del proyecto de salida o devolucion.
+Sus flujos crean el resumen; desactivar o cancelar no lo elimina.
+Partidas, APU e indirectos estan cubiertos por su presupuesto padre.
+Un importe simple, tareas, tarifas sin horas o staging de importacion no prueban
+que el resumen deba existir. Consultas GET pueden crearlo bajo demanda, pero
+sin evidencia persistida no se infiere una corrupcion por una visita anterior.
+
+La ampliacion autorizada agrega --repair-missing-summaries como opt-in adicional
+de --apply, exclusivamente con --empresa-id y uno o mas --proyecto-id explicitos
+(maximo 1000). No admite --presupuesto-id en esa misma ejecucion. Sin el opt-in,
+apply sigue limitado a encabezados. No se admite reparacion global.
+
+Solo crea resumenes realmente ausentes que lo requieren, desde snapshots
+operativos activos y el presupuesto vigente recalculado con helpers oficiales.
+Sin presupuesto vigente usa la referencia simple, no el presupuesto cancelado.
+No toca resumenes existentes (aunque esten inconsistentes), encabezados,
+partidas, planes, movimientos, horas, baseline ni estimaciones.
+La transaccion SERIALIZABLE pertenece al comando; el servicio no hace commit.
+Un ID inexistente o de otro tenant aborta el lote antes de escribir.
+Una segunda ejecucion no crea filas adicionales. No ejecutar reparacion sin
+revision y autorizacion separadas; este gate solo valida localmente.
 
 Ejemplo ficticio (abreviado):
 

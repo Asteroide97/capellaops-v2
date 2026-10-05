@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import date
 import unittest
 from unittest.mock import patch
 import io
@@ -8,8 +9,9 @@ import json
 from sqlalchemy import event, select, update, text
 from sqlalchemy.dialects import mssql, sqlite
 from app.models.pm import PMPresupuesto, PMTarea, PMProyectoLineaBase, PMProyectoCostoResumen
-from app.services.pm import add_budget_item_labor, add_budget_indirect, get_project_budget, get_project_baseline_readiness
-from app.services.pm_budget_diagnostics import diagnose_budget_headers, diagnose_project_economics, repair_budget_headers
+from app.models.inventory import Almacen, Material, MovimientoInventario
+from app.services.pm import add_budget_item_labor, add_budget_indirect, get_project_budget, get_project_baseline_readiness, create_project_time_entry, add_project_material_plan, create_project_material_consumption_manual, refresh_project_material_costs
+from app.services.pm_budget_diagnostics import diagnose_budget_headers, diagnose_project_economics, repair_budget_headers, repair_missing_project_summaries
 from app.scripts.diagnose_pm_budget_totals import main, read_only_guard
 from tests import test_pm_budget_current_resolution as fixtures
 
@@ -199,6 +201,8 @@ class PMBudgetDiagnosticsTestCase(unittest.TestCase):
 
     def test_executed_queries_compile_for_sql_server_and_sqlite(self):
         _, budget = self.fixture()
+        self._create_project(self.company_a, name="Empty portable queries")
+        self.db.commit()
         self.stale(budget)
         statements = []
         def capture(conn, cursor, statement, parameters, context, executemany):
@@ -281,6 +285,235 @@ class PMBudgetDiagnosticsTestCase(unittest.TestCase):
         self.assertIsNone(row["valor_recalculado"])
         self.assertTrue(report["requires_summary_repair"])
         self.assertEqual(before, self.snapshot())
+
+    def test_empty_projects_with_reference_amount_do_not_require_summary(self):
+        for reference in (Decimal("0"), Decimal("18000400")):
+            self._create_project(self.company_a, name="No economic activity", presupuesto_estimado=reference)
+        self.db.commit()
+        before = self.snapshot()
+        with read_only_guard(self.engine, self.db):
+            report = diagnose_project_economics(self.db, empresa_id=self.company_a.id)
+        self.assertFalse(report["requires_summary_repair"])
+        self.assertEqual(report["project_cost_summary_discrepancies"], [])
+        self.assertTrue(all(row["status"] == "summary_not_required" for row in report["project_states"]))
+        self.assertEqual(before, self.snapshot())
+
+    def test_cancelled_budget_still_requires_missing_summary(self):
+        project, budget = self.fixture()
+        budget.activo, budget.estatus = False, "cancelado"
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        self.db.delete(summary)
+        self.db.commit()
+        with read_only_guard(self.engine, self.db):
+            report = diagnose_project_economics(self.db, empresa_id=self.company_a.id)
+        self.assertTrue(report["requires_summary_repair"])
+        self.assertEqual(report["project_states"][0]["status"], "missing_summary")
+        self.assertIn("budget_history", report["project_states"][0]["summary_requirement_reasons"])
+
+    def test_time_without_budget_requires_summary_even_without_rate(self):
+        project = self._create_project(self.company_a, name="Hours only")
+        self.db.flush()
+        create_project_time_entry(
+            self.db, self.pm_context_a, project_id=project.id, tarea_id=None, usuario_id=None,
+            usuario_email_snapshot=None, usuario_nombre_snapshot=None, fecha=date(2026, 10, 4),
+            horas=Decimal("1.5"), descripcion="Actual work", moneda="MXN", ip_address=None,
+        )
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        self.assertIsNotNone(summary)
+        self.db.delete(summary)
+        self.db.commit()
+        with read_only_guard(self.engine, self.db):
+            report = diagnose_project_economics(self.db, empresa_id=self.company_a.id)
+        self.assertTrue(report["requires_summary_repair"])
+        self.assertIn("time_entries", report["project_states"][0]["summary_requirement_reasons"])
+
+    def test_missing_summary_top_level_excludes_empty_projects_in_mixed_tenant(self):
+        empty = self._create_project(self.company_a, name="Empty")
+        project, _ = self.fixture()
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        self.db.delete(summary)
+        self.db.commit()
+        report = diagnose_project_economics(self.db, empresa_id=self.company_a.id)
+        self.assertTrue(report["requires_summary_repair"])
+        states = {row["proyecto_id"]: row for row in report["project_states"]}
+        self.assertFalse(states[empty.id]["requires_summary_repair"])
+        self.assertEqual(len(report["project_cost_summary_discrepancies"]), 1)
+
+    def test_missing_summary_repair_skips_empty_and_existing_and_is_idempotent(self):
+        empty = self._create_project(self.company_a, name="Empty")
+        existing, _ = self.fixture()
+        missing, budget = self.fixture()
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == missing.id))
+        self.db.delete(summary)
+        self.db.commit()
+        ids = {empty.id, existing.id, missing.id}
+        before = self.snapshot()
+        rows = repair_missing_project_summaries(self.db, empresa_id=self.company_a.id, project_ids=ids)
+        self.assertEqual([row["proyecto_id"] for row in rows], [missing.id])
+        self.db.commit()
+        after = self.snapshot()
+        for table in before:
+            if table != "pm_proyecto_costo_resumen":
+                self.assertEqual(before[table], after[table], table)
+        for row in before["pm_proyecto_costo_resumen"]:
+            self.assertIn(row, after["pm_proyecto_costo_resumen"])
+        self.assertEqual(repair_missing_project_summaries(self.db, empresa_id=self.company_a.id, project_ids=ids), [])
+        self.db.commit()
+        self.assertEqual(after, self.snapshot())
+        self.assertFalse(diagnose_project_economics(self.db, empresa_id=self.company_a.id)["requires_summary_repair"])
+
+    def test_missing_summary_repair_preserves_stale_header_and_existing_bad_summary(self):
+        missing, budget = self.fixture()
+        self.stale(budget)
+        existing, _ = self.fixture()
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == missing.id))
+        self.db.delete(summary)
+        existing_summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == existing.id))
+        existing_summary.presupuesto_detallado_costo = Decimal("1")
+        self.db.commit()
+        before = self.snapshot()
+        repair_missing_project_summaries(self.db, empresa_id=self.company_a.id, project_ids={missing.id, existing.id})
+        self.db.commit()
+        self.assertEqual(before["pm_presupuestos"], self.snapshot()["pm_presupuestos"])
+        self.assertEqual(existing_summary.presupuesto_detallado_costo, Decimal("1"))
+        self.assertEqual(diagnose_budget_headers(self.db, empresa_id=self.company_a.id)[0]["diferencia_costo"], Decimal("50"))
+
+    def test_materials_without_budget_require_summary_and_repair_matches_official_sources(self):
+        project = self._create_project(self.company_a, name="Materials only", presupuesto_estimado=Decimal("500"))
+        material = Material(empresa_id=self.company_a.id, sku="SUMMARY-QA", nombre="Test material", unidad="pz")
+        self.db.add(material)
+        self.db.flush()
+        add_project_material_plan(
+            self.db, self.pm_context_a, project_id=project.id, task_id=None, material_id=material.id,
+            cantidad_planificada=Decimal("3"), costo_unitario_estimado=Decimal("20"), observaciones=None, ip_address=None,
+        )
+        create_project_material_consumption_manual(
+            self.db, self.pm_context_a, project_id=project.id, task_id=None, material_id=material.id,
+            cantidad_consumida=Decimal("2"), costo_unitario_snapshot=Decimal("10"),
+            documento_referencia=None, notas=None, ip_address=None,
+        )
+        create_project_time_entry(
+            self.db, self.pm_context_a, project_id=project.id, tarea_id=None, usuario_id=None,
+            usuario_email_snapshot=None, usuario_nombre_snapshot=None, fecha=date(2026, 10, 4),
+            horas=Decimal("1.5"), descripcion=None, moneda="MXN", ip_address=None,
+        )
+        warehouse = Almacen(empresa_id=self.company_a.id, nombre="Test warehouse", codigo="SUMMARY-QA")
+        self.db.add(warehouse)
+        self.db.flush()
+        for kind, quantity, reference, status in (
+            ("salida", "3", None, "confirmado"),
+            ("entrada", "1", "DEVOLUCION_PROYECTO", "confirmado"),
+            ("salida", "99", None, "cancelado"),
+        ):
+            self.db.add(MovimientoInventario(
+                empresa_id=self.company_a.id, almacen_id=warehouse.id, material_id=material.id,
+                tipo=kind, cantidad=Decimal(quantity), cantidad_anterior=Decimal("100"),
+                cantidad_nueva=Decimal("100"), referencia_tipo=reference, estatus=status,
+                es_proyecto=True, proyecto_id=project.id, costo_promedio_snapshot=Decimal("7"),
+                costo_unitario_snapshot=Decimal("10"), created_by=self.user_a.id,
+            ))
+        self.db.flush()
+        refresh_project_material_costs(self.db, empresa_id=self.company_a.id, project_id=project.id)
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        self.assertEqual(summary.costo_materiales_real, Decimal("34"))
+        self.assertEqual(summary.total_materiales_consumidos, Decimal("4"))
+        self.db.commit()
+        expected = {column.name: getattr(summary, column.name) for column in PMProyectoCostoResumen.__table__.columns
+                    if column.name not in {"id", "created_at", "updated_at"}}
+        self.db.delete(summary)
+        self.db.commit()
+        before = self.snapshot()
+        with read_only_guard(self.engine, self.db):
+            report = diagnose_project_economics(self.db, empresa_id=self.company_a.id)
+        self.assertTrue(report["requires_summary_repair"])
+        self.assertIn("material_plans", report["project_states"][0]["summary_requirement_reasons"])
+        self.assertEqual(before, self.snapshot())
+        repair_missing_project_summaries(self.db, empresa_id=self.company_a.id, project_ids={project.id})
+        self.db.commit()
+        recreated = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        for field, value in expected.items():
+            self.assertEqual(getattr(recreated, field), value, field)
+        for table, rows in before.items():
+            if table != "pm_proyecto_costo_resumen":
+                self.assertEqual(rows, self.snapshot()[table], table)
+
+    def test_summary_repair_requires_explicit_tenant_and_ids_and_aborts_foreign_batch(self):
+        local, _ = self.fixture()
+        foreign, _ = self.fixture(self.company_b)
+        before = self.snapshot()
+        for tenant, ids in (("", {local.id}), (self.company_a.id, set()),
+                            (self.company_a.id, {local.id, foreign.id})):
+            with self.assertRaises(ValueError):
+                repair_missing_project_summaries(self.db, empresa_id=tenant, project_ids=ids)
+        self.assertEqual(before, self.snapshot())
+        for args in (["--repair-missing-summaries"], ["--apply", "--repair-missing-summaries"],
+                     ["--proyecto-id", local.id],
+                     ["--apply", "--repair-missing-summaries", "--proyecto-id", local.id, "--presupuesto-id", "x"]):
+            with self.assertRaises(SystemExit), patch("sys.stderr", new_callable=io.StringIO), \
+                    patch("app.scripts.diagnose_pm_budget_totals.create_engine") as create:
+                main(["--empresa-id", self.company_a.id, *args])
+            create.assert_not_called()
+
+    def test_summary_repair_queries_compile_portably_and_dry_run_guard_blocks_creation(self):
+        project, _ = self.fixture()
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        self.db.delete(summary)
+        self.db.commit()
+        before = self.snapshot()
+        with self.assertRaises(ValueError), read_only_guard(self.engine, self.db):
+            repair_missing_project_summaries(self.db, empresa_id=self.company_a.id, project_ids={project.id})
+        self.assertEqual(before, self.snapshot())
+        statements = []
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            if context.compiled is not None and getattr(context.compiled.statement, "is_select", False):
+                statements.append(context.compiled.statement)
+        event.listen(self.engine, "before_cursor_execute", capture)
+        try:
+            repair_missing_project_summaries(self.db, empresa_id=self.company_a.id, project_ids={project.id})
+        finally:
+            event.remove(self.engine, "before_cursor_execute", capture)
+        self.assertGreater(len(statements), 5)
+        for statement in statements:
+            for dialect in (mssql.dialect(), sqlite.dialect()):
+                compiled = str(statement.compile(dialect=dialect)).upper()
+                self.assertNotRegex(compiled, r"\bIS\s+[01]\b")
+                self.assertNotIn("NULLS FIRST", compiled)
+                self.assertNotIn("NULLS LAST", compiled)
+        self.db.rollback()
+
+    def test_cancelled_budget_summary_repair_uses_simple_reference_not_old_budget(self):
+        project, budget = self.fixture()
+        project.presupuesto_estimado = Decimal("500")
+        budget.activo, budget.estatus = False, "cancelado"
+        summary = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        self.db.delete(summary)
+        self.db.commit()
+        repair_missing_project_summaries(self.db, empresa_id=self.company_a.id, project_ids={project.id})
+        self.db.commit()
+        recreated = self.db.scalar(select(PMProyectoCostoResumen).where(
+            PMProyectoCostoResumen.proyecto_id == project.id))
+        self.assertEqual(recreated.presupuesto_estimado, Decimal("500"))
+        self.assertEqual(recreated.presupuesto_detallado_costo, Decimal("0"))
+        self.assertEqual(recreated.presupuesto_origen, "simple")
+        self.assertIsNone(recreated.margen_estimado)
+
+    def test_empty_tenant_does_not_inherit_another_tenants_economic_activity(self):
+        self._create_project(self.company_a, name="Empty local")
+        self.fixture(self.company_b)
+        self.db.commit()
+        report = diagnose_project_economics(self.db, empresa_id=self.company_a.id)
+        self.assertFalse(report["requires_summary_repair"])
+        self.assertEqual(report["project_states"][0]["status"], "summary_not_required")
 
     def test_summary_diagnosis_is_tenant_scoped_and_requires_empresa(self):
         _, budget = self.fixture(self.company_b)

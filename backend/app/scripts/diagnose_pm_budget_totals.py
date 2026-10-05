@@ -44,13 +44,21 @@ def main(argv=None) -> int:
     parser.add_argument("--sqlite-path", help="Archivo SQLite local opcional en lugar de DATABASE_URL.")
     parser.add_argument("--empresa-id", required=True)
     parser.add_argument("--presupuesto-id", action="append", default=[])
+    parser.add_argument("--proyecto-id", action="append", default=[])
+    parser.add_argument("--repair-missing-summaries", action="store_true",
+                        help="Opt-in: crear solo resumenes ausentes de proyectos explicitamente seleccionados.")
     parser.add_argument("--apply", action="store_true", help="Reparar solo IDs seleccionados; usar primero dry-run y copia de seguridad.")
     args = parser.parse_args(argv)
     empresa_id = args.empresa_id.strip()
     ids = {value.strip() for value in args.presupuesto_id}
-    if not empresa_id or "" in ids:
+    project_ids = {value.strip() for value in args.proyecto_id}
+    if not empresa_id or "" in ids or "" in project_ids:
         parser.error("Empresa e IDs deben ser explicitos y no vacios.")
-    if args.apply and not ids:
+    if args.repair_missing_summaries and (not args.apply or not project_ids or ids):
+        parser.error("La reparacion de resumenes requiere --apply y --proyecto-id; no se mezcla con encabezados.")
+    if project_ids and not args.repair_missing_summaries:
+        parser.error("--proyecto-id requiere --repair-missing-summaries.")
+    if args.apply and not ids and not args.repair_missing_summaries:
         parser.error("--apply requiere al menos un --presupuesto-id revisado.")
     if args.sqlite_path:
         path = Path(args.sqlite_path).resolve()
@@ -71,13 +79,15 @@ def main(argv=None) -> int:
         parser.error("Solo se admiten SQLite y SQL Server.")
     engine = None
     try:
-        from app.services.pm_budget_diagnostics import diagnose_project_economics, repair_budget_headers
+        from app.services.pm_budget_diagnostics import diagnose_project_economics, repair_budget_headers, repair_missing_project_summaries
         engine = create_engine(url, echo=False, hide_parameters=True,
                                **({"isolation_level": "SERIALIZABLE"} if args.apply else {}))
         with Session(engine, autoflush=False) as db:
             if args.apply:
                 with db.begin():
-                    rows = repair_budget_headers(db, empresa_id=empresa_id, budget_ids=ids)
+                    rows = (repair_missing_project_summaries(db, empresa_id=empresa_id, project_ids=project_ids)
+                            if args.repair_missing_summaries else
+                            repair_budget_headers(db, empresa_id=empresa_id, budget_ids=ids))
             else:
                 with read_only_guard(engine, db):
                     rows = diagnose_project_economics(db, empresa_id=empresa_id, budget_ids=ids or None)
