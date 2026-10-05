@@ -8870,6 +8870,36 @@ def refresh_budget_item_component_totals(item: PMPresupuestoPartida) -> None:
         component.costo_total = quantize_rate(decimal_or_zero(component.horas_por_unidad) * decimal_or_zero(component.tarifa_hora))
 
 
+def calculate_budget_leaf_totals(quantity, unit_cost, margin_pct, manual_price) -> dict:
+    quantity = decimal_or_zero(quantity)
+    unit_cost = decimal_or_zero(unit_cost)
+    price = (decimal_or_zero(manual_price) if manual_price is not None
+             else unit_cost * (Decimal("1") + decimal_or_zero(margin_pct) / Decimal("100")))
+    cost_rate, sale_rate = quantize_rate(unit_cost), quantize_rate(price)
+    return {
+        "costo_unitario": cost_rate, "precio_unitario": sale_rate,
+        "subtotal_costo": quantize_money(quantity * cost_rate),
+        "subtotal_venta": calculate_budget_sale_amount(quantity, sale_rate),
+    }
+
+
+def calculate_budget_header_totals(subtotal_cost, subtotal_sale, indirects_pct, indirect_amounts) -> dict:
+    indirect_total = quantize_money(
+        decimal_or_zero(subtotal_cost) * decimal_or_zero(indirects_pct) / Decimal("100")
+        + sum(indirect_amounts, ZERO)
+    )
+    cost = quantize_money(decimal_or_zero(subtotal_cost) + indirect_total)
+    sale = quantize_money(subtotal_sale)
+    profit = quantize_money(sale - cost)
+    return {
+        "subtotal_costo": quantize_money(subtotal_cost),
+        "subtotal_venta": quantize_money(subtotal_sale),
+        "indirectos_monto": indirect_total, "total_costo": cost, "total_venta": sale,
+        "utilidad_monto": profit, "margen_estimado": profit,
+        "utilidad_pct": quantize_percentage(profit / cost * Decimal("100")) if cost > ZERO else ZERO,
+    }
+
+
 def refresh_budget_item_totals(db: Session, item: PMPresupuestoPartida) -> PMPresupuestoPartida:
     refresh_budget_item_component_totals(item)
     quantity = decimal_or_zero(item.cantidad)
@@ -8894,16 +8924,10 @@ def refresh_budget_item_totals(db: Session, item: PMPresupuestoPartida) -> PMPre
     material_cost = sum((decimal_or_zero(component.costo_total) for component in item.materials if component.activo), ZERO)
     labor_cost = sum((decimal_or_zero(component.costo_total) for component in item.labor_components if component.activo), ZERO)
     unit_cost = material_cost + labor_cost
-    margin_pct = decimal_or_zero(item.margen_pct)
-    price_unit = (
-        decimal_or_zero(item.precio_unitario_manual)
-        if item.precio_unitario_manual is not None
-        else unit_cost * (Decimal("1") + (margin_pct / Decimal("100")))
-    )
-    item.costo_unitario = quantize_rate(unit_cost)
-    item.precio_unitario = quantize_rate(price_unit)
-    item.subtotal_costo = quantize_money(quantity * decimal_or_zero(item.costo_unitario))
-    item.subtotal_venta = calculate_budget_sale_amount(quantity, decimal_or_zero(item.precio_unitario))
+    for field, value in calculate_budget_leaf_totals(
+        quantity, unit_cost, item.margen_pct, item.precio_unitario_manual
+    ).items():
+        setattr(item, field, value)
     return item
 
 
@@ -8983,7 +9007,6 @@ def refresh_project_budget_totals(
             PMPresupuestoIndirecto.activo == True,
         )
     ).all()
-    header_indirect_amount = decimal_or_zero(subtotal_cost) * (decimal_or_zero(budget.indirectos_pct) / Decimal("100"))
     detail_indirect_amount = ZERO
     for indirect in indirect_rows:
         if indirect.tipo == "porcentaje":
@@ -8993,20 +9016,12 @@ def refresh_project_budget_totals(
         indirect.monto = quantize_money(indirect_amount)
         detail_indirect_amount += decimal_or_zero(indirect.monto)
 
-    indirect_total = quantize_money(header_indirect_amount + detail_indirect_amount)
-    total_cost = quantize_money(decimal_or_zero(subtotal_cost) + indirect_total)
-    total_sale = quantize_money(subtotal_sale)
-    profit_amount = quantize_money(total_sale - total_cost)
-    profit_pct = quantize_percentage((profit_amount / total_cost) * Decimal("100")) if total_cost > ZERO else ZERO
-
-    budget.subtotal_costo = quantize_money(subtotal_cost)
-    budget.subtotal_venta = quantize_money(subtotal_sale)
-    budget.indirectos_monto = indirect_total
-    budget.total_costo = total_cost
-    budget.total_venta = total_sale
-    budget.utilidad_monto = profit_amount
-    budget.utilidad_pct = profit_pct
-    budget.margen_estimado = profit_amount
+    totals = calculate_budget_header_totals(
+        subtotal_cost, subtotal_sale, budget.indirectos_pct, [detail_indirect_amount]
+    )
+    for field, value in totals.items():
+        setattr(budget, field, value)
+    total_cost, total_sale, profit_amount = totals["total_costo"], totals["total_venta"], totals["utilidad_monto"]
 
     summary.presupuesto_detallado_costo = total_cost
     summary.presupuesto_detallado_venta = total_sale
