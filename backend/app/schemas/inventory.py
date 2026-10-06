@@ -2,7 +2,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WarehouseCreateRequest(BaseModel):
@@ -164,7 +164,19 @@ class InventorySummaryResponse(BaseModel):
     alertas: list[InventorySummaryAlertItem]
 
 
-class MaterialCreateRequest(BaseModel):
+def validate_material_stock_range(stock_minimo: Decimal | None, stock_maximo: Decimal | None) -> None:
+    if stock_minimo is not None and stock_maximo is not None and stock_minimo > stock_maximo:
+        raise ValueError("El stock mínimo no puede ser mayor que el stock máximo.")
+
+
+class MaterialStockRangeRequest(BaseModel):
+    @model_validator(mode="after")
+    def validate_stock_range(self):
+        validate_material_stock_range(self.stock_minimo, self.stock_maximo)
+        return self
+
+
+class MaterialCreateRequest(MaterialStockRangeRequest):
     sku: str = Field(min_length=1, max_length=80)
     nombre: str = Field(min_length=1, max_length=180)
     descripcion: str | None = Field(default=None, max_length=2000)
@@ -185,7 +197,7 @@ class MaterialCreateRequest(BaseModel):
     activo: bool = True
 
 
-class MaterialUpdateRequest(BaseModel):
+class MaterialUpdateRequest(MaterialStockRangeRequest):
     sku: str | None = Field(default=None, min_length=1, max_length=80)
     nombre: str | None = Field(default=None, min_length=1, max_length=180)
     descripcion: str | None = Field(default=None, max_length=2000)

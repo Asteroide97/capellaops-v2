@@ -41,6 +41,7 @@ from app.schemas.inventory import (
     MovementListResponse,
     StockItem,
     WarehouseItem,
+    validate_material_stock_range,
 )
 from app.services.access import can_access_module
 from app.services.company import ensure_within_company_warehouse_limit
@@ -224,6 +225,13 @@ def validate_inventory_access(user: Usuario, empresa: Empresa) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="La empresa no tiene acceso al módulo Inventario.",
         )
+
+
+def ensure_material_stock_range(stock_minimo: Decimal | None, stock_maximo: Decimal | None) -> None:
+    try:
+        validate_material_stock_range(stock_minimo, stock_maximo)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def apply_text_search(query, q: str | None, *columns):

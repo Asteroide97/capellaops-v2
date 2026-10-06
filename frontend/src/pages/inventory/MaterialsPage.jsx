@@ -2,6 +2,7 @@
 import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
+import { getMaterialStockRangeError, MATERIAL_STOCK_RANGE_ERROR } from "./materialStockRange";
 import BarcodeScannerModal from "../../components/BarcodeScannerModal";
 import {
   createMaterial,
@@ -119,6 +120,7 @@ export default function MaterialsPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [stockRangeError, setStockRangeError] = useState("");
   const [success, setSuccess] = useState("");
   const [notice, setNotice] = useState("");
   const [materials, setMaterials] = useState([]);
@@ -390,6 +392,7 @@ export default function MaterialsPage() {
   function resetForm() {
     resetImageState();
     setForm(defaultForm);
+    setStockRangeError("");
   }
 
   function openCreateModal() {
@@ -401,6 +404,7 @@ export default function MaterialsPage() {
   }
 
   function openEditModal(material) {
+    setStockRangeError("");
     setForm({
       id: material.id,
       sku: material.sku,
@@ -431,9 +435,15 @@ export default function MaterialsPage() {
 
   async function handleSubmit(event) {
     event.preventDefault();
-    setSubmitting(true);
     setError("");
     setSuccess("");
+    setStockRangeError("");
+    const rangeError = getMaterialStockRangeError(form.stock_minimo, form.stock_maximo);
+    if (rangeError) {
+      setStockRangeError(rangeError);
+      return;
+    }
+    setSubmitting(true);
 
     try {
       let nextImageUrl = form.imagen_url || null;
@@ -482,7 +492,11 @@ export default function MaterialsPage() {
       resetForm();
       await loadMaterialsPage(filters);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar el material.");
+      if (requestError.message?.includes(MATERIAL_STOCK_RANGE_ERROR)) {
+        setStockRangeError(MATERIAL_STOCK_RANGE_ERROR);
+      } else {
+        setError(requestError.message || "No se pudo guardar el material.");
+      }
     } finally {
       setSubmitting(false);
     }
@@ -1094,16 +1108,24 @@ export default function MaterialsPage() {
               subtitle="Úsalos como referencia. El stock inicial y los ajustes se registran desde Movimientos."
               title="Costos y parámetros opcionales"
             />
+            {stockRangeError && (
+              <div className="inventory-form-note inventory-form-note-danger" id="material-stock-range-error" role="alert">
+                {stockRangeError}
+              </div>
+            )}
             <FormGrid>
-              <Field hint="Opcional" label="Stock mínimo, opcional">
+              <Field hint="Vacío se guarda como 0." label="Stock mínimo, opcional">
                 <input
+                  aria-describedby={stockRangeError ? "material-stock-range-error" : undefined}
+                  aria-invalid={Boolean(stockRangeError)}
                   min="0"
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    setStockRangeError("");
                     setForm((current) => ({
                       ...current,
                       stock_minimo: normalizeDecimalInput(event.target.value),
-                    }))
-                  }
+                    }));
+                  }}
                   placeholder="Auto"
                   step="0.0001"
                   type="number"
@@ -1111,15 +1133,18 @@ export default function MaterialsPage() {
                 />
               </Field>
 
-              <Field hint="Opcional" label="Stock máximo, opcional">
+              <Field hint="Vacío se guarda como 0." label="Stock máximo, opcional">
                 <input
+                  aria-describedby={stockRangeError ? "material-stock-range-error" : undefined}
+                  aria-invalid={Boolean(stockRangeError)}
                   min="0"
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    setStockRangeError("");
                     setForm((current) => ({
                       ...current,
                       stock_maximo: normalizeDecimalInput(event.target.value),
-                    }))
-                  }
+                    }));
+                  }}
                   placeholder="Auto"
                   step="0.0001"
                   type="number"

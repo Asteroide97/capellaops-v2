@@ -57,6 +57,7 @@ from app.services.inventory import (
     count_active_warehouses,
     create_warehouse_record,
     dump_image_urls,
+    ensure_material_stock_range,
     get_kardex,
     get_material_for_company,
     get_material_item_for_company,
@@ -486,6 +487,7 @@ def create_material(
     db: Session = Depends(get_db),
 ) -> MaterialItem:
     def operation() -> MaterialItem:
+        ensure_material_stock_range(payload.stock_minimo, payload.stock_maximo)
         sku = normalize_code(payload.sku, "SKU")
         nombre = normalize_required_text(payload.nombre, "Nombre")
         unidad = normalize_required_text(payload.unidad, "Unidad")
@@ -579,6 +581,10 @@ def update_material(
 ) -> MaterialItem:
     def operation() -> MaterialItem:
         material = get_material_for_company(db, context.empresa.id, material_id)
+        ensure_material_stock_range(
+            payload.stock_minimo if payload.stock_minimo is not None else material.stock_minimo,
+            payload.stock_maximo if payload.stock_maximo is not None else material.stock_maximo,
+        )
 
         if payload.sku is not None:
             next_sku = normalize_code(payload.sku, "SKU")
