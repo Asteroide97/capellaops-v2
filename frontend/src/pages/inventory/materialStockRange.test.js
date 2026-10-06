@@ -27,6 +27,7 @@ function submitFixture(form, apiError = null) {
     form, selectedImageFile: null, imageRemoved: false, token: 'fixture', empresaId: 'fixture', filters: {},
     getMaterialStockRangeError, MATERIAL_STOCK_RANGE_ERROR,
     setStockRangeError: (value) => { result.stockRangeError = value; },
+    setSkuError: () => {},
     setError: (value) => { result.error = value; },
     setSuccess: (value) => { result.success = value; },
     setSubmitting: () => {},

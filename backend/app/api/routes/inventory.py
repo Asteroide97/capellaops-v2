@@ -55,6 +55,7 @@ from app.services.inventory import (
     get_inventory_project_materials,
     get_inventory_project_movements,
     count_active_warehouses,
+    count_registered_materials,
     create_warehouse_record,
     dump_image_urls,
     ensure_material_stock_range,
@@ -416,7 +417,10 @@ def get_materials(
         limit=limit,
         offset=offset,
     )
-    return MaterialListResponse(items=items, total=total, limit=limit, offset=offset)
+    return MaterialListResponse(
+        items=items, total=total, limit=limit, offset=offset,
+        registered_total=count_registered_materials(db, context.empresa.id),
+    )
 
 
 @router.get("/materials/lookup", response_model=MaterialLookupResponse)

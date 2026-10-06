@@ -2082,6 +2082,12 @@ def list_warehouses(
     return total, [serialize_warehouse(warehouse) for warehouse in rows]
 
 
+def count_registered_materials(db: Session, empresa_id: str) -> int:
+    return db.scalar(
+        select(func.count(Material.id)).where(Material.empresa_id == empresa_id)
+    ) or 0
+
+
 def list_materials(
     db: Session,
     empresa_id: str,

@@ -253,6 +253,7 @@ class MaterialListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+    registered_total: int | None = Field(default=None, ge=0)
 
 
 class MaterialLookupWarehouseStockItem(BaseModel):

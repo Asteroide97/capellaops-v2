@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 
 import { useAuth } from "../../auth/AuthContext";
 import { getMaterialStockRangeError, MATERIAL_STOCK_RANGE_ERROR } from "./materialStockRange";
+import { formatRegisteredMaterialTotal, getRegisteredMaterialTotal, isDuplicateMaterialSkuError } from "./materialsFeedback";
 import BarcodeScannerModal from "../../components/BarcodeScannerModal";
 import {
   createMaterial,
@@ -120,6 +121,7 @@ export default function MaterialsPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [skuError, setSkuError] = useState(false);
   const [stockRangeError, setStockRangeError] = useState("");
   const [success, setSuccess] = useState("");
   const [notice, setNotice] = useState("");
@@ -127,6 +129,7 @@ export default function MaterialsPage() {
   const [suppliers, setSuppliers] = useState([]);
   const [selectedIds, setSelectedIds] = useState([]);
   const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
+  const [registeredSkuCount, setRegisteredSkuCount] = useState(null);
   const [filters, setFilters] = useState(() => urlFilters);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -138,13 +141,15 @@ export default function MaterialsPage() {
   const [imageRemoved, setImageRemoved] = useState(false);
   const fileInputRef = useRef(null);
   const cameraInputRef = useRef(null);
+  const skuInputRef = useRef(null);
 
   const planLabel = formatPlanLabel(empresa?.plan_code);
   const allSelected = materials.length > 0 && selectedIds.length === materials.length;
   const selectedCount = selectedIds.length;
   const hasCurrentImage = Boolean(selectedImagePreviewUrl || form.imagen_url);
 
-  const skuMeta = useMemo(() => `SKUs registrados: ${meta.total}`, [meta.total]);
+  const skuMeta = formatRegisteredMaterialTotal(registeredSkuCount, empresaId);
+  const hasRegisteredMaterials = registeredSkuCount && empresaId && registeredSkuCount.empresaId === empresaId && registeredSkuCount.total > 0;
 
   async function loadSuppliersOptions() {
     const response = await getSuppliers({
@@ -170,6 +175,7 @@ export default function MaterialsPage() {
     });
 
     setMaterials(response.items);
+    setRegisteredSkuCount({empresaId, total: getRegisteredMaterialTotal(response)});
     setMeta({
       total: response.total,
       limit: response.limit,
@@ -393,6 +399,8 @@ export default function MaterialsPage() {
     resetImageState();
     setForm(defaultForm);
     setStockRangeError("");
+    setError("");
+    setSkuError(false);
   }
 
   function openCreateModal() {
@@ -405,6 +413,7 @@ export default function MaterialsPage() {
 
   function openEditModal(material) {
     setStockRangeError("");
+    setSkuError(false);
     setForm({
       id: material.id,
       sku: material.sku,
@@ -436,6 +445,7 @@ export default function MaterialsPage() {
   async function handleSubmit(event) {
     event.preventDefault();
     setError("");
+    setSkuError(false);
     setSuccess("");
     setStockRangeError("");
     const rangeError = getMaterialStockRangeError(form.stock_minimo, form.stock_maximo);
@@ -496,6 +506,9 @@ export default function MaterialsPage() {
         setStockRangeError(MATERIAL_STOCK_RANGE_ERROR);
       } else {
         setError(requestError.message || "No se pudo guardar el material.");
+        const duplicateSku = isDuplicateMaterialSkuError(requestError);
+        setSkuError(duplicateSku);
+        if (duplicateSku) skuInputRef.current?.focus();
       }
     } finally {
       setSubmitting(false);
@@ -621,6 +634,7 @@ export default function MaterialsPage() {
           <>
             <StatusBadge tone="info">{planLabel}</StatusBadge>
             <span className="table-note">{skuMeta}</span>
+            <span className="table-note">Resultados: {meta.total}</span>
             {selectedCount > 0 ? <span className="table-note">{selectedCount} seleccionados</span> : null}
           </>
         }
@@ -628,7 +642,7 @@ export default function MaterialsPage() {
         title="Inventario de Materiales"
       />
 
-      {error ? <p className="form-error">{error}</p> : null}
+      {error && !modalOpen ? <p className="form-error">{error}</p> : null}
       {success ? <p className="form-success">{success}</p> : null}
       {notice ? <p className="feature-note">{notice}</p> : null}
 
@@ -878,8 +892,8 @@ export default function MaterialsPage() {
       >
         {materials.length === 0 ? (
           <EmptyState
-            note="Agrega el primer material para comenzar a operar compras, inventario y POS."
-            title="No hay materiales"
+            note={hasRegisteredMaterials ? "No hay materiales que coincidan con esta consulta." : "Agrega el primer material para comenzar a operar compras, inventario y POS."}
+            title={hasRegisteredMaterials ? "Sin resultados" : "No hay materiales"}
           />
         ) : (
           <>
@@ -1014,6 +1028,7 @@ export default function MaterialsPage() {
         title={form.id ? "Editar Material" : "Nuevo Material"}
       >
         <form className="inventory-modal-form" onSubmit={handleSubmit}>
+          {error && <p className="form-error" id="material-form-error" role="alert">{error}</p>}
           <div className="inventory-form-note">
             No se modifica stock directo desde Materiales. Usa Movimientos para entradas, salidas y ajustes.
           </div>
@@ -1024,7 +1039,16 @@ export default function MaterialsPage() {
               <Field label="SKU" required>
                 <div className="inventory-inline-field">
                   <input
-                    onChange={(event) => setForm((current) => ({ ...current, sku: event.target.value }))}
+                    aria-describedby={skuError ? "material-form-error" : undefined}
+                    aria-invalid={skuError}
+                    onChange={(event) => {
+                      if (skuError) {
+                        setError("");
+                        setSkuError(false);
+                      }
+                      setForm((current) => ({ ...current, sku: event.target.value }));
+                    }}
+                    ref={skuInputRef}
                     required
                     type="text"
                     value={form.sku}
