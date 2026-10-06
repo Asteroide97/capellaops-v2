@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useAuth } from "../../auth/AuthContext";
 import { getMaterialKardex, getMaterials, getWarehouses } from "../../api/client";
+import { getKardexScopeMetrics } from "./inventoryStockScope";
 import {
   ActionButton,
   DataCard,
@@ -115,6 +116,10 @@ export default function KardexPage() {
   const [warehouses, setWarehouses] = useState([]);
   const [filters, setFilters] = useState(defaultFilters);
   const [kardex, setKardex] = useState(null);
+  const [appliedWarehouseId, setAppliedWarehouseId] = useState("");
+  const kardexRequestId = useRef(0);
+  const scopeMetrics = getKardexScopeMetrics(kardex, appliedWarehouseId);
+  const scopeWarehouseName = warehouses.find((item) => item.id === appliedWarehouseId)?.nombre || "almacén seleccionado";
 
   const filteredMovements = useMemo(() => {
     if (!kardex) {
@@ -152,8 +157,10 @@ export default function KardexPage() {
   }
 
   async function loadKardex(materialId = filters.material_id, warehouseId = filters.almacen_id) {
+    const requestId = ++kardexRequestId.current;
     if (!materialId) {
       setKardex(null);
+      setAppliedWarehouseId("");
       return;
     }
 
@@ -163,7 +170,10 @@ export default function KardexPage() {
       token,
       empresaId,
     });
-    setKardex(response);
+    if (requestId === kardexRequestId.current) {
+      setKardex(response);
+      setAppliedWarehouseId(warehouseId || "");
+    }
   }
 
   useEffect(() => {
@@ -197,7 +207,7 @@ export default function KardexPage() {
 
   async function handleApplyFilters() {
     if (!filters.material_id) {
-      setKardex(null);
+      await loadKardex("", "");
       setSuccess("");
       return;
     }
@@ -225,7 +235,7 @@ export default function KardexPage() {
     setSuccess("");
 
     if (!nextFilters.material_id) {
-      setKardex(null);
+      await loadKardex("", "");
       return;
     }
 
@@ -379,21 +389,21 @@ export default function KardexPage() {
               <p className="table-note">{safeDisplayText(kardex.material.nombre)}</p>
             </article>
             <article className="inventory-metric-card success">
-              <span className="inventory-metric-label">Existencia total</span>
-              <strong className="inventory-metric-value">{formatNumber(kardex.existencia_total)}</strong>
-              <p className="table-note">{safeDisplayText(kardex.material.unidad)}</p>
+              <span className="inventory-metric-label">{appliedWarehouseId ? "Existencia local" : "Existencia total"}</span>
+              <strong className="inventory-metric-value">{formatNumber(scopeMetrics.quantity)}</strong>
+              <p className="table-note">{appliedWarehouseId ? safeDisplayText(scopeWarehouseName) : "Todos los almacenes"} · {safeDisplayText(kardex.material.unidad)}</p>
             </article>
             <article className="inventory-metric-card warning">
               <span className="inventory-metric-label">Costo promedio</span>
               <strong className="inventory-metric-value">
-                {formatMoney(kardex.material.costo_promedio_actual ?? kardex.material.costo_unitario)}
+                {formatMoney(scopeMetrics.cost)}
               </strong>
               <p className="table-note">Costo base actual</p>
             </article>
             <article className="inventory-metric-card neutral">
-              <span className="inventory-metric-label">Valor inventario</span>
-              <strong className="inventory-metric-value">{formatMoney(kardex.material.valor_inventario)}</strong>
-              <p className="table-note">Calculado desde existencias</p>
+              <span className="inventory-metric-label">{scopeMetrics.valueScope === "local" ? "Valor inventario local" : "Valor global — todos los almacenes"}</span>
+              <strong className="inventory-metric-value">{formatMoney(scopeMetrics.value)}</strong>
+              <p className="table-note">{scopeMetrics.valueScope === "local" ? safeDisplayText(scopeWarehouseName) : "Valor actual recibido, sin revaluación"}</p>
             </article>
           </div>
 

@@ -6,10 +6,12 @@ import {
   createInventoryMovementBulk,
   getInventoryMovements,
   getMaterials,
+  getStock,
   getWarehouses,
   inventoryLookupMaterial,
   listPmProjects,
 } from "../../api/client";
+import { getWarehouseAvailability, readWarehouseStock } from "./inventoryStockScope";
 import {
   ActionButton,
   DEFAULT_PAGE_SIZE,
@@ -125,6 +127,25 @@ export default function MovementsPage() {
   const [projectLookupAvailable, setProjectLookupAvailable] = useState(false);
   const [detailMovement, setDetailMovement] = useState(null);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [warehouseStock, setWarehouseStock] = useState(null);
+  const [warehouseStockRefresh, setWarehouseStockRefresh] = useState(0);
+
+  useEffect(() => {
+    if (!modalState.open || !draft.almacen_id || !token || !empresaId) return;
+    let active = true;
+    const warehouseId = draft.almacen_id;
+    const identity = {empresaId, warehouseId};
+    setWarehouseStock({...identity, status: "loading", items: []});
+    readWarehouseStock(
+      (page) => getStock({token, empresaId, filters: {almacen_id: warehouseId, ...page}}),
+      warehouseId,
+    ).then((items) => {
+      if (active) setWarehouseStock({...identity, status: "ready", items});
+    }).catch(() => {
+      if (active) setWarehouseStock({...identity, status: "error", items: []});
+    });
+    return () => { active = false; };
+  }, [modalState.open, draft.almacen_id, token, empresaId, warehouseStockRefresh]);
 
   const filteredMaterials = useMemo(() => {
     const q = draft.material_search.trim().toLowerCase();
@@ -277,6 +298,7 @@ export default function MovementsPage() {
   }, [token, empresaId]);
 
   function openMovementModal(tipo) {
+    setWarehouseStock(null);
     setModalState({ open: true, tipo });
     setDraft((current) => ({
       ...defaultDraft,
@@ -289,6 +311,7 @@ export default function MovementsPage() {
   }
 
   function closeMovementModal() {
+    setWarehouseStock(null);
     setModalState(defaultModalState);
     setDraft(defaultDraft);
   }
@@ -919,6 +942,13 @@ export default function MovementsPage() {
               {draft.items.length === 0 ? (
                 <EmptyState compact note="Agrega al menos un material para continuar." title="Sin renglones" />
               ) : (
+                <>
+                {warehouseStock?.status === "error" && warehouseStock.empresaId === empresaId && warehouseStock.warehouseId === draft.almacen_id && (
+                  <div className="inventory-form-note inventory-form-note-danger" role="alert">
+                    No se pudo consultar la disponibilidad local. La validación de existencias se realizará al confirmar.
+                    <ActionButton onClick={() => setWarehouseStockRefresh((value) => value + 1)} type="button">Reintentar disponibilidad</ActionButton>
+                  </div>
+                )}
                 <DataTable
                   columns={[
                     { key: "material", label: "Material" },
@@ -931,6 +961,7 @@ export default function MovementsPage() {
                   <tbody>
                     {draft.items.map((line) => {
                       const material = materials.find((item) => item.id === line.material_id);
+                      const availability = getWarehouseAvailability(warehouseStock, empresaId, draft.almacen_id, line.material_id);
                       return (
                         <tr key={line.local_id}>
                           <td>
@@ -947,9 +978,21 @@ export default function MovementsPage() {
                               ))}
                             </select>
                             {material ? (
+                              <>
                               <div className="inventory-cell-sub">
-                                {material.codigo_barras || "Sin código"} · Stock {formatNumber(material.stock_total)}
+                                {material.codigo_barras || "Sin código"}
                               </div>
+                              <div className="inventory-cell-main">
+                                {availability.status === "ready"
+                                  ? `Disponible en ${selectedWarehouse?.nombre || "almacén seleccionado"}: ${formatNumber(availability.quantity)}`
+                                  : availability.status === "error"
+                                    ? "Disponibilidad local no disponible"
+                                    : availability.status === "select_warehouse"
+                                      ? "Selecciona un almacén para ver disponibilidad"
+                                      : "Consultando disponibilidad local..."}
+                              </div>
+                              <div className="inventory-cell-sub">Stock global: {formatNumber(material.stock_total)}</div>
+                              </>
                             ) : null}
                           </td>
                           <td>
@@ -1004,6 +1047,7 @@ export default function MovementsPage() {
                     })}
                   </tbody>
                 </DataTable>
+                </>
               )}
 
               <div className="table-note">Total de líneas: {draft.items.length}</div>
