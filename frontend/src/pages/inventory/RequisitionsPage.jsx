@@ -32,6 +32,7 @@ import {
   updateRequisitionDetail,
 } from "../../api/client";
 import { useAuth } from "../../auth/AuthContext";
+import { readRequisitionList, countRequisitionStates, refreshCommittedRequisitionList } from "./requisitionList";
 import {
   ActionButton,
   DataCard,
@@ -273,6 +274,8 @@ export default function RequisitionsPage() {
   const [success, setSuccess] = useState("");
   const [filters, setFilters] = useState(defaultFilters);
   const [requisitions, setRequisitions] = useState([]);
+  const [listError, setListError] = useState("");
+  const [refreshWarning, setRefreshWarning] = useState("");
   const [meta, setMeta] = useState({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
   const [materials, setMaterials] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
@@ -337,14 +340,25 @@ export default function RequisitionsPage() {
   }
 
   async function loadRequisitionList(nextFilters = filters) {
-    const response = await listRequisitions({ token, empresaId, filters: nextFilters });
-    setRequisitions(response.items ?? []);
+    let response;
+    try {
+      response = await readRequisitionList(() => listRequisitions({ token, empresaId, filters: nextFilters }));
+    } catch (requestError) {
+      setListError("No se pudo cargar el listado de requisiciones. Intenta actualizarlo.");
+      throw requestError;
+    }
+    setListError("");
+    setRequisitions(response.items);
     setMeta({
       total: response.total ?? 0,
       limit: response.limit ?? nextFilters.limit,
       offset: response.offset ?? nextFilters.offset,
     });
     return response.items ?? [];
+  }
+
+  async function refreshAfterMutation() {
+    return refreshCommittedRequisitionList(() => loadRequisitionList(filters), setListError);
   }
 
   async function loadRequisitionDocument(requisitionId) {
@@ -356,6 +370,7 @@ export default function RequisitionsPage() {
   function resetFeedback() {
     setError("");
     setSuccess("");
+    setRefreshWarning("");
   }
 
   function resetEditorState() {
@@ -455,22 +470,7 @@ export default function RequisitionsPage() {
     });
   }, [lines, materialSearch, materials]);
 
-  const requisitionCounts = useMemo(() => {
-    const counts = {
-      borrador: 0,
-      enviada: 0,
-      aprobada: 0,
-      parcial: 0,
-      surtida: 0,
-      convertida_a_oc: 0,
-    };
-    for (const requisition of requisitions) {
-      if (counts[requisition.estatus] !== undefined) {
-        counts[requisition.estatus] += 1;
-      }
-    }
-    return counts;
-  }, [requisitions]);
+  const requisitionCounts = useMemo(() => countRequisitionStates(requisitions), [requisitions]);
 
   const totalPending = useMemo(
     () => requisitions.reduce((accumulator, item) => accumulator + Number(item.cantidad_total_pendiente ?? 0), 0),
@@ -629,11 +629,13 @@ export default function RequisitionsPage() {
         await submitRequisition({ requisitionId, token, empresaId });
       }
 
-      const refreshed = await loadRequisitionDocument(requisitionId);
-      setSelectedRequisition(refreshed);
-      setDetailOpen(true);
+      await refreshCommittedRequisitionList(async () => {
+        const refreshed = await loadRequisitionDocument(requisitionId);
+        setSelectedRequisition(refreshed);
+        setDetailOpen(true);
+      }, setRefreshWarning, "La requisición quedó registrada, pero no se pudo actualizar su detalle. Puedes volver a abrirla desde el listado.");
       closeEditor();
-      await loadRequisitionList(filters);
+      await refreshAfterMutation();
       setSuccess(mode === "submit" ? "Requisicion registrada y enviada." : form.id ? "Requisicion actualizada." : "Requisicion creada en borrador.");
     } catch (requestError) {
       setError(requestError.message || "No se pudo guardar la requisicion.");
@@ -680,7 +682,7 @@ export default function RequisitionsPage() {
       if (detailOpen && selectedRequisition?.id === requisitionId) {
         setSelectedRequisition(response);
       }
-      await loadRequisitionList(filters);
+      await refreshAfterMutation();
       setSuccess(
         action === "submit"
           ? "Requisición enviada."
@@ -755,7 +757,7 @@ export default function RequisitionsPage() {
         },
       });
       closePurchaseOrder();
-      await Promise.all([loadRequisitionDocument(selectedRequisition.id), loadRequisitionList(filters)]);
+      await refreshAfterMutation();
       navigate("/inventario/ordenes-compra", {
         state: {
           openOrderId: order.id,
@@ -848,7 +850,7 @@ export default function RequisitionsPage() {
       setSelectedRequisition(response);
       closeFulfill();
       setDetailOpen(true);
-      await loadRequisitionList(filters);
+      await refreshAfterMutation();
       setSuccess("Requisicion surtida e inventario actualizado.");
     } catch (requestError) {
       setError(requestError.message || "No se pudo surtir la requisicion.");
@@ -904,8 +906,9 @@ export default function RequisitionsPage() {
           <p className="table-note">{error || success}</p>
         </div>
       )}
+      {refreshWarning && <p className="inventory-form-note" role="alert">{refreshWarning}</p>}
 
-      <section className="inventory-metric-grid inventory-metric-grid-4">
+      {!listError && <section className="inventory-metric-grid inventory-metric-grid-4" aria-label="Contadores del listado visible">
         <MetricCard icon={<Send size={18} strokeWidth={1.9} />} label="Pendientes" meta="Enviadas para revisión" tone="info" value={requisitionCounts.enviada} />
         <MetricCard icon={<CheckCircle2 size={18} strokeWidth={1.9} />} label="Aprobadas" meta="Listas para surtir" tone="success" value={requisitionCounts.aprobada} />
         <MetricCard icon={<PackageCheck size={18} strokeWidth={1.9} />} label="Surtidas parcial" meta="Con faltantes por surtir" tone="warning" value={requisitionCounts.parcial} />
@@ -913,7 +916,7 @@ export default function RequisitionsPage() {
         <MetricCard icon={<ClipboardListIcon />} label="Borradores" meta="Aún sin enviar" tone="neutral" value={requisitionCounts.borrador} />
         <MetricCard icon={<ShoppingCart size={18} strokeWidth={1.9} />} label="Convertidas a OC" meta="Solo requisiciones generales" tone="info" value={requisitionCounts.convertida_a_oc} />
         <MetricCard icon={<Boxes size={18} strokeWidth={1.9} />} label="Pendiente" meta="Unidades aún sin surtir" tone="warning" value={formatCompactNumber(totalPending)} />
-      </section>
+      </section>}
 
       <FilterCard title="Filtros" subtitle="Búsqueda operativa de solicitudes.">
         <form className="inventory-filter-toolbar" onSubmit={handleFilterSubmit}>
@@ -996,13 +999,13 @@ export default function RequisitionsPage() {
               <ActionButton
                 onClick={() => {
                   setFilters(defaultFilters);
-                  loadRequisitionList(defaultFilters);
+                  loadRequisitionList(defaultFilters).catch(() => {});
                 }}
                 type="button"
               >
                 Limpiar
               </ActionButton>
-              <ActionButton onClick={() => loadRequisitionList(filters)} type="button">
+              <ActionButton onClick={() => loadRequisitionList(filters).catch(() => {})} type="button">
                 Actualizar
               </ActionButton>
             </div>
@@ -1011,8 +1014,14 @@ export default function RequisitionsPage() {
       </FilterCard>
 
       <DataCard subtitle="Solicitudes de materiales vinculadas a proyectos." title="Requisiciones">
-        <ResultMeta label="requisiciones" loaded={requisitions.length} total={meta.total} />
-        {requisitions.length === 0 ? (
+        {!listError && <ResultMeta label="requisiciones" loaded={requisitions.length} total={meta.total} />}
+        {listError ? (
+          <div className="inventory-form-note inventory-form-note-danger" role="alert">
+            <strong>Listado no disponible</strong>
+            <p>{listError}</p>
+            <ActionButton onClick={() => loadRequisitionList(filters).catch(() => {})} type="button">Reintentar</ActionButton>
+          </div>
+        ) : requisitions.length === 0 ? (
           <EmptyState
             action={
               <ActionButton onClick={openCreateEditor} tone="primary" type="button">

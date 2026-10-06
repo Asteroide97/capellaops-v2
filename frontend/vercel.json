@@ -1,0 +1,7 @@
+{
+  "routes": [
+    { "handle": "filesystem" },
+    { "src": "/", "dest": "/index.html" },
+    { "src": "/(login|registro|inventario|empresa|pos|crm|pm|portal|configuracion-inicial|facturacion-pendiente|superadmin)(/[^.]*)?", "dest": "/index.html" }
+  ]
+}

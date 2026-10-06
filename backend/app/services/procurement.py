@@ -751,7 +751,8 @@ def list_requisitions(
     limit: int = 25,
     offset: int = 0,
 ) -> tuple[int, list[RequisitionItem]]:
-    id_query = select(Requisicion.id).where(Requisicion.empresa_id == empresa_id)
+    # SQL Server requires DISTINCT ordering columns in the selected projection.
+    id_query = select(Requisicion.id, Requisicion.created_at).where(Requisicion.empresa_id == empresa_id)
     needs_detail_join = bool(material_id or q)
     if needs_detail_join:
         id_query = id_query.join(RequisicionDetalle, RequisicionDetalle.requisicion_id == Requisicion.id)
