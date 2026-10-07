@@ -477,7 +477,7 @@ export default function MaterialsPage() {
         subcategoria: form.subcategoria || null,
         unidad: form.unidad,
         costo_unitario: form.costo_unitario === "" ? 0 : form.costo_unitario,
-        ...(form.id ? {} : { costo_promedio_actual: form.costo_promedio_actual || null }),
+        costo_promedio_actual: form.costo_promedio_actual || null,
         precio_venta: form.precio_venta === "" ? 0 : form.precio_venta,
         stock_minimo: form.stock_minimo === "" ? 0 : form.stock_minimo,
         stock_maximo: form.stock_maximo === "" ? 0 : form.stock_maximo,
@@ -1176,7 +1176,7 @@ export default function MaterialsPage() {
                 />
               </Field>
 
-              <Field hint="Referencia manual para estimaciones y compras. Las entradas no modifican este campo." label="Costo de referencia, opcional">
+              <Field hint="Se usa para costos internos e inventario. Déjalo vacío para usar el costo actual del material." label="Costo de referencia, opcional">
                 <input
                   min="0"
                   onChange={(event) =>
@@ -1192,10 +1192,9 @@ export default function MaterialsPage() {
                 />
               </Field>
 
-              <Field hint={form.id ? "Promedio ponderado global calculado desde los movimientos. No se edita manualmente." : "Opcional al crear. Después se calcula automáticamente desde los movimientos."} label={form.id ? "Costo promedio actual" : "Costo promedio inicial"}>
+              <Field hint="Opcional. Se usa como referencia interna si ya conoces el costo actual." label="Costo promedio actual">
                 <input
                   min="0"
-                  readOnly={Boolean(form.id)}
                   onChange={(event) =>
                     setForm((current) => ({
                       ...current,

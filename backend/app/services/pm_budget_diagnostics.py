@@ -16,7 +16,6 @@ from app.models.pm import (
 )
 from app.models.inventory import Almacen, MovimientoInventario
 from app.models.company import Empresa
-from app.services.inventory import movement_applied_cost
 from app.services.pm import (
     calculate_budget_leaf_totals, calculate_budget_header_totals,
     decimal_or_zero, quantize_rate, quantize_money, get_current_project_budget_row,
@@ -323,7 +322,8 @@ def repair_missing_project_summaries(db: Session, *, empresa_id: str, project_id
             for movement in movements:
                 sign = Decimal("1") if movement.tipo == "salida" else Decimal("-1")
                 quantity = decimal_or_zero(movement.cantidad)
-                summary.costo_materiales_real += sign * quantity * movement_applied_cost(movement)
+                summary.costo_materiales_real += sign * quantity * decimal_or_zero(
+                    movement.costo_promedio_snapshot or movement.costo_unitario_snapshot)
                 summary.total_materiales_consumidos += sign * quantity
             summary.variacion_materiales = summary.costo_materiales_real - summary.costo_materiales_estimado
             entries = db.scalars(select(PMTimeEntry).where(

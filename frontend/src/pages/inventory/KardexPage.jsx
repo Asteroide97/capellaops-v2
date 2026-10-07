@@ -398,7 +398,7 @@ export default function KardexPage() {
               <strong className="inventory-metric-value">
                 {formatMoney(scopeMetrics.cost)}
               </strong>
-              <p className="table-note">Promedio ponderado global</p>
+              <p className="table-note">Costo base actual</p>
             </article>
             <article className="inventory-metric-card neutral">
               <span className="inventory-metric-label">{scopeMetrics.valueScope === "local" ? "Valor inventario local" : "Valor global — todos los almacenes"}</span>

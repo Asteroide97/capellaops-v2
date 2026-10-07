@@ -164,7 +164,6 @@ from app.schemas.pm import (
     PMWorkCalendarOut,
 )
 from app.services.access import can_access_module
-from app.services.inventory import cost_basis_for_material, movement_applied_cost, WEIGHTED_COST_POLICY
 from app.services.storage import upload_pm_document
 
 
@@ -7077,7 +7076,9 @@ def serialize_project_material_movement_event(
     material_unit: str,
     linked_consumption: PMProyectoMaterialConsumo | None = None,
 ) -> PMProyectoMaterialConsumoOut:
-    unit_cost = movement_applied_cost(movement)
+    unit_cost = decimal_or_zero(
+        movement.costo_promedio_snapshot or movement.costo_unitario_snapshot
+    )
     quantity = decimal_or_zero(movement.cantidad)
     is_return = movement.tipo == "entrada" and normalize_optional_text(movement.referencia_tipo) == "DEVOLUCION_PROYECTO"
     signed_quantity = -quantity if is_return else quantity
@@ -7286,7 +7287,7 @@ def refresh_project_material_costs(
         sign = Decimal("1") if movement.tipo == "salida" else Decimal("-1")
         total_real_cost += sign * (
             decimal_or_zero(movement.cantidad)
-            * movement_applied_cost(movement)
+            * decimal_or_zero(movement.costo_promedio_snapshot or movement.costo_unitario_snapshot)
         )
         total_consumed_quantity += sign * decimal_or_zero(movement.cantidad)
 
@@ -7708,9 +7709,9 @@ def create_project_material_consumption_from_movement(
     quantity = decimal_or_zero(movement.cantidad)
     if quantity <= ZERO:
         return None
-    unit_cost = (movement_applied_cost(movement) if movement.costing_policy == WEIGHTED_COST_POLICY
-                 else decimal_or_zero(movement.costo_promedio_snapshot or movement.costo_unitario_snapshot
-                                      or material.costo_promedio_actual or material.costo_unitario))
+    unit_cost = decimal_or_zero(
+        movement.costo_promedio_snapshot or movement.costo_unitario_snapshot or material.costo_promedio_actual or material.costo_unitario
+    )
     consumption = PMProyectoMaterialConsumo(
         empresa_id=empresa_id,
         proyecto_id=project.id,
@@ -7770,7 +7771,7 @@ def create_project_material_consumption_manual(
     if quantity <= ZERO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad consumida debe ser mayor a 0.")
     unit_cost = decimal_or_zero(
-        costo_unitario_snapshot if costo_unitario_snapshot is not None else cost_basis_for_material(material)
+        costo_unitario_snapshot if costo_unitario_snapshot is not None else material.costo_promedio_actual or material.costo_unitario
     )
     consumption = PMProyectoMaterialConsumo(
         empresa_id=pm_context.empresa_id,
@@ -9983,7 +9984,7 @@ def add_budget_item_material(
     snapshot_sku = material.sku if material else normalize_optional_text(material_sku_snapshot)
     snapshot_unit = material.unidad if material else normalize_optional_text(unidad)
     snapshot_cost = quantize_rate(
-        decimal_or_zero(costo_unitario if costo_unitario is not None else (cost_basis_for_material(material) if material else ZERO))
+        decimal_or_zero(costo_unitario if costo_unitario is not None else (material.costo_promedio_actual or material.costo_unitario if material else ZERO))
     )
     quantity = decimal_or_zero(cantidad_por_unidad)
     component = PMPresupuestoPartidaMaterial(
@@ -10047,7 +10048,7 @@ def update_budget_item_material(
         component.material_sku_snapshot = material.sku
         component.unidad = material.unidad
         if costo_unitario is None:
-            component.costo_unitario = quantize_rate(cost_basis_for_material(material))
+            component.costo_unitario = quantize_rate(decimal_or_zero(material.costo_promedio_actual or material.costo_unitario))
     else:
         if material_nombre_snapshot is not None:
             component.material_nombre_snapshot = normalize_required_text(material_nombre_snapshot, "Material")

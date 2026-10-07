@@ -3,7 +3,6 @@ from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
-from app.schemas.quantities import Quantity4
 
 
 class WarehouseCreateRequest(BaseModel):
@@ -305,8 +304,8 @@ class InventoryMovementCreateRequest(BaseModel):
     almacen_id: str = Field(min_length=1, max_length=64)
     material_id: str = Field(min_length=1, max_length=64)
     tipo: Literal["entrada", "salida", "ajuste"]
-    cantidad: Quantity4 | None = Field(default=None, gt=0)
-    cantidad_nueva: Quantity4 | None = Field(default=None, ge=0)
+    cantidad: Decimal | None = Field(default=None, gt=0)
+    cantidad_nueva: Decimal | None = Field(default=None, ge=0)
     referencia_tipo: str | None = Field(default=None, max_length=60)
     referencia_id: str | None = Field(default=None, max_length=64)
     motivo: str | None = Field(default=None, max_length=160)
@@ -327,8 +326,8 @@ class InventoryMovementCreateRequest(BaseModel):
 
 class InventoryBulkMovementLineCreateRequest(BaseModel):
     material_id: str = Field(min_length=1, max_length=64)
-    cantidad: Quantity4 | None = Field(default=None, gt=0)
-    cantidad_nueva: Quantity4 | None = Field(default=None, ge=0)
+    cantidad: Decimal | None = Field(default=None, gt=0)
+    cantidad_nueva: Decimal | None = Field(default=None, ge=0)
     costo_unitario: Decimal | None = Field(default=None, ge=0)
     notas: str | None = Field(default=None, max_length=500)
 
@@ -459,13 +458,13 @@ class InventoryProjectMaterialsResponse(BaseModel):
 
 class TransferDetailCreateRequest(BaseModel):
     material_id: str = Field(min_length=1, max_length=64)
-    cantidad: Quantity4 = Field(gt=0)
+    cantidad: Decimal = Field(gt=0)
     costo_unitario_snapshot: Decimal | None = Field(default=None, ge=0)
 
 
 class TransferDetailUpdateRequest(BaseModel):
     material_id: str | None = Field(default=None, min_length=1, max_length=64)
-    cantidad: Quantity4 | None = Field(default=None, gt=0)
+    cantidad: Decimal | None = Field(default=None, gt=0)
     costo_unitario_snapshot: Decimal | None = Field(default=None, ge=0)
 
 
@@ -538,12 +537,12 @@ class CountUpdateRequest(BaseModel):
 
 class CountDetailCreateRequest(BaseModel):
     material_id: str = Field(min_length=1, max_length=64)
-    cantidad_fisica: Quantity4 = Field(ge=0)
+    cantidad_fisica: Decimal = Field(ge=0)
 
 
 class CountDetailUpdateRequest(BaseModel):
     material_id: str | None = Field(default=None, min_length=1, max_length=64)
-    cantidad_fisica: Quantity4 | None = Field(default=None, ge=0)
+    cantidad_fisica: Decimal | None = Field(default=None, ge=0)
 
 
 class CountDetailItem(BaseModel):

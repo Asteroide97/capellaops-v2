@@ -3,7 +3,6 @@ from decimal import Decimal
 from typing import Any
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, model_validator
-from app.schemas.quantities import Quantity4
 
 
 class PMConfigOut(BaseModel):
@@ -1491,7 +1490,7 @@ class PMProyectoMaterialesOut(BaseModel):
 class PMProjectMaterialConsumeRequest(BaseModel):
     material_id: str
     almacen_id: str
-    cantidad: Quantity4 = Field(gt=0)
+    cantidad: Decimal = Field(gt=0)
     tarea_id: str | None = None
     partida_id: str | None = None
     notas: str | None = None
@@ -1500,7 +1499,7 @@ class PMProjectMaterialConsumeRequest(BaseModel):
 class PMProjectMaterialReturnRequest(BaseModel):
     material_id: str
     almacen_id: str
-    cantidad: Quantity4 = Field(gt=0)
+    cantidad: Decimal = Field(gt=0)
     tarea_id: str | None = None
     partida_id: str | None = None
     notas: str | None = None
@@ -1508,7 +1507,7 @@ class PMProjectMaterialReturnRequest(BaseModel):
 
 class PMCreateProjectRequisitionItem(BaseModel):
     plan_id: str
-    cantidad_solicitada: Quantity4 = Field(gt=0)
+    cantidad_solicitada: Decimal = Field(gt=0)
     notas: str | None = None
 
 
