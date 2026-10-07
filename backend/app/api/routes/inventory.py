@@ -530,7 +530,7 @@ def create_material(
             imagenes_extra_json=dump_image_urls(payload.imagenes_extra),
             codigo_barras=codigo_barras,
             costo_unitario=payload.costo_unitario,
-            costo_promedio_actual=payload.costo_promedio_actual or payload.costo_unitario,
+            costo_promedio_actual=payload.costo_promedio_actual if payload.costo_promedio_actual is not None else payload.costo_unitario,
             precio_venta=payload.precio_venta,
             stock_minimo=payload.stock_minimo,
             stock_maximo=payload.stock_maximo,
@@ -584,11 +584,14 @@ def update_material(
     db: Session = Depends(get_db),
 ) -> MaterialItem:
     def operation() -> MaterialItem:
-        material = get_material_for_company(db, context.empresa.id, material_id)
+        material = get_material_for_company(db, context.empresa.id, material_id, for_update=True)
         ensure_material_stock_range(
             payload.stock_minimo if payload.stock_minimo is not None else material.stock_minimo,
             payload.stock_maximo if payload.stock_maximo is not None else material.stock_maximo,
         )
+        if payload.costo_promedio_actual is not None and payload.costo_promedio_actual != material.costo_promedio_actual:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="El costo promedio se calcula automáticamente desde los movimientos.")
 
         if payload.sku is not None:
             next_sku = normalize_code(payload.sku, "SKU")
@@ -628,10 +631,6 @@ def update_material(
             material.imagenes_extra_json = dump_image_urls(payload.imagenes_extra)
         if payload.costo_unitario is not None:
             material.costo_unitario = payload.costo_unitario
-            if payload.costo_promedio_actual is None and material.costo_promedio_actual in {None, 0}:
-                material.costo_promedio_actual = payload.costo_unitario
-        if payload.costo_promedio_actual is not None:
-            material.costo_promedio_actual = payload.costo_promedio_actual
         if payload.precio_venta is not None:
             material.precio_venta = payload.precio_venta
         if payload.stock_minimo is not None:

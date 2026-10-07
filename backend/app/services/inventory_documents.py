@@ -29,6 +29,7 @@ from app.services.inventory import (
     apply_inventory_movement,
     apply_text_search,
     count_rows,
+    ensure_quantity_precision,
     get_material_for_company,
     get_or_create_stock,
     get_warehouse_for_company,
@@ -572,6 +573,7 @@ def add_transfer_detail(
     costo_unitario_snapshot: Decimal | None,
     ip_address: str | None,
 ) -> TransferResponse:
+    ensure_quantity_precision(cantidad)
     transfer = get_transfer_for_company(db, empresa.id, transfer_id, for_update=True)
     ensure_transfer_is_draft(transfer)
     material = get_material_for_company(db, empresa.id, material_id)
@@ -621,6 +623,7 @@ def update_transfer_detail(
     costo_unitario_snapshot: Decimal | None,
     ip_address: str | None,
 ) -> TransferResponse:
+    ensure_quantity_precision(cantidad)
     transfer = get_transfer_for_company(db, empresa.id, transfer_id, for_update=True)
     ensure_transfer_is_draft(transfer)
     detail = get_transfer_detail(db, transfer.id, detail_id)
@@ -743,6 +746,7 @@ def confirm_transfer(
             notas=transfer_note,
             ip_address=ip_address,
             costo_unitario=detail.costo_unitario_snapshot,
+            is_transfer=True,
         )
         apply_inventory_movement(
             db,
@@ -758,6 +762,7 @@ def confirm_transfer(
             notas=transfer_note,
             ip_address=ip_address,
             costo_unitario=detail.costo_unitario_snapshot,
+            is_transfer=True,
         )
 
     transfer.estatus = "confirmada"
@@ -898,6 +903,7 @@ def add_count_detail(
     cantidad_fisica: Decimal,
     ip_address: str | None,
 ) -> CountResponse:
+    ensure_quantity_precision(cantidad_fisica)
     count = get_count_for_company(db, empresa.id, count_id, for_update=True)
     ensure_count_is_draft(count)
     material = get_material_for_company(db, empresa.id, material_id)
@@ -949,6 +955,7 @@ def update_count_detail(
     cantidad_fisica: Decimal | None,
     ip_address: str | None,
 ) -> CountResponse:
+    ensure_quantity_precision(cantidad_fisica)
     count = get_count_for_company(db, empresa.id, count_id, for_update=True)
     ensure_count_is_draft(count)
     detail = get_count_detail(db, count.id, detail_id)

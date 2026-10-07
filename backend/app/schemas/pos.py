@@ -3,13 +3,14 @@ from decimal import Decimal
 from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, Field
+from app.schemas.quantities import Quantity4
 
 
 class SaleCreateLineRequest(BaseModel):
     tipo_linea: Literal["material", "manual", "servicio"] = "material"
     material_id: str | None = Field(default=None, min_length=1, max_length=64)
     descripcion: str | None = Field(default=None, min_length=1, max_length=4000)
-    cantidad: Decimal = Field(gt=0)
+    cantidad: Quantity4 = Field(gt=0)
     precio_unitario: Decimal | None = Field(default=None, ge=0)
     descuento_unitario: Decimal = Field(
         default=Decimal("0"),
@@ -48,7 +49,7 @@ class SaleLineAddRequest(SaleCreateLineRequest):
 
 
 class SaleLineUpdateRequest(BaseModel):
-    cantidad: Decimal | None = Field(default=None, gt=0)
+    cantidad: Quantity4 | None = Field(default=None, gt=0)
     precio_unitario: Decimal | None = Field(default=None, ge=0)
     descuento_unitario: Decimal | None = Field(
         default=None,
