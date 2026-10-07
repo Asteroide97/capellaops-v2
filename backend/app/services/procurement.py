@@ -26,6 +26,7 @@ from app.models import (
 )
 from app.models.pm import PMPresupuestoPartida, PMTarea
 from app.models.inventory import Existencia, Material, MovimientoInventario
+from app.services.inventory import ensure_quantity_precision
 from app.schemas.procurement import (
     PurchaseOrderDetailItem,
     PurchaseOrderItem,
@@ -1219,6 +1220,7 @@ def add_requisition_detail(
     notas: str | None,
     ip_address: str | None,
 ) -> RequisitionResponse:
+    ensure_quantity_precision(cantidad)
     requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
     ensure_requisition_is_draft(requisition)
     material = get_material_for_company(db, empresa.id, material_id)
@@ -1258,6 +1260,7 @@ def update_requisition_detail(
     notas: str | None,
     ip_address: str | None,
 ) -> RequisitionResponse:
+    ensure_quantity_precision(cantidad)
     requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
     ensure_requisition_is_draft(requisition)
     detail = get_requisition_detail(db, requisition.id, detail_id)
@@ -1421,6 +1424,8 @@ def approve_requisition(
     items: list,
     ip_address: str | None,
 ) -> RequisitionResponse:
+    for item in items or []:
+        ensure_quantity_precision(item.cantidad_aprobada)
     requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
     if requisition.estatus != "enviada":
         raise HTTPException(
@@ -1576,6 +1581,8 @@ def fulfill_requisition(
     proyecto_nombre_snapshot: str | None,
     ip_address: str | None,
 ) -> RequisitionResponse:
+    for item in items:
+        ensure_quantity_precision(item.cantidad_surtir)
     requisition = get_requisition_for_company(db, empresa.id, requisition_id, for_update=True)
     if requisition.estatus not in {"aprobada", "parcial"}:
         raise HTTPException(
@@ -2654,6 +2661,7 @@ def add_purchase_order_detail(
     costo_unitario: Decimal,
     ip_address: str | None,
 ) -> PurchaseOrderResponse:
+    ensure_quantity_precision(cantidad)
     order = get_purchase_order_for_company(db, empresa.id, order_id, for_update=True)
     ensure_purchase_order_is_draft(order)
     material = get_material_for_company(db, empresa.id, material_id)
@@ -2701,6 +2709,7 @@ def update_purchase_order_detail(
     costo_unitario: Decimal | None,
     ip_address: str | None,
 ) -> PurchaseOrderResponse:
+    ensure_quantity_precision(cantidad)
     order = get_purchase_order_for_company(db, empresa.id, order_id, for_update=True)
     ensure_purchase_order_is_draft(order)
     detail = get_purchase_order_detail(db, order.id, detail_id)
@@ -2877,6 +2886,8 @@ def receive_purchase_order(
     notas_recepcion: str | None,
     ip_address: str | None,
 ) -> PurchaseOrderReceiveResponse:
+    for item in items:
+        ensure_quantity_precision(item.resolved_cantidad)
     order = get_purchase_order_for_company(db, empresa.id, order_id, for_update=True)
     if order.estatus not in {"emitida", "recibida_parcial"}:
         raise HTTPException(

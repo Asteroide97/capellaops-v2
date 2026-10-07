@@ -81,6 +81,7 @@ class Material(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     codigo_barras: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     costo_unitario: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     costo_promedio_actual: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    costing_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
     precio_venta: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     stock_minimo: Mapped[Decimal] = mapped_column(Numeric(18, 4), nullable=False, default=Decimal("0"))
     stock_maximo: Mapped[Decimal] = mapped_column(
@@ -173,6 +174,7 @@ class MovimientoInventario(UUIDPrimaryKeyMixin, Base):
     pm_partida_nombre_snapshot: Mapped[str | None] = mapped_column(String(180), nullable=True)
     costo_unitario_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     costo_promedio_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
+    costing_policy: Mapped[str | None] = mapped_column(String(32), nullable=True)
     notas: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(

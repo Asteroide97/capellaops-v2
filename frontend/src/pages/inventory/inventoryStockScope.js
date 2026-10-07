@@ -4,7 +4,8 @@ export function getKardexScopeMetrics(kardex, warehouseId = '') {
   // Keep the exact cost expression already displayed by Kardex; no cost policy change.
   const cost = Number(kardex.material.costo_promedio_actual ?? kardex.material.costo_unitario ?? 0);
   const costScopeAmbiguous = kardex.material.costo_promedio_actual != null
-    && cost === 0 && Number(kardex.material.costo_unitario) > 0;
+    && cost === 0 && Number(kardex.material.costo_unitario) > 0
+    && Number(kardex.material.valor_inventario) > 0;
   const localValue = Boolean(warehouseId) && (quantity === 0 || !costScopeAmbiguous);
   return {
     quantity,

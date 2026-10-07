@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP, localcontext
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import and_, case, desc, func, or_, select
+from sqlalchemy import and_, case, desc, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models import AuditLog, Empresa, Usuario
@@ -44,10 +44,13 @@ from app.schemas.inventory import (
     validate_material_stock_range,
 )
 from app.services.access import can_access_module
+from app.schemas.quantities import validate_quantity_precision
 from app.services.company import ensure_within_company_warehouse_limit
 
 
 ZERO = Decimal("0")
+WEIGHTED_COST_POLICY = "weighted_global_v1"
+COST_PRECISION = Decimal("0.0001")
 
 
 def ensure_utc_datetime(value: datetime | None) -> datetime | None:
@@ -138,7 +141,53 @@ def decimal_or_zero(value: Decimal | int | float | str | None) -> Decimal:
 
 
 def cost_basis_for_material(material: Material) -> Decimal:
-    return decimal_or_zero(material.costo_promedio_actual) or decimal_or_zero(material.costo_unitario)
+    return decimal_or_zero(material.costo_promedio_actual if material.costo_promedio_actual is not None else material.costo_unitario)
+
+
+def weighted_average_cost(
+    current_qty: Decimal, current_avg_cost: Decimal | None,
+    incoming_qty: Decimal, incoming_cost: Decimal,
+) -> Decimal:
+    quantities = (decimal_or_zero(current_qty), decimal_or_zero(incoming_qty))
+    costs = (decimal_or_zero(current_avg_cost), decimal_or_zero(incoming_cost))
+    if any(not value.is_finite() or value < ZERO for value in (*quantities, *costs)):
+        raise ValueError("Las cantidades y costos deben ser finitos y no negativos.")
+    current, incoming = quantities
+    average, acquisition = costs
+    # Products of Numeric(18,4) values must not lose precision before rounding.
+    with localcontext() as context:
+        context.prec = 50
+        result = average if incoming == ZERO else acquisition if current == ZERO else (
+            current * average + incoming * acquisition
+        ) / (current + incoming)
+        return result.quantize(COST_PRECISION, rounding=ROUND_HALF_UP)
+
+
+def movement_applied_cost(movement: MovimientoInventario) -> Decimal:
+    if movement.costing_policy == WEIGHTED_COST_POLICY:
+        return decimal_or_zero(movement.costo_unitario_snapshot)
+    return decimal_or_zero(movement.costo_promedio_snapshot or movement.costo_unitario_snapshot)
+
+
+def claim_material_costing_write(db: Session, material: Material) -> None:
+    # A compare-and-swap also serializes SQLite writers, where FOR UPDATE is ignored.
+    result = db.execute(update(Material).where(
+        Material.id == material.id, Material.empresa_id == material.empresa_id,
+        Material.costing_token == material.costing_token,
+    ).values(costing_token=str(uuid4())).execution_options(synchronize_session=False))
+    if result.rowcount != 1:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="El inventario cambió durante la operación. Intenta nuevamente.")
+    db.refresh(material)
+
+
+def ensure_quantity_precision(value: Decimal | None) -> Decimal | None:
+    if value is None:
+        return None
+    try:
+        return validate_quantity_precision(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def resolve_inventory_unit_cost(
@@ -149,7 +198,7 @@ def resolve_inventory_unit_cost(
     almacen_id: str | None = None,
 ) -> Decimal:
     average_cost = decimal_or_zero(material.costo_promedio_actual)
-    if average_cost > ZERO:
+    if material.costo_promedio_actual is not None:
         return average_cost
 
     latest_entry_query = (
@@ -187,7 +236,7 @@ def resolve_project_return_unit_cost(
     almacen_id: str | None = None,
     task_id: str | None = None,
     partida_id: str | None = None,
-) -> Decimal:
+) -> Decimal | None:
     movement_query = (
         select(MovimientoInventario)
         .where(
@@ -209,10 +258,11 @@ def resolve_project_return_unit_cost(
 
     movement = db.scalars(movement_query.limit(1)).first()
     if not movement:
-        return ZERO
+        return None
 
-    unit_cost = decimal_or_zero(movement.costo_unitario_snapshot) or decimal_or_zero(movement.costo_promedio_snapshot)
-    return unit_cost if unit_cost > ZERO else ZERO
+    if movement.costing_policy == WEIGHTED_COST_POLICY:
+        return decimal_or_zero(movement.costo_unitario_snapshot)
+    return movement_applied_cost(movement) or None
 
 
 def is_low_stock_value(stock_total: Decimal, stock_minimo: Decimal) -> bool:
@@ -841,13 +891,16 @@ def build_inventory_summary(
     if categoria_normalizada:
         no_margin_query = no_margin_query.where(func.lower(func.coalesce(Material.categoria, "")) == categoria_normalizada)
     for detail, _sale, material, movement in db.execute(no_margin_query).all():
-        unit_cost = decimal_or_zero(movement.costo_unitario_snapshot if movement else None)
-        if unit_cost <= ZERO:
-            unit_cost = decimal_or_zero(movement.costo_promedio_snapshot if movement else None)
-        if unit_cost <= ZERO:
-            unit_cost = decimal_or_zero(material.costo_promedio_actual)
-        if unit_cost <= ZERO:
-            unit_cost = decimal_or_zero(material.costo_unitario)
+        if movement and movement.costing_policy == WEIGHTED_COST_POLICY:
+            unit_cost = movement_applied_cost(movement)
+        else:
+            unit_cost = decimal_or_zero(movement.costo_unitario_snapshot if movement else None)
+            if unit_cost <= ZERO:
+                unit_cost = decimal_or_zero(movement.costo_promedio_snapshot if movement else None)
+            if unit_cost <= ZERO:
+                unit_cost = decimal_or_zero(material.costo_promedio_actual)
+            if unit_cost <= ZERO:
+                unit_cost = decimal_or_zero(material.costo_unitario)
         line_margin = decimal_or_zero(detail.total_linea) - (decimal_or_zero(detail.cantidad) * unit_cost)
         if line_margin > ZERO:
             continue
@@ -1169,13 +1222,15 @@ def get_warehouse_for_company(db: Session, empresa_id: str, warehouse_id: str) -
     return warehouse
 
 
-def get_material_for_company(db: Session, empresa_id: str, material_id: str) -> Material:
-    material = db.scalar(
-        select(Material).where(
-            Material.id == material_id,
-            Material.empresa_id == empresa_id,
-        )
+def get_material_for_company(db: Session, empresa_id: str, material_id: str, *, for_update: bool = False) -> Material:
+    query = select(Material).where(
+        Material.id == material_id,
+        Material.empresa_id == empresa_id,
     )
+    if for_update:
+        query = query.with_hint(Material, "WITH (UPDLOCK, HOLDLOCK)", dialect_name="mssql").with_for_update()
+        query = query.execution_options(populate_existing=True)
+    material = db.scalar(query)
     if not material:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Material no encontrado.")
     return material
@@ -1393,6 +1448,7 @@ def get_or_create_stock(
             Existencia.material_id == material_id,
         )
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if stock:
         return stock
@@ -1414,10 +1470,11 @@ def build_movement_item(
     material: Material,
     user: Usuario | None = None,
 ) -> MovementItem:
-    cost_basis = decimal_or_zero(movement.costo_promedio_snapshot or movement.costo_unitario_snapshot)
-    movement_cost = decimal_or_zero(movement.cantidad) * decimal_or_zero(
-        movement.costo_unitario_snapshot or movement.costo_promedio_snapshot
-    )
+    cost_basis = (decimal_or_zero(movement.costo_promedio_snapshot) if movement.costing_policy == WEIGHTED_COST_POLICY
+                  else decimal_or_zero(movement.costo_promedio_snapshot or movement.costo_unitario_snapshot))
+    applied_cost = (movement_applied_cost(movement) if movement.costing_policy == WEIGHTED_COST_POLICY
+                    else decimal_or_zero(movement.costo_unitario_snapshot or movement.costo_promedio_snapshot))
+    movement_cost = decimal_or_zero(movement.cantidad) * applied_cost
     return MovementItem(
         id=movement.id,
         empresa_id=movement.empresa_id,
@@ -1485,10 +1542,18 @@ def apply_inventory_movement(
     pm_partida_id: str | None = None,
     pm_partida_nombre_snapshot: str | None = None,
     costo_unitario: Decimal | None = None,
+    is_transfer: bool = False,
 ) -> MovementItem:
+    ensure_quantity_precision(cantidad)
+    ensure_quantity_precision(cantidad_nueva)
     validate_inventory_access(user, empresa)
     warehouse = get_warehouse_for_company(db, empresa.id, almacen_id)
-    material = get_material_for_company(db, empresa.id, material_id)
+    # Serialize every warehouse movement on the same tenant/material until commit.
+    material = get_material_for_company(db, empresa.id, material_id, for_update=True)
+    claim_material_costing_write(db, material)
+    if tipo == "entrada" and es_proyecto and normalize_optional_text(referencia_tipo) == "DEVOLUCION_PROYECTO":
+        ensure_project_return_quantity(db, empresa_id=empresa.id, project_id=proyecto_id,
+            material_id=material.id, quantity=decimal_or_zero(cantidad), task_id=pm_tarea_id, partida_id=pm_partida_id)
     stock = get_or_create_stock(db, empresa.id, almacen_id, material_id)
 
     previous_quantity = decimal_or_zero(stock.cantidad)
@@ -1533,23 +1598,21 @@ def apply_inventory_movement(
             detail="La existencia no puede quedar en negativo.",
         )
 
-    override_cost = decimal_or_zero(costo_unitario) if costo_unitario is not None else None
-    resolved_unit_cost = (
-        override_cost
-        if override_cost is not None
-        else resolve_inventory_unit_cost(db, empresa_id=empresa.id, material=material, almacen_id=warehouse.id)
-    )
-    if tipo in {"entrada", "ajuste"}:
-        if override_cost is not None:
-            material.costo_unitario = override_cost
-            material.costo_promedio_actual = override_cost
-        elif resolved_unit_cost > ZERO:
-            if decimal_or_zero(material.costo_unitario) <= ZERO:
-                material.costo_unitario = resolved_unit_cost
-            material.costo_promedio_actual = resolved_unit_cost
+    current_average = cost_basis_for_material(material)
+    # Only the internal paired-transfer service may bypass acquisition weighting.
+    increase = movement_quantity > ZERO and tipo in {"entrada", "ajuste"} and not is_transfer
+    resolved_unit_cost = (decimal_or_zero(costo_unitario).quantize(COST_PRECISION, rounding=ROUND_HALF_UP)
+                          if increase and costo_unitario is not None else current_average)
+    if increase and costo_unitario is not None:
+        global_quantity = db.scalar(select(func.coalesce(func.sum(Existencia.cantidad), 0)).where(
+            Existencia.empresa_id == empresa.id, Existencia.material_id == material.id,
+        )) or ZERO
+        material.costo_promedio_actual = weighted_average_cost(
+            global_quantity, current_average, movement_quantity, resolved_unit_cost,
+        )
 
     stock.cantidad = next_quantity
-    cost_basis = decimal_or_zero(material.costo_promedio_actual) or resolved_unit_cost
+    cost_basis = cost_basis_for_material(material)
     movement = MovimientoInventario(
         empresa_id=empresa.id,
         almacen_id=warehouse.id,
@@ -1576,6 +1639,7 @@ def apply_inventory_movement(
         pm_partida_nombre_snapshot=normalize_optional_text(pm_partida_nombre_snapshot),
         costo_unitario_snapshot=resolved_unit_cost,
         costo_promedio_snapshot=cost_basis,
+        costing_policy=WEIGHTED_COST_POLICY,
         notas=normalize_optional_text(notas),
         created_by=user.id,
     )
@@ -1631,6 +1695,10 @@ def apply_bulk_inventory_movement(
     notas: str | None,
     ip_address: str | None,
 ) -> InventoryBulkMovementResponse:
+    # Validate the entire batch before any line can claim a material or write stock.
+    for item in items:
+        ensure_quantity_precision(item.cantidad)
+        ensure_quantity_precision(item.cantidad_nueva)
     validate_inventory_access(user, empresa)
     warehouse = get_warehouse_for_company(db, empresa.id, almacen_id)
     if not items:
@@ -1691,7 +1759,8 @@ def apply_bulk_inventory_movement(
 
 
 def project_movement_cost_total(movement: MovimientoInventario) -> Decimal:
-    unit_cost = decimal_or_zero(movement.costo_unitario_snapshot or movement.costo_promedio_snapshot)
+    unit_cost = (movement_applied_cost(movement) if movement.costing_policy == WEIGHTED_COST_POLICY
+                 else decimal_or_zero(movement.costo_unitario_snapshot or movement.costo_promedio_snapshot))
     return decimal_or_zero(movement.cantidad) * unit_cost
 
 
@@ -1768,6 +1837,36 @@ def get_project_material_net_quantity(
     return total
 
 
+def get_project_material_returnable_quantity(
+    db: Session, *, empresa_id: str, project_id: str | None, material_id: str,
+    task_id: str | None = None, partida_id: str | None = None,
+) -> Decimal:
+    total = get_project_material_net_quantity(db, empresa_id=empresa_id, project_id=project_id,
+        material_id=material_id)
+    if not normalize_optional_text(task_id) and not normalize_optional_text(partida_id):
+        return total
+    scoped = get_project_material_net_quantity(db, empresa_id=empresa_id, project_id=project_id,
+        material_id=material_id, task_id=task_id, partida_id=partida_id)
+    # General project returns must also cap later task/item-specific returns.
+    return min(total, scoped)
+
+
+def ensure_project_return_quantity(
+    db: Session, *, empresa_id: str, project_id: str | None, material_id: str,
+    quantity: Decimal, task_id: str | None = None, partida_id: str | None = None,
+) -> None:
+    # All writers of this immutable ledger claim the same tenant/material first.
+    available = get_project_material_returnable_quantity(db, empresa_id=empresa_id, project_id=project_id,
+        material_id=material_id, task_id=task_id, partida_id=partida_id)
+    validate_project_return_quantity(quantity, available)
+
+
+def validate_project_return_quantity(quantity: Decimal, available: Decimal) -> None:
+    if quantity > available:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="La devolución excede el material consumido para este proyecto.")
+
+
 def consume_material_for_project(
     db: Session,
     *,
@@ -1788,6 +1887,7 @@ def consume_material_for_project(
     requisition_detail_id: str | None = None,
     origin: str = "movimiento_manual",
 ) -> MovementItem:
+    ensure_quantity_precision(cantidad)
     validate_inventory_access(user, empresa)
     if empresa.id != empresa_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Empresa inválida para el consumo.")
@@ -1864,6 +1964,7 @@ def return_material_from_project(
     empresa: Empresa,
     ip_address: str | None,
 ) -> MovementItem:
+    ensure_quantity_precision(cantidad)
     validate_inventory_access(user, empresa)
     if empresa.id != empresa_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Empresa inválida para la devolución.")
@@ -1877,11 +1978,12 @@ def return_material_from_project(
             status_code=status.HTTP_409_CONFLICT,
             detail="No puedes devolver material de un proyecto inactivo.",
         )
-    material = get_material_for_company(db, empresa_id, material_id)
+    material = get_material_for_company(db, empresa_id, material_id, for_update=True)
+    claim_material_costing_write(db, material)
     warehouse = get_warehouse_for_company(db, empresa_id, almacen_id)
     task = get_project_task_for_company_inventory(db, empresa_id=empresa_id, project_id=project.id, task_id=tarea_id)
     budget_item = get_budget_item_for_company_inventory(db, empresa_id=empresa_id, project_id=project.id, item_id=partida_id)
-    net_quantity = get_project_material_net_quantity(
+    net_quantity = get_project_material_returnable_quantity(
         db,
         empresa_id=empresa_id,
         project_id=project.id,
@@ -1889,11 +1991,6 @@ def return_material_from_project(
         task_id=task.id if task else None,
         partida_id=budget_item.id if budget_item else None,
     )
-    if net_quantity < quantity:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="La devolución excede el material consumido para este proyecto.",
-        )
     return_unit_cost = resolve_project_return_unit_cost(
         db,
         empresa_id=empresa_id,
@@ -1903,13 +2000,15 @@ def return_material_from_project(
         task_id=task.id if task else None,
         partida_id=budget_item.id if budget_item else None,
     )
-    if return_unit_cost <= ZERO:
+    if return_unit_cost is None:
         return_unit_cost = resolve_inventory_unit_cost(
             db,
             empresa_id=empresa_id,
             material=material,
             almacen_id=warehouse.id,
         )
+
+    validate_project_return_quantity(quantity, net_quantity)
 
     movement = apply_inventory_movement(
         db,
@@ -1933,7 +2032,7 @@ def return_material_from_project(
         pm_tarea_nombre_snapshot=task.titulo if task else None,
         pm_partida_id=budget_item.id if budget_item else None,
         pm_partida_nombre_snapshot=budget_item.nombre if budget_item else None,
-        costo_unitario=return_unit_cost if return_unit_cost > ZERO else None,
+        costo_unitario=return_unit_cost,
     )
 
     from app.services.pm import refresh_project_material_costs

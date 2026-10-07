@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from app.schemas.quantities import Quantity4
 
 
 class SupplierCreateRequest(BaseModel):
@@ -176,13 +177,13 @@ class RequisitionUpdateRequest(BaseModel):
 
 class RequisitionDetailCreateRequest(BaseModel):
     material_id: str = Field(min_length=1, max_length=64)
-    cantidad: Decimal = Field(gt=0)
+    cantidad: Quantity4 = Field(gt=0)
     notas: str | None = Field(default=None, max_length=2000)
 
 
 class RequisitionDetailUpdateRequest(BaseModel):
     material_id: str | None = Field(default=None, min_length=1, max_length=64)
-    cantidad: Decimal | None = Field(default=None, gt=0)
+    cantidad: Quantity4 | None = Field(default=None, gt=0)
     notas: str | None = Field(default=None, max_length=2000)
 
 
@@ -287,12 +288,12 @@ class RequisitionCreatePurchaseOrderRequest(BaseModel):
 
 class RequisitionFulfillLineRequest(BaseModel):
     detail_id: str = Field(min_length=1, max_length=64)
-    cantidad_surtir: Decimal = Field(gt=0)
+    cantidad_surtir: Quantity4 = Field(gt=0)
 
 
 class RequisitionApproveLineRequest(BaseModel):
     detail_id: str = Field(min_length=1, max_length=64)
-    cantidad_aprobada: Decimal = Field(gt=0)
+    cantidad_aprobada: Quantity4 = Field(gt=0)
 
 
 class RequisitionApproveRequest(BaseModel):
@@ -328,20 +329,20 @@ class PurchaseOrderUpdateRequest(BaseModel):
 
 class PurchaseOrderDetailCreateRequest(BaseModel):
     material_id: str = Field(min_length=1, max_length=64)
-    cantidad: Decimal = Field(gt=0)
+    cantidad: Quantity4 = Field(gt=0)
     costo_unitario: Decimal = Field(ge=0)
 
 
 class PurchaseOrderDetailUpdateRequest(BaseModel):
     material_id: str | None = Field(default=None, min_length=1, max_length=64)
-    cantidad: Decimal | None = Field(default=None, gt=0)
+    cantidad: Quantity4 | None = Field(default=None, gt=0)
     costo_unitario: Decimal | None = Field(default=None, ge=0)
 
 
 class PurchaseOrderReceiveLineRequest(BaseModel):
     detail_id: str = Field(min_length=1, max_length=64)
-    cantidad: Decimal | None = Field(default=None, gt=0)
-    cantidad_recibida: Decimal | None = Field(default=None, gt=0)
+    cantidad: Quantity4 | None = Field(default=None, gt=0)
+    cantidad_recibida: Quantity4 | None = Field(default=None, gt=0)
 
     @property
     def resolved_cantidad(self) -> Decimal:

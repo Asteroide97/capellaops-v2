@@ -60,6 +60,10 @@ from app.services.inventory import (
     apply_inventory_movement,
     apply_text_search,
     count_rows,
+    ensure_quantity_precision,
+    cost_basis_for_material,
+    movement_applied_cost,
+    WEIGHTED_COST_POLICY,
     get_material_for_company,
     get_or_create_stock,
     get_warehouse_for_company,
@@ -257,12 +261,14 @@ def resolve_sale_detail_estimated_cost(detail: VentaDetalle) -> Decimal:
 
     if detail.costo_unitario_manual is not None and Decimal(detail.costo_unitario_manual) > ZERO:
         return Decimal(detail.costo_unitario_manual)
+    if movement and movement.costing_policy == WEIGHTED_COST_POLICY:
+        return movement_applied_cost(movement)
     if movement and movement.costo_unitario_snapshot is not None and Decimal(movement.costo_unitario_snapshot) > ZERO:
         return Decimal(movement.costo_unitario_snapshot)
     if movement and movement.costo_promedio_snapshot is not None and Decimal(movement.costo_promedio_snapshot) > ZERO:
         return Decimal(movement.costo_promedio_snapshot)
-    if material and material.costo_promedio_actual is not None and Decimal(material.costo_promedio_actual) > ZERO:
-        return Decimal(material.costo_promedio_actual)
+    if material and material.costo_promedio_actual is not None and (not movement or Decimal(material.costo_promedio_actual) > ZERO):
+        return cost_basis_for_material(material)
     if material and material.costo_unitario is not None and Decimal(material.costo_unitario) > ZERO:
         return Decimal(material.costo_unitario)
     return ZERO
@@ -1151,6 +1157,7 @@ def add_sale_line(
     item,
     ip_address: str | None,
 ) -> SaleEditableSummaryResponse:
+    ensure_quantity_precision(getattr(item, "cantidad", None))
     validate_pos_access(user, empresa)
     sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
     ensure_sale_editable(sale)
@@ -1256,6 +1263,7 @@ def update_sale_line(
     payload,
     ip_address: str | None,
 ) -> SaleEditableSummaryResponse:
+    ensure_quantity_precision(getattr(payload, "cantidad", None))
     validate_pos_access(user, empresa)
     sale = get_sale_for_company(db, empresa.id, sale_id, for_update=True)
     ensure_sale_editable(sale)
@@ -2552,6 +2560,8 @@ def resolve_sale_lines(
     items: list,
     validate_stock: bool,
 ) -> tuple[Almacen, list[dict], Decimal, Decimal, Decimal]:
+    for item in items:
+        ensure_quantity_precision(item.cantidad)
     warehouse = get_active_sale_warehouse(db, empresa_id, warehouse_id)
     resolved_lines: list[dict] = []
     required_stock: dict[str, Decimal] = {}
@@ -3406,6 +3416,7 @@ def cancel_sale(
                 referencia_id=sale.id,
                 notas=f"Cancelacion de venta {sale.folio}",
                 ip_address=ip_address,
+                costo_unitario=resolve_sale_detail_estimated_cost(detail),
             )
     elif sale.estatus != "suspendida":
         raise HTTPException(

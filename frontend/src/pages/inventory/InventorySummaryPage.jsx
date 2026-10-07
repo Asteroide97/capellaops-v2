@@ -598,7 +598,7 @@ export default function InventorySummaryPage() {
                     <td>{item.nombre}</td>
                     <td>{item.sku}</td>
                     <td>{formatNumber(item.stock_total)}</td>
-                    <td>{formatMoney(item.costo_promedio_actual || item.costo_unitario)}</td>
+                    <td>{formatMoney(item.costo_promedio_actual ?? item.costo_unitario)}</td>
                     <td>
                       <button
                         className="link-button"
