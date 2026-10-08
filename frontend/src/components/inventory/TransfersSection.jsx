@@ -60,6 +60,10 @@ function formatMoney(value) {
 }
 
 
+function formatDocumentCost(value) {
+  return value === null || value === undefined || value === "" ? "Sin referencia" : formatMoney(value);
+}
+
 function normalizeDecimalInput(value) {
   return value.replace(",", ".").replace(/[^\d.]/g, "");
 }
@@ -529,6 +533,10 @@ export default function TransfersSection({ active, token, empresaId, onInventory
                 {selectedTransfer.folio} | {selectedTransfer.almacen_origen_nombre} hacia {selectedTransfer.almacen_destino_nombre}
               </p>
             ) : null}
+            <p className="table-note">
+              El costo documental es una referencia del borrador, no es el costo aplicado del movimiento.
+              Consulta la valoracion del traspaso en Kardex.
+            </p>
           </div>
 
           {!selectedTransfer ? (
@@ -575,7 +583,7 @@ export default function TransfersSection({ active, token, empresaId, onInventory
                   </label>
 
                   <label>
-                    Costo snapshot
+                    Costo documental (opcional)
                     <input
                       min="0"
                       onChange={(event) =>
@@ -584,7 +592,7 @@ export default function TransfersSection({ active, token, empresaId, onInventory
                           costo_unitario_snapshot: normalizeDecimalInput(event.target.value),
                         }))
                       }
-                      placeholder="Opcional"
+                      placeholder="Vacio: costo de referencia del material"
                       step="0.0001"
                       type="number"
                       value={detailForm.costo_unitario_snapshot}
@@ -622,7 +630,7 @@ export default function TransfersSection({ active, token, empresaId, onInventory
                         <th>SKU</th>
                         <th>Material</th>
                         <th>Cantidad</th>
-                        <th>Costo snapshot</th>
+                        <th>Costo documental</th>
                         <th>Acciones</th>
                       </tr>
                     </thead>
@@ -635,7 +643,7 @@ export default function TransfersSection({ active, token, empresaId, onInventory
                             <div className="table-note">{detail.material_unidad}</div>
                           </td>
                           <td>{formatNumber(detail.cantidad)}</td>
-                          <td>{detail.costo_unitario_snapshot ? formatMoney(detail.costo_unitario_snapshot) : "-"}</td>
+                          <td>{formatDocumentCost(detail.costo_unitario_snapshot)}</td>
                           <td className="inventory-row-actions">
                             {selectedIsDraft ? (
                               <>
@@ -646,9 +654,7 @@ export default function TransfersSection({ active, token, empresaId, onInventory
                                       id: detail.id,
                                       material_id: detail.material_id,
                                       cantidad: String(detail.cantidad),
-                                      costo_unitario_snapshot: detail.costo_unitario_snapshot
-                                        ? String(detail.costo_unitario_snapshot)
-                                        : "",
+                                      costo_unitario_snapshot: String(detail.costo_unitario_snapshot ?? ""),
                                     })
                                   }
                                   type="button"

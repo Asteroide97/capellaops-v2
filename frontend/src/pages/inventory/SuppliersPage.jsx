@@ -219,6 +219,7 @@ export default function SuppliersPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [suppliers, setSuppliers] = useState([]);
@@ -233,6 +234,7 @@ export default function SuppliersPage() {
   const [detailOrders, setDetailOrders] = useState([]);
   const [detailReceipts, setDetailReceipts] = useState([]);
   const [detailMaterials, setDetailMaterials] = useState([]);
+  const summariesReady = suppliers.every((supplier) => Boolean(supplierSummaries[supplier.id]));
 
   const detailSupplier = useMemo(() => {
     return (
@@ -288,6 +290,9 @@ export default function SuppliersPage() {
       }
     });
     setSupplierSummaries(nextSummaries);
+    if (results.some((result) => result.status === "rejected")) {
+      setError("No se pudo cargar el resumen de algunos proveedores. Actualiza para intentar nuevamente.");
+    }
   }
 
   async function loadSuppliersPage(nextFilters = filters) {
@@ -407,7 +412,8 @@ export default function SuppliersPage() {
 
   async function openDetailModal(supplierId) {
     setDetailSupplierId(supplierId);
-    setDetailSummary(supplierSummaries[supplierId] || null);
+    setDetailSummary(null);
+    setDetailError("");
     setDetailOrders([]);
     setDetailReceipts([]);
     setDetailMaterials([]);
@@ -418,7 +424,7 @@ export default function SuppliersPage() {
     try {
       await loadSupplierDetailBundle(supplierId);
     } catch (requestError) {
-      setError(requestError.message || "No se pudo cargar el detalle del proveedor.");
+      setDetailError("No se pudo cargar el resumen del proveedor. Reintenta para consultar sus ordenes y recepciones.");
     } finally {
       setDetailLoading(false);
     }
@@ -522,23 +528,23 @@ export default function SuppliersPage() {
         <MetricCard
           icon={<ShoppingCart size={16} />}
           label="Con ordenes abiertas"
-          meta="Borrador, emitida o parcial"
+          meta="Emitida o recibida parcial"
           tone="warning"
-          value={formatNumber(kpis.conOrdenesAbiertas)}
+          value={summariesReady ? formatNumber(kpis.conOrdenesAbiertas) : "No disponible"}
         />
         <MetricCard
           icon={<Clock3 size={16} />}
           label="Pendiente por recibir"
           meta="Monto estimado"
           tone="warning"
-          value={formatMoney(kpis.pendiente)}
+          value={summariesReady ? formatMoney(kpis.pendiente) : "No disponible"}
         />
         <MetricCard
           icon={<Banknote size={16} />}
           label="Total comprado"
           meta="Acumulado visible"
           tone="info"
-          value={formatMoney(kpis.totalComprado)}
+          value={summariesReady ? formatMoney(kpis.totalComprado) : "No disponible"}
         />
       </section>
 
@@ -1009,6 +1015,12 @@ export default function SuppliersPage() {
         subtitle="Resumen comercial, ordenes de compra, recepciones y materiales relacionados."
         title={detailSupplier ? supplierDisplayName(detailSupplier) : "Detalle del proveedor"}
       >
+        {detailError ? <p className="form-error" role="alert">{detailError}</p> : null}
+        {detailError ? (
+          <ActionButton onClick={() => openDetailModal(detailSupplierId)} type="button">
+            Reintentar
+          </ActionButton>
+        ) : null}
         {!detailSupplier && detailLoading ? (
           <div className="screen-center">Cargando detalle del proveedor...</div>
         ) : !detailSupplier ? (
@@ -1097,6 +1109,10 @@ export default function SuppliersPage() {
               </div>
             </section>
 
+            {detailLoading ? (
+              <p role="status">Consultando resumen comercial...</p>
+            ) : detailSummary ? (
+              <>
             <section className="inventory-metric-grid inventory-metric-grid-4">
               <MetricCard
                 icon={<ShoppingCart size={16} />}
@@ -1144,7 +1160,7 @@ export default function SuppliersPage() {
             </section>
 
             <section className="inventory-form-section">
-              <SectionTitle subtitle="Ultimas ordenes emitidas o recibidas con este proveedor." title="Ordenes recientes" />
+              <SectionTitle subtitle="Ultimas ordenes ligadas a este proveedor, incluidos borradores." title="Ordenes recientes" />
               {detailLoading && detailOrders.length === 0 ? (
                 <div className="inventory-form-note">
                   <strong>Cargando ordenes</strong>
@@ -1253,6 +1269,10 @@ export default function SuppliersPage() {
                 </DataTable>
               )}
             </section>
+              </>
+            ) : (
+              <p className="inventory-form-note">Resumen comercial no disponible.</p>
+            )}
           </div>
         )}
       </ModalShell>

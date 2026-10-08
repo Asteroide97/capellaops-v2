@@ -2015,23 +2015,35 @@ def list_supplier_materials(
     offset: int = 0,
 ) -> tuple[int, list[SupplierMaterialItem]]:
     supplier = get_supplier_for_company(db, empresa_id, supplier_id)
-    ordered_rows = db.execute(
+    ordered_totals = (
         select(
-            Material,
+            OrdenCompraDetalle.material_id.label("material_id"),
             func.count(func.distinct(OrdenCompra.id)).label("orders_count"),
             func.coalesce(func.sum(OrdenCompraDetalle.cantidad), 0).label("total_ordenado"),
             func.coalesce(func.sum(OrdenCompraDetalle.cantidad_recibida), 0).label("total_recibido"),
             func.coalesce(func.sum(OrdenCompraDetalle.total_linea), 0).label("monto_total"),
             func.max(OrdenCompra.created_at).label("ultima_orden_at"),
         )
-        .join(OrdenCompraDetalle, OrdenCompraDetalle.material_id == Material.id)
+        .select_from(OrdenCompraDetalle)
         .join(OrdenCompra, OrdenCompra.id == OrdenCompraDetalle.orden_compra_id)
         .where(
-            Material.empresa_id == empresa_id,
             OrdenCompra.empresa_id == empresa_id,
             OrdenCompra.proveedor_id == supplier.id,
         )
-        .group_by(Material.id)
+        .group_by(OrdenCompraDetalle.material_id)
+        .subquery()
+    )
+    ordered_rows = db.execute(
+        select(
+            Material,
+            ordered_totals.c.orders_count,
+            ordered_totals.c.total_ordenado,
+            ordered_totals.c.total_recibido,
+            ordered_totals.c.monto_total,
+            ordered_totals.c.ultima_orden_at,
+        )
+        .join(ordered_totals, ordered_totals.c.material_id == Material.id)
+        .where(Material.empresa_id == empresa_id)
     ).all()
 
     material_map: dict[str, SupplierMaterialItem] = {}
@@ -2073,10 +2085,17 @@ def list_supplier_materials(
             existing.es_proveedor_principal = True
 
     min_datetime = datetime.min.replace(tzinfo=timezone.utc)
+
+    def last_order_sort_value(item: SupplierMaterialItem) -> datetime:
+        value = item.ultima_orden_at
+        if value is None:
+            return min_datetime
+        return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
     items = sorted(
         material_map.values(),
         key=lambda item: (
-            item.ultima_orden_at or min_datetime,
+            last_order_sort_value(item),
             Decimal(item.monto_total_comprado or ZERO),
             item.nombre.lower(),
         ),

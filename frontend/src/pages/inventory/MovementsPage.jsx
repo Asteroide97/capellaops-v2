@@ -311,6 +311,7 @@ export default function MovementsPage() {
   }
 
   function closeMovementModal() {
+    setError("");
     setWarehouseStock(null);
     setModalState(defaultModalState);
     setDraft(defaultDraft);
@@ -422,7 +423,7 @@ export default function MovementsPage() {
         title="Movimientos"
       />
 
-      {error ? <p className="form-error">{error}</p> : null}
+      {error && !modalState.open ? <p className="form-error">{error}</p> : null}
       {success ? <p className="form-success">{success}</p> : null}
       {notice ? <p className="feature-note">{notice}</p> : null}
 
@@ -1053,6 +1054,7 @@ export default function MovementsPage() {
               <div className="table-note">Total de líneas: {draft.items.length}</div>
             </section>
 
+            {error ? <p className="form-error" id="movement-form-error" role="alert">{error}</p> : null}
             <div className="inventory-actions inventory-actions-end">
               <ActionButton disabled={submitting} tone="primary" type="submit">
                 {submitting ? "Registrando..." : `Confirmar ${modalState.tipo}`}
