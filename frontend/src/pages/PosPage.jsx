@@ -257,6 +257,19 @@ function formatMoney(value) {
 }
 
 
+function formatReportCsvMoney(value) {
+  if (value === null || value === undefined) return "No disponible";
+  return new Intl.NumberFormat("en-US", {
+    useGrouping: false, minimumFractionDigits: 2, maximumFractionDigits: 2,
+  }).format(Number(value));
+}
+
+
+function formatReportMoney(value) {
+  return value === null || value === undefined ? "No disponible" : formatMoney(value);
+}
+
+
 function formatNumber(value) {
   const numericValue = Number(value ?? 0);
   return new Intl.NumberFormat("es-MX", {
@@ -943,7 +956,7 @@ export default function PosPage() {
   const { token, empresa, empresaId, membership, user } = useAuth();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeView = POS_VIEWS.includes(searchParams.get("view")) ? searchParams.get("view") : "sell";
+  const activeView = searchParams.get("view") === "billing" ? "invoicing" : POS_VIEWS.includes(searchParams.get("view")) ? searchParams.get("view") : "sell";
   const canOpenBillingQueue = user?.is_superadmin || ["owner", "admin"].includes(String(membership?.role ?? "").toLowerCase());
 
   const [loading, setLoading] = useState(true);
@@ -1031,6 +1044,7 @@ export default function PosPage() {
   const [crmLinkForm, setCrmLinkForm] = useState(defaultCrmLinkForm);
   const [resumedSaleId, setResumedSaleId] = useState("");
   const [shiftMovementModalType, setShiftMovementModalType] = useState("");
+  const [shiftMovementError, setShiftMovementError] = useState("");
   const [closeShiftModalOpen, setCloseShiftModalOpen] = useState(false);
 
   const selectedWarehouse = useMemo(
@@ -2342,10 +2356,33 @@ export default function PosPage() {
     }
   }
 
+  function openShiftMovementModal(type) {
+    setShiftMovementError("");
+    setShiftMovementModalType(type);
+  }
+
+  function closeShiftMovementModal() {
+    setShiftMovementError("");
+    setShiftMovementModalType("");
+  }
+
   async function handleShiftMovementSubmit(event) {
     event.preventDefault();
+    setShiftMovementError("");
+    clearFeedback();
     if (!selectedWarehouseId) {
-      setError("Selecciona un almacén para registrar el movimiento.");
+      setShiftMovementError("Selecciona un almacén para registrar el movimiento.");
+      return;
+    }
+    const amount = Number(shiftMovementForm.monto);
+    if (!Number.isFinite(amount) || amount <= 0 || !shiftMovementForm.motivo.trim()) {
+      setShiftMovementError("Ingresa un monto mayor a cero y el motivo.");
+      return;
+    }
+    if (shiftMovementModalType === "retiro" && activeShift?.almacen_id === selectedWarehouseId
+        && activeShift.efectivo_esperado != null && Number.isFinite(Number(activeShift.efectivo_esperado))
+        && amount > Number(activeShift.efectivo_esperado)) {
+      setShiftMovementError("El retiro supera el efectivo disponible.");
       return;
     }
 
@@ -2356,7 +2393,6 @@ export default function PosPage() {
     };
 
     setShiftSubmitting(true);
-    clearFeedback();
     try {
       const shift =
         shiftMovementModalType === "ingreso"
@@ -2372,7 +2408,7 @@ export default function PosPage() {
           : "Retiro manual registrado.",
       );
     } catch (requestError) {
-      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+      setShiftMovementError(getPosUiError(requestError, "No se pudo registrar el movimiento. Intenta nuevamente."));
     } finally {
       setShiftSubmitting(false);
     }
@@ -2529,20 +2565,23 @@ export default function PosPage() {
 
     const rows = [
       ["Seccion", "Campo", "Valor"],
-      ["KPIs", "Ventas netas", reportData.kpis.total_neto],
+      ["KPIs", "Ventas brutas", formatReportCsvMoney(reportData.kpis.total_bruto)],
+      ["KPIs", "Monto cancelado", formatReportCsvMoney(reportData.kpis.total_cancelado)],
+      ["KPIs", "Ventas netas", formatReportCsvMoney(reportData.kpis.total_neto)],
       ["KPIs", "Ventas cobradas", reportData.kpis.ventas_pagadas_count],
       ["KPIs", "Cancelaciones", reportData.kpis.ventas_canceladas_count],
-      ["KPIs", "Ticket promedio", reportData.kpis.ticket_promedio],
-      ["KPIs", "Descuentos", reportData.kpis.total_descuentos],
-      ["KPIs", "Utilidad estimada", reportData.kpis.utilidad_estimada],
+      ["KPIs", "Ticket promedio", formatReportCsvMoney(reportData.kpis.ticket_promedio)],
+      ["KPIs", "Descuentos", formatReportCsvMoney(reportData.kpis.total_descuentos)],
+      ["KPIs", "Impuestos", formatReportCsvMoney(reportData.kpis.total_impuestos)],
+      ["KPIs", "Utilidad estimada", formatReportCsvMoney(reportData.kpis.utilidad_estimada)],
       [],
       ["Ventas por día"],
       ["Fecha", "Ventas", "Total neto", "Cancelado"],
       ...(reportData.ventas_por_dia ?? []).map((item) => [
         item.fecha,
         item.ventas_count,
-        item.total_neto,
-        item.cancelado,
+        formatReportCsvMoney(item.total_neto),
+        formatReportCsvMoney(item.cancelado),
       ]),
       [],
       ["Productos más vendidos"],
@@ -2551,10 +2590,22 @@ export default function PosPage() {
         item.sku,
         item.nombre,
         item.cantidad,
-        item.total_venta,
-        item.costo_estimado,
-        item.utilidad_estimada,
+        formatReportCsvMoney(item.total_venta),
+        formatReportCsvMoney(item.costo_estimado),
+        formatReportCsvMoney(item.utilidad_estimada),
       ]),
+      [],
+      ["Metodos de pago"],
+      ["Metodo", "Ventas", "Total neto"],
+      ...(reportData.metodos_pago ?? []).map(item => [item.metodo, item.ventas_count, formatReportCsvMoney(item.total)]),
+      [],
+      ["Ventas por cajero"],
+      ["Cajero", "Ventas", "Total neto"],
+      ...(reportData.ventas_por_cajero ?? []).map(item => [item.nombre, item.ventas_count, formatReportCsvMoney(item.total_neto)]),
+      [],
+      ["Ventas por almacen"],
+      ["Almacen", "Ventas", "Total neto"],
+      ...(reportData.ventas_por_almacen ?? []).map(item => [item.nombre, item.ventas_count, formatReportCsvMoney(item.total_neto)]),
     ];
 
     downloadCsvFile("pos-reportes.csv", rows);
@@ -4109,11 +4160,11 @@ export default function PosPage() {
               </div>
 
               <div className="pos-action-row">
-                <button className="ghost-button" onClick={() => setShiftMovementModalType("ingreso")} type="button">
+                <button className="ghost-button" onClick={() => openShiftMovementModal("ingreso")} type="button">
                   <BanknoteArrowUp size={16} />
                   <span>Ingreso manual</span>
                 </button>
-                <button className="ghost-button" onClick={() => setShiftMovementModalType("retiro")} type="button">
+                <button className="ghost-button" onClick={() => openShiftMovementModal("retiro")} type="button">
                   <BanknoteArrowDown size={16} />
                   <span>Retiro manual</span>
                 </button>
@@ -4507,8 +4558,8 @@ export default function PosPage() {
                   <PosKpiCard
                     icon={<BarChart3 size={18} />}
                     label="Utilidad estimada"
-                    meta="Basada en costo estimado"
-                    value={formatMoney(reportData.kpis.utilidad_estimada)}
+                    meta="Venta sin impuestos, menos costo y descuentos"
+                    value={formatReportMoney(reportData.kpis.utilidad_estimada)}
                   />
                 </div>
               </section>
@@ -4584,7 +4635,7 @@ export default function PosPage() {
                             <td>{item.sku}</td>
                             <td>{formatNumber(item.cantidad)}</td>
                             <td>{formatMoney(item.total_venta)}</td>
-                            <td>{formatMoney(item.utilidad_estimada)}</td>
+                            <td>{formatReportMoney(item.utilidad_estimada)}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -6070,7 +6121,7 @@ export default function PosPage() {
       <PosModal
         footer={
           <div className="inventory-actions">
-            <button className="ghost-button" onClick={() => setShiftMovementModalType("")} type="button">
+            <button className="ghost-button" onClick={closeShiftMovementModal} type="button">
               Cancelar
             </button>
             <button className="primary-button" disabled={shiftSubmitting} form="pos-shift-movement-form" type="submit">
@@ -6082,12 +6133,13 @@ export default function PosPage() {
             </button>
           </div>
         }
-        onClose={() => setShiftMovementModalType("")}
+        onClose={closeShiftMovementModal}
         open={Boolean(shiftMovementModalType)}
         subtitle="Ajusta caja sin afectar inventario."
         title={shiftMovementModalType === "ingreso" ? "Ingreso manual" : "Retiro manual"}
       >
         <form className="pos-cash-form" id="pos-shift-movement-form" onSubmit={handleShiftMovementSubmit}>
+          {shiftMovementError ? <p className="form-error" id="pos-shift-movement-error" role="alert">{shiftMovementError}</p> : null}
           <label>
             Monto
             <input

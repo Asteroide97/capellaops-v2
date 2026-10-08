@@ -7,7 +7,7 @@ import re
 from uuid import uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import desc, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.models import (
@@ -456,7 +456,9 @@ def get_shift_for_company(
 ) -> PosTurnoCaja:
     query = select(PosTurnoCaja).where(PosTurnoCaja.id == shift_id, PosTurnoCaja.empresa_id == empresa_id)
     if for_update:
-        query = query.with_for_update()
+        query = (query.with_for_update()
+                 .with_hint(PosTurnoCaja, "WITH (UPDLOCK, HOLDLOCK)", dialect_name="mssql")
+                 .execution_options(populate_existing=True))
     shift = db.scalar(query)
     if not shift:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Turno de caja no encontrado.")
@@ -476,7 +478,9 @@ def get_active_shift_for_company(
         PosTurnoCaja.estatus == "abierta",
     )
     if for_update:
-        query = query.with_for_update()
+        query = (query.with_for_update()
+                 .with_hint(PosTurnoCaja, "WITH (UPDLOCK, HOLDLOCK)", dialect_name="mssql")
+                 .execution_options(populate_existing=True))
     return db.scalar(query.order_by(desc(PosTurnoCaja.opened_at), desc(PosTurnoCaja.id)))
 
 
@@ -1828,6 +1832,29 @@ def list_invoice_requests(
     return total, [serialize_invoice_request_item(sale) for sale in sales]
 
 
+def get_sale_report_amounts(sale: Venta) -> dict[str, Decimal]:
+    # Status-based report: a cancelled sale contributes gross and reversal, not negative revenue.
+    settled = sale.estatus in {"pagada", "cancelada"}
+    gross = Decimal(sale.total or ZERO) if settled else ZERO
+    cancelled = gross if sale.estatus == "cancelada" else ZERO
+    return {
+        "gross": gross,
+        "cancelled": cancelled,
+        "net": gross - cancelled,
+        "discount": Decimal(sale.descuento_total or ZERO) if settled else ZERO,
+        "tax": Decimal(sale.impuesto_total or ZERO) if settled else ZERO,
+    }
+
+
+def resolve_report_detail_cost(detail: VentaDetalle) -> Decimal | None:
+    if detail.costo_unitario_manual is not None:
+        return Decimal(detail.costo_unitario_manual)
+    cost = resolve_sale_detail_estimated_cost(detail)
+    # A generated zero snapshot alone cannot distinguish missing cost from an explicit zero.
+    known_zero = detail.material is not None and detail.material.costo_promedio_actual is not None
+    return cost if cost > ZERO or known_zero else None
+
+
 def get_pos_report_summary(
     db: Session,
     empresa_id: str,
@@ -1878,7 +1905,7 @@ def get_pos_report_summary(
     )
     cashier_totals: dict[str, dict[str, str | int | Decimal | None]] = {}
     warehouse_totals: dict[str, dict[str, str | int | Decimal | None]] = {}
-    product_totals: dict[str, dict[str, Decimal | str]] = {}
+    product_totals: dict[str, dict[str, Decimal | str | None]] = {}
 
     ventas_pagadas_count = 0
     ventas_canceladas_count = 0
@@ -1886,8 +1913,9 @@ def get_pos_report_summary(
     total_bruto = ZERO
     total_descuentos = ZERO
     total_cancelado = ZERO
-    total_pagado = ZERO
     utilidad_estimada = ZERO
+    utilidad_disponible = True
+    total_impuestos = ZERO
     descuento_lineas_total = ZERO
     descuento_global_total = ZERO
     cancelaciones: list[PosReportCancellationItem] = []
@@ -1896,26 +1924,24 @@ def get_pos_report_summary(
         sale_timestamp = get_sale_report_timestamp(sale)
         bucket_label = format_report_bucket(sale_timestamp, agrupacion)
         sale_sign = ZERO
+        amounts = get_sale_report_amounts(sale)
+        total_bruto += amounts["gross"]
+        total_descuentos += amounts["discount"]
+        total_impuestos += amounts["tax"]
 
         if sale.estatus == "pagada":
             ventas_pagadas_count += 1
-            total_pagado += Decimal(sale.total or ZERO)
-            total_bruto += Decimal(sale.subtotal or ZERO)
-            total_descuentos += Decimal(sale.descuento_total or ZERO)
             descuento_lineas_total += Decimal(sale.descuento_lineas_total or ZERO)
             descuento_global_total += Decimal(sale.descuento_global or ZERO)
             timeline[bucket_label]["ventas_count"] += 1
-            timeline[bucket_label]["total_neto"] += Decimal(sale.total or ZERO)
+            timeline[bucket_label]["total_neto"] += amounts["net"]
             sale_sign = Decimal("1")
         elif sale.estatus == "cancelada":
             ventas_canceladas_count += 1
-            total_bruto += Decimal(sale.subtotal or ZERO)
-            total_descuentos += Decimal(sale.descuento_total or ZERO)
-            total_cancelado += Decimal(sale.total or ZERO)
+            total_cancelado += amounts["cancelled"]
             descuento_lineas_total += Decimal(sale.descuento_lineas_total or ZERO)
             descuento_global_total += Decimal(sale.descuento_global or ZERO)
             timeline[bucket_label]["cancelado"] += Decimal(sale.total or ZERO)
-            sale_sign = Decimal("-1")
             cancelaciones.append(
                 PosReportCancellationItem(
                     venta_id=sale.id,
@@ -1931,13 +1957,13 @@ def get_pos_report_summary(
 
         if sale.estatus in {"pagada", "cancelada"}:
             payments = get_sale_payment_breakdown(db, sale=sale)
+            retained_payments = calculate_shift_payment_totals(payments, change_amount=sale.cambio)
             counted_methods: set[str] = set()
-            for payment in payments:
-                method = str(payment["metodo"] or "").strip().lower()
+            for method, retained_amount in retained_payments.items():
                 if method not in method_totals:
                     method_totals[method] = {"total": ZERO, "ventas_count": 0}
-                method_totals[method]["total"] += Decimal(payment["monto"] or ZERO) * sale_sign
-                if sale.estatus == "pagada" and method not in counted_methods:
+                method_totals[method]["total"] += retained_amount * sale_sign
+                if sale.estatus == "pagada" and retained_amount > ZERO and method not in counted_methods:
                     method_totals[method]["ventas_count"] += 1
                     counted_methods.add(method)
 
@@ -1963,17 +1989,34 @@ def get_pos_report_summary(
                 cashier_totals[cashier_key]["ventas_count"] += 1
                 warehouse_totals[warehouse_key]["ventas_count"] += 1
 
-            cashier_totals[cashier_key]["total_neto"] += Decimal(sale.total or ZERO) * sale_sign
-            warehouse_totals[warehouse_key]["total_neto"] += Decimal(sale.total or ZERO) * sale_sign
+            cashier_totals[cashier_key]["total_neto"] += amounts["net"]
+            warehouse_totals[warehouse_key]["total_neto"] += amounts["net"]
 
         if sale.estatus in {"pagada", "cancelada"}:
-            for detail in sale.detalles:
-                unit_cost = resolve_sale_detail_estimated_cost(detail)
+            line_total = sum((Decimal(detail.total_linea or ZERO) for detail in sale.detalles), ZERO)
+            remaining_discount = Decimal(sale.descuento_global or ZERO)
+            sale_cost = ZERO
+            sale_cost_known = bool(sale.detalles) or sale_sign == ZERO
+            for index, detail in enumerate(sale.detalles):
+                unit_cost = resolve_report_detail_cost(detail) if sale_sign else ZERO
+                if index == len(sale.detalles) - 1:
+                    discount_share = remaining_discount
+                elif line_total:
+                    discount_share = quantize_decimal(
+                        Decimal(sale.descuento_global or ZERO) * Decimal(detail.total_linea or ZERO) / line_total
+                    )
+                else:
+                    discount_share = ZERO
+                remaining_discount -= discount_share
                 quantity = Decimal(detail.cantidad or ZERO)
                 signed_quantity = quantity * sale_sign
-                signed_total = Decimal(detail.total_linea or ZERO) * sale_sign
-                signed_cost = unit_cost * quantity * sale_sign
-                utilidad_estimada += signed_total - signed_cost
+                signed_total = (Decimal(detail.total_linea or ZERO) - discount_share) * sale_sign
+                signed_cost = unit_cost * quantity * sale_sign if unit_cost is not None else None
+                line_profit = signed_total - Decimal(detail.impuesto_linea or ZERO) * sale_sign - signed_cost if signed_cost is not None else None
+                if signed_cost is None:
+                    sale_cost_known = False
+                else:
+                    sale_cost += signed_cost
 
                 if not detail.material_id:
                     continue
@@ -1993,10 +2036,20 @@ def get_pos_report_summary(
 
                 product_entry["cantidad"] += signed_quantity
                 product_entry["total_venta"] += signed_total
-                product_entry["costo_estimado"] += signed_cost
-                product_entry["utilidad_estimada"] += signed_total - signed_cost
+                product_entry["costo_estimado"] = (
+                    product_entry["costo_estimado"] + signed_cost
+                    if product_entry["costo_estimado"] is not None and signed_cost is not None else None
+                )
+                product_entry["utilidad_estimada"] = (
+                    product_entry["utilidad_estimada"] + line_profit
+                    if product_entry["utilidad_estimada"] is not None and line_profit is not None else None
+                )
+            if sale_cost_known:
+                utilidad_estimada += amounts["net"] - amounts["tax"] * sale_sign - sale_cost
+            else:
+                utilidad_disponible = False
 
-    total_neto = total_pagado - total_cancelado
+    total_neto = total_bruto - total_cancelado
     ticket_promedio = total_neto / Decimal(ventas_pagadas_count) if ventas_pagadas_count else ZERO
     descuentos = PosReportDiscountSummary(
         descuento_lineas_total=descuento_lineas_total,
@@ -2058,8 +2111,8 @@ def get_pos_report_summary(
                 nombre=str(data["nombre"]),
                 cantidad=Decimal(data["cantidad"] or ZERO),
                 total_venta=Decimal(data["total_venta"] or ZERO),
-                costo_estimado=Decimal(data["costo_estimado"] or ZERO),
-                utilidad_estimada=Decimal(data["utilidad_estimada"] or ZERO),
+                costo_estimado=Decimal(data["costo_estimado"]) if data["costo_estimado"] is not None else None,
+                utilidad_estimada=Decimal(data["utilidad_estimada"]) if data["utilidad_estimada"] is not None else None,
             )
             for data in product_totals.values()
             if Decimal(data["cantidad"] or ZERO) > ZERO or Decimal(data["total_venta"] or ZERO) > ZERO
@@ -2078,10 +2131,11 @@ def get_pos_report_summary(
             ventas_suspendidas_count=ventas_suspendidas_count,
             total_bruto=total_bruto,
             total_descuentos=total_descuentos,
+            total_impuestos=total_impuestos,
             total_cancelado=total_cancelado,
             total_neto=total_neto,
             ticket_promedio=ticket_promedio,
-            utilidad_estimada=utilidad_estimada,
+            utilidad_estimada=utilidad_estimada if utilidad_disponible else None,
         ),
         metodos_pago=payment_items,
         ventas_por_dia=timeline_items,
@@ -2517,6 +2571,24 @@ def add_shift_manual_movement(
         )
 
     normalized_reason = normalize_required_text(reason, "Motivo")
+    if movement_type == "retiro":
+        # Conditional DML checks current cash and increments atomically, including on SQLite.
+        available = (PosTurnoCaja.fondo_inicial + PosTurnoCaja.total_efectivo
+                     + PosTurnoCaja.ingresos_manuales - PosTurnoCaja.retiros_manuales)
+        result = db.execute(
+            update(PosTurnoCaja).where(
+                PosTurnoCaja.id == shift.id,
+                PosTurnoCaja.empresa_id == empresa.id,
+                PosTurnoCaja.almacen_id == warehouse_id,
+                PosTurnoCaja.estatus == "abierta",
+                available >= Decimal(amount),
+            ).values(retiros_manuales=PosTurnoCaja.retiros_manuales + Decimal(amount))
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="El retiro supera el efectivo disponible.")
+        db.refresh(shift)
     movement = PosTurnoCajaMovimiento(
         empresa_id=empresa.id,
         turno_id=shift.id,
@@ -2529,8 +2601,6 @@ def add_shift_manual_movement(
 
     if movement_type == "ingreso":
         shift.ingresos_manuales = Decimal(shift.ingresos_manuales or ZERO) + Decimal(amount)
-    else:
-        shift.retiros_manuales = Decimal(shift.retiros_manuales or ZERO) + Decimal(amount)
     refresh_closed_shift_difference(shift)
     db.flush()
 

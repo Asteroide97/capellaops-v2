@@ -442,10 +442,11 @@ class PosReportKpis(BaseModel):
     ventas_suspendidas_count: int = 0
     total_bruto: Decimal = Decimal("0")
     total_descuentos: Decimal = Decimal("0")
+    total_impuestos: Decimal = Decimal("0")
     total_cancelado: Decimal = Decimal("0")
     total_neto: Decimal = Decimal("0")
     ticket_promedio: Decimal = Decimal("0")
-    utilidad_estimada: Decimal = Decimal("0")
+    utilidad_estimada: Decimal | None = None
 
 
 class PosReportPaymentMethodItem(BaseModel):
@@ -481,8 +482,8 @@ class PosReportTopProductItem(BaseModel):
     nombre: str
     cantidad: Decimal = Decimal("0")
     total_venta: Decimal = Decimal("0")
-    costo_estimado: Decimal = Decimal("0")
-    utilidad_estimada: Decimal = Decimal("0")
+    costo_estimado: Decimal | None = None
+    utilidad_estimada: Decimal | None = None
 
 
 class PosReportDiscountSummary(BaseModel):
