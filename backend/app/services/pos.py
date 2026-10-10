@@ -2526,6 +2526,16 @@ def close_shift(
     ip_address: str | None,
 ) -> PosShiftResponse:
     validate_pos_access(user, empresa)
+    try:
+        counted_cash = Decimal(efectivo_contado)
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Captura un efectivo contado valido.") from exc
+    if not counted_cash.is_finite():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Captura un efectivo contado valido.")
+    if counted_cash < ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="El efectivo contado debe ser cero o positivo.")
     get_warehouse_for_company(db, empresa.id, warehouse_id)
     shift = get_active_shift_for_company(db, empresa.id, warehouse_id, for_update=True)
     if not shift:
@@ -2534,7 +2544,7 @@ def close_shift(
             detail="No hay turno activo para este almacen.",
         )
 
-    shift.efectivo_contado = Decimal(efectivo_contado or ZERO)
+    shift.efectivo_contado = counted_cash
     shift.notas_cierre = normalize_optional_text(notas)
     shift.usuario_cierre_id = user.id
     shift.closed_at = datetime.now(timezone.utc)

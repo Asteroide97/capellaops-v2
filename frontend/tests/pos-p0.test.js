@@ -49,12 +49,14 @@ function cashFixture(amount, fail = false) {
     token: 'fixture', empresaId: 'T', shiftHistoryFilters: {}, defaultShiftMovementForm: {},
     setError: v => {state.error = v;}, setShiftMovementError: v => {state.error = v;},
     setShiftSubmitting() {}, clearFeedback: () => {state.error = ''; state.success = '';},
+    startCashAction:()=>true,finishCashAction(){},setShiftMovementFieldErrors(){},
+    getManualCashFieldErrors:()=>({}),getCashOperationError:(error,fallback)=>error.message||fallback,
     setActiveShift() {}, setShiftMovementForm: () => {state.cleared = true;},
     setShiftMovementModalType: v => {state.open = v;}, loadShiftHistory: async () => {},
     setSuccess: v => {state.success = v;}, getPosUiError: (error, fallback) => error.message || fallback,
     createPosShiftManualWithdrawal: async () => {state.calls++; if (fail) throw new Error('El retiro supera el efectivo disponible.'); return {};},
   };
-  return {state, submit: runInNewContext(`(${code('async function handleShiftMovementSubmit', '\n  async function handleCloseShiftSubmit')})`, context)};
+  return {state, submit: runInNewContext(`(${code('async function handleShiftMovementSubmit', '\n  function openCloseShiftModal')})`, context)};
 }
 
 test('F02 frontend blocks known excess before API and retains amount/reason', async () => {

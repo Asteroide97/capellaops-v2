@@ -388,6 +388,59 @@ function parseOpeningFund(value) {
   return { value: normalized, error: "" };
 }
 
+function parseCountedCash(value) {
+  if (String(value ?? "").trim() === "") return { error: "Captura el efectivo contado." };
+  const result = parseOpeningFund(value);
+  return result.error ? { error: result.error.replace("fondo inicial", "efectivo contado") } : result;
+}
+
+function getSaleActionLabel(action) {
+  return { charge: "Cobrando...", suspend: "Suspendiendo...", ticket: "Abriendo ticket...",
+    resume: "Reanudando venta...", detail: "Abriendo detalle...", cancel: "Cancelando venta...",
+    "shift-report": "Abriendo corte..." }[action] || "";
+}
+
+function getCashActionLabel(action) {
+  return { open: "Abriendo caja...", income: "Guardando ingreso...", withdrawal: "Guardando retiro...",
+    close: "Cerrando turno..." }[action] || "";
+}
+
+function getManualCashFieldErrors(form, requestError = null) {
+  const errors = {};
+  const amount = Number(form.monto);
+  if (!String(form.monto ?? "").trim() || !Number.isFinite(amount) || amount <= 0) errors.monto = "Captura un importe mayor a cero.";
+  if (!String(form.motivo ?? "").trim()) errors.motivo = "Captura el motivo del movimiento.";
+  const details = requestError?.detail ?? requestError?.data?.detail;
+  if (requestError?.status === 422 && Array.isArray(details)) {
+    for (const detail of details) {
+      const field = Array.isArray(detail.loc) ? detail.loc[detail.loc.length - 1] : null;
+      if (field === "monto") errors.monto = errors.monto || "Revisa el importe ingresado.";
+      if (field === "motivo") errors.motivo = errors.motivo || "Revisa el motivo ingresado.";
+    }
+  }
+  return errors;
+}
+
+function getCashOperationError(requestError, fallback) {
+  const raw = String(requestError?.message ?? "");
+  if (requestError?.status === 422 || requestError?.status >= 500
+      || /input should|field required|internal server error|failed to fetch|pydantic|sqlalchemy|pyodbc|traceback|sqlstate|\[object Object\]/i.test(raw)) return fallback;
+  return getPosUiError(requestError, fallback);
+}
+
+function getCatalogEmptyState({ status, query }) {
+  if (status === "loading") return { title: "Cargando catálogo", note: "Espera a que termine la carga del almacén." };
+  if (status === "error") return { title: "Catálogo no disponible", note: "Intenta actualizar el almacén." };
+  if (String(query || "").trim()) return { title: "Sin coincidencias", note: "Prueba otro nombre, SKU o código de barras.", clear: true };
+  return { title: "No hay productos disponibles", note: "Agrega materiales activos con precio y existencias para vender desde POS." };
+}
+
+function getTaxRateHelp(value) {
+  const rate = Number(value || 0);
+  if (!Number.isFinite(rate) || rate < 0) return "Captura una tasa valida.";
+  return `${String(value || 0)} = ${new Intl.NumberFormat("es-MX", { maximumFractionDigits: 4 }).format(rate * 100)}%`;
+}
+
 function createCartLineId() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -975,8 +1028,12 @@ export default function PosPage() {
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [shiftSubmitting, setShiftSubmitting] = useState(false);
+  const [saleAction, setSaleAction] = useState("");
+  const [cashAction, setCashAction] = useState("");
+  const saleActionRef = useRef("");
+  const cashActionRef = useRef("");
+  const submitting = Boolean(saleAction);
+  const shiftSubmitting = Boolean(cashAction);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [successContext, setSuccessContext] = useState(null);
@@ -998,6 +1055,9 @@ export default function PosPage() {
 
   const [catalogFilters, setCatalogFilters] = useState(catalogFilterDefaults);
   const [catalogItems, setCatalogItems] = useState([]);
+  const [catalogAppliedQuery, setCatalogAppliedQuery] = useState({});
+  const [catalogSearching, setCatalogSearching] = useState(false);
+  const catalogSearchActionRef = useRef(0);
   const [catalogMeta, setCatalogMeta] = useState({
     total: 0,
     limit: DEFAULT_PAGE_SIZE,
@@ -1070,6 +1130,8 @@ export default function PosPage() {
   const [resumedSaleId, setResumedSaleId] = useState("");
   const [shiftMovementModalType, setShiftMovementModalType] = useState("");
   const [shiftMovementError, setShiftMovementError] = useState("");
+  const [shiftMovementFieldErrors, setShiftMovementFieldErrors] = useState({});
+  const [closeShiftError, setCloseShiftError] = useState("");
   const [closeShiftModalOpen, setCloseShiftModalOpen] = useState(false);
 
   const selectedWarehouse = useMemo(
@@ -1169,8 +1231,9 @@ export default function PosPage() {
       : 0;
   const paymentPendingPreview = Math.max(0, cartTotal - Math.min(paidPreview, cartTotal));
   const expectedCash = Number(activeShift?.efectivo_esperado || 0);
-  const countedCash = Number(closeShiftForm.efectivo_contado || 0);
-  const closeShiftDifference = countedCash - expectedCash;
+  const countedValidation = parseCountedCash(closeShiftForm.efectivo_contado);
+  const countedCash = countedValidation.error ? null : Number(countedValidation.value);
+  const closeShiftDifference = countedCash === null || !hasActiveShift ? null : countedCash - expectedCash;
   const editableSaleId = editableSaleSummary?.sale?.id ?? "";
   const isEditingSuspendedSale = Boolean(resumedSaleId) && editableSaleId === resumedSaleId;
   const editableSaleIsEditable = Boolean(editableSaleSummary?.editable);
@@ -1283,6 +1346,32 @@ export default function PosPage() {
     setError("");
     setSuccess("");
     setSuccessContext(null);
+  }
+
+  function startSaleAction(action) {
+    if (saleActionRef.current) return false;
+    saleActionRef.current = action;
+    setSaleAction(action);
+    return true;
+  }
+
+  function finishSaleAction(action) {
+    if (saleActionRef.current !== action) return;
+    saleActionRef.current = "";
+    setSaleAction("");
+  }
+
+  function startCashAction(action) {
+    if (cashActionRef.current) return false;
+    cashActionRef.current = action;
+    setCashAction(action);
+    return true;
+  }
+
+  function finishCashAction(action) {
+    if (cashActionRef.current !== action) return;
+    cashActionRef.current = "";
+    setCashAction("");
   }
 
   function clearCart() {
@@ -1445,6 +1534,7 @@ export default function PosPage() {
     if (!isCurrentWarehouseContext(scope) || requestId !== catalogRequestRef.current) return undefined;
 
     setCatalogItems(response.items ?? []);
+    setCatalogAppliedQuery({ generation: scope.generation, warehouseId, query: nextFilters.q || "" });
     setCatalogMeta({
       total: response.total ?? 0,
       limit: response.limit ?? DEFAULT_PAGE_SIZE,
@@ -2271,6 +2361,7 @@ export default function PosPage() {
     }
 
     if (resumedSaleId) {
+      if (!startSaleAction("suspend")) return null;
       clearFeedback();
       try {
         const savedSaleId = resumedSaleId;
@@ -2284,11 +2375,13 @@ export default function PosPage() {
         updateView("history");
       } catch (requestError) {
         return fail(getPosUiError(requestError, "No se pudo completar la acción."));
+      } finally {
+        finishSaleAction("suspend");
       }
       return;
     }
 
-    setSubmitting(true);
+    if (!startSaleAction("suspend")) return null;
     clearFeedback();
     const payload = {
       almacen_id: selectedWarehouse.id,
@@ -2330,12 +2423,12 @@ export default function PosPage() {
     } catch (requestError) {
       return fail(getPosUiError(requestError, "No se pudo completar la acción."));
     } finally {
-      setSubmitting(false);
+      finishSaleAction("suspend");
     }
   }
 
   async function handleResumeSale(saleId) {
-    setSubmitting(true);
+    if (!startSaleAction("resume")) return;
     clearFeedback();
     try {
       const sale = await resumePosSale({ saleId, token, empresaId });
@@ -2357,7 +2450,7 @@ export default function PosPage() {
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
-      setSubmitting(false);
+      finishSaleAction("resume");
     }
   }
 
@@ -2408,7 +2501,7 @@ export default function PosPage() {
       return;
     }
 
-    setSubmitting(true);
+    if (!startSaleAction("charge")) return;
     clearFeedback();
 
     const payload = {
@@ -2455,7 +2548,7 @@ export default function PosPage() {
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cobrar la venta. Intenta de nuevo."));
     } finally {
-      setSubmitting(false);
+      finishSaleAction("charge");
     }
   }
 
@@ -2478,9 +2571,9 @@ export default function PosPage() {
       return;
     }
 
+    if (!startCashAction("open")) return;
     openShiftRequestRef.current = true;
     const scope = warehouseScopeRef.current;
-    setShiftSubmitting(true);
     try {
       const shift = await openPosShift({
         token,
@@ -2501,31 +2594,36 @@ export default function PosPage() {
       if (isCurrentWarehouseContext(scope)) setOpenShiftError(getPosUiError(requestError, "No se pudo abrir caja. Intenta nuevamente."));
     } finally {
       openShiftRequestRef.current = false;
-      setShiftSubmitting(false);
+      finishCashAction("open");
     }
   }
 
   function openShiftMovementModal(type) {
     setShiftMovementError("");
+    setShiftMovementFieldErrors({});
     setShiftMovementModalType(type);
   }
 
   function closeShiftMovementModal() {
+    if (cashActionRef.current === "income" || cashActionRef.current === "withdrawal") return;
     setShiftMovementError("");
+    setShiftMovementFieldErrors({});
     setShiftMovementModalType("");
   }
 
   async function handleShiftMovementSubmit(event) {
     event.preventDefault();
     setShiftMovementError("");
+    const fieldErrors = getManualCashFieldErrors(shiftMovementForm);
+    setShiftMovementFieldErrors(fieldErrors);
     clearFeedback();
     if (!selectedWarehouseId) {
       setShiftMovementError("Selecciona un almacén para registrar el movimiento.");
       return;
     }
     const amount = Number(shiftMovementForm.monto);
-    if (!Number.isFinite(amount) || amount <= 0 || !shiftMovementForm.motivo.trim()) {
-      setShiftMovementError("Ingresa un monto mayor a cero y el motivo.");
+    if (Object.keys(fieldErrors).length) {
+      setShiftMovementError("Revisa el importe y el motivo del movimiento.");
       return;
     }
     if (shiftMovementModalType === "retiro" && activeShift?.almacen_id === selectedWarehouseId
@@ -2541,7 +2639,8 @@ export default function PosPage() {
       motivo: shiftMovementForm.motivo,
     };
 
-    setShiftSubmitting(true);
+    const action = shiftMovementModalType === "ingreso" ? "income" : "withdrawal";
+    if (!startCashAction(action)) return;
     try {
       const shift =
         shiftMovementModalType === "ingreso"
@@ -2557,20 +2656,45 @@ export default function PosPage() {
           : "Retiro manual registrado.",
       );
     } catch (requestError) {
-      setShiftMovementError(getPosUiError(requestError, "No se pudo registrar el movimiento. Intenta nuevamente."));
+      setShiftMovementFieldErrors(getManualCashFieldErrors(shiftMovementForm, requestError));
+      setShiftMovementError(getCashOperationError(requestError, "No se pudo registrar el movimiento. Revisa los datos e intenta nuevamente."));
     } finally {
-      setShiftSubmitting(false);
+      finishCashAction(action);
     }
+  }
+
+  function openCloseShiftModal() {
+    if (cashActionRef.current) return;
+    setCloseShiftForm({ ...defaultCloseShiftForm });
+    setCloseShiftError("");
+    setCloseShiftModalOpen(true);
+  }
+
+  function closeCloseShiftModal() {
+    if (cashActionRef.current === "close") return;
+    setCloseShiftModalOpen(false);
+    setCloseShiftForm({ ...defaultCloseShiftForm });
+    setCloseShiftError("");
   }
 
   async function handleCloseShiftSubmit(event) {
     event.preventDefault();
+    setCloseShiftError("");
     if (!selectedWarehouseId) {
-      setError("Selecciona un almacén para cerrar caja.");
+      setCloseShiftError("Selecciona un almacén para cerrar caja.");
+      return;
+    }
+    if (!warehouseContextReady || !hasActiveShift) {
+      setCloseShiftError("Espera a que se confirme el turno activo antes de cerrar.");
+      return;
+    }
+    const counted = parseCountedCash(closeShiftForm.efectivo_contado);
+    if (counted.error) {
+      setCloseShiftError(counted.error);
       return;
     }
 
-    setShiftSubmitting(true);
+    if (!startCashAction("close")) return;
     clearFeedback();
     try {
       const shift = await closePosShift({
@@ -2578,7 +2702,7 @@ export default function PosPage() {
         empresaId,
         payload: {
           warehouse_id: selectedWarehouseId,
-          efectivo_contado: closeShiftForm.efectivo_contado === "" ? "0" : closeShiftForm.efectivo_contado,
+          efectivo_contado: counted.value,
           notas: closeShiftForm.notas || null,
         },
       });
@@ -2589,9 +2713,9 @@ export default function PosPage() {
       setSuccess("Turno cerrado correctamente.");
       setSuccessContext({ type: "shift-closed", shiftId: shift.id });
     } catch (requestError) {
-      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+      setCloseShiftError(getCashOperationError(requestError, "No se pudo cerrar el turno. Revisa el efectivo contado e intenta nuevamente."));
     } finally {
-      setShiftSubmitting(false);
+      finishCashAction("close");
     }
   }
 
@@ -2605,7 +2729,7 @@ export default function PosPage() {
       return;
     }
 
-    setSubmitting(true);
+    if (!startSaleAction("cancel")) return;
     clearFeedback();
     try {
       const sale = await cancelPosSale({
@@ -2620,19 +2744,38 @@ export default function PosPage() {
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
-      setSubmitting(false);
+      finishSaleAction("cancel");
     }
   }
 
   async function handleCatalogSearch(event) {
     event.preventDefault();
     clearFeedback();
+    const searchId = ++catalogSearchActionRef.current;
+    setCatalogSearching(true);
     try {
       const nextFilters = { ...catalogFilters, offset: 0 };
       setCatalogFilters(nextFilters);
       await loadCatalog(selectedWarehouseId, nextFilters);
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+    } finally {
+      if (searchId === catalogSearchActionRef.current) setCatalogSearching(false);
+    }
+  }
+
+  async function handleClearCatalogSearch() {
+    const nextFilters = { ...catalogFilters, q: "", offset: 0 };
+    setCatalogFilters(nextFilters);
+    clearFeedback();
+    const searchId = ++catalogSearchActionRef.current;
+    setCatalogSearching(true);
+    try {
+      await loadCatalog(selectedWarehouseId, nextFilters);
+    } catch (requestError) {
+      setError("No se pudo limpiar la búsqueda. Intenta nuevamente.");
+    } finally {
+      if (searchId === catalogSearchActionRef.current) setCatalogSearching(false);
     }
   }
 
@@ -2939,7 +3082,7 @@ export default function PosPage() {
   }
 
   async function openSaleDetail(record) {
-    setSubmitting(true);
+    if (!startSaleAction("detail")) return;
     clearFeedback();
     try {
       await loadSaleArtifacts(record.id);
@@ -2947,12 +3090,12 @@ export default function PosPage() {
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
-      setSubmitting(false);
+      finishSaleAction("detail");
     }
   }
 
   async function openTicket(saleId) {
-    setSubmitting(true);
+    if (!startSaleAction("ticket")) return;
     clearFeedback();
     try {
       await loadSaleArtifacts(saleId);
@@ -2961,7 +3104,7 @@ export default function PosPage() {
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
-      setSubmitting(false);
+      finishSaleAction("ticket");
     }
   }
 
@@ -3119,7 +3262,7 @@ export default function PosPage() {
   }
 
   async function openShiftReport(shiftId, options = {}) {
-    setSubmitting(true);
+    if (!startSaleAction("shift-report")) return;
     clearFeedback();
     try {
       const report = await getPosShiftReport({ shiftId, token, empresaId });
@@ -3135,7 +3278,7 @@ export default function PosPage() {
     } catch (requestError) {
       setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
-      setSubmitting(false);
+      finishSaleAction("shift-report");
     }
   }
 
@@ -3161,7 +3304,7 @@ export default function PosPage() {
       ) : null}
       {["pagada", "suspendida"].includes(selectedSale.estatus) ? (
         <button className="ghost-button" onClick={handleCancelSale} type="button">
-          {submitting ? "Cancelando..." : "Cancelar venta"}
+          {saleAction === "cancel" ? "Cancelando..." : "Cancelar venta"}
         </button>
       ) : null}
     </div>
@@ -3229,6 +3372,8 @@ export default function PosPage() {
             </button>
           ))}
         </div>
+
+        {saleAction || cashAction ? <p className="table-note" role="status">{[getSaleActionLabel(saleAction), getCashActionLabel(cashAction)].filter(Boolean).join(" ")}</p> : null}
       </section>
 
       {error ? (
@@ -3309,9 +3454,9 @@ export default function PosPage() {
                       <ScanLine size={16} />
                       <span>Escanear</span>
                     </button>
-                    <button className="ghost-button" type="submit">
+                    <button className="ghost-button" disabled={catalogSearching} type="submit">
                       <PackageSearch size={16} />
-                      <span>Buscar</span>
+                      <span>{catalogSearching ? "Buscando..." : "Buscar"}</span>
                     </button>
                   </div>
                 </form>
@@ -3331,10 +3476,15 @@ export default function PosPage() {
                   title="Selecciona un almacén"
                 />
               ) : catalogItems.length === 0 ? (
-                <EmptyState
-                  note="Agrega materiales activos con precio y existencias para vender desde POS."
-                  title="No hay productos disponibles"
-                />
+                <>
+                  <EmptyState {...getCatalogEmptyState({ status: warehouseContext.status,
+                    query: catalogAppliedQuery.generation === warehouseScopeRef.current.generation
+                      && catalogAppliedQuery.warehouseId === selectedWarehouseId ? catalogAppliedQuery.query : "" })} />
+                  {warehouseContext.status === "ready" && catalogAppliedQuery.query
+                    && catalogAppliedQuery.generation === warehouseScopeRef.current.generation ? (
+                    <button className="ghost-button" onClick={handleClearCatalogSearch} type="button">Limpiar búsqueda</button>
+                  ) : null}
+                </>
               ) : (
                 <>
                   <div className="pos-catalog-grid">
@@ -3589,7 +3739,7 @@ export default function PosPage() {
                                 <strong>{formatMoney(item.precio_unitario)}</strong>
                               </div>
                               <div>
-                                <span>Descuento</span>
+                                <span>Descuento por unidad</span>
                                 <strong>{formatMoney(item.descuento_unitario)}</strong>
                               </div>
                               <div>
@@ -3650,7 +3800,7 @@ export default function PosPage() {
                               />
                             </label>
                             <label>
-                              Descuento
+                              Descuento por unidad
                               <input
                                 className="pos-input"
                                 min="0"
@@ -3671,6 +3821,7 @@ export default function PosPage() {
                                 type="number"
                                 value={item.impuesto_tasa || "0"}
                               />
+                              <span className="table-note">{getTaxRateHelp(item.impuesto_tasa)}</span>
                             </label>
                             <div className="pos-cart-inline-meta">
                               {isMaterialLine ? (
@@ -3742,7 +3893,13 @@ export default function PosPage() {
                   <span>Impuesto</span>
                   <strong>{formatMoney(cartTaxTotal)}</strong>
                 </div>
-                <label className="pos-payment-inline-field">
+                {isEditingSuspendedSale ? (
+                  <div>
+                    <span>Descuento global</span>
+                    <strong>{formatMoney(saleForm.descuento_global)}</strong>
+                    <p className="table-note">Edita el descuento en la venta suspendida y pulsa Recalcular.</p>
+                  </div>
+                ) : <label className="pos-payment-inline-field">
                   <span>Descuento global</span>
                   <input
                     className={`pos-input ${cartHasInvalidGlobalDiscount ? "is-warning" : ""}`}
@@ -3758,7 +3915,7 @@ export default function PosPage() {
                     type="number"
                     value={saleForm.descuento_global}
                   />
-                </label>
+                </label>}
                 <div className="is-total">
                   <span>Total</span>
                   <strong>{formatMoney(cartTotal)}</strong>
@@ -3960,12 +4117,12 @@ export default function PosPage() {
               </label>
 
               <button className="primary-button pos-charge-button" disabled={!canCharge || submitting} type="submit">
-                {submitting ? "Cobrando..." : canCharge ? `Cobrar ${formatMoney(cartTotal)}` : paymentState.buttonLabel}
+                {saleAction === "charge" ? "Cobrando..." : canCharge ? `Cobrar ${formatMoney(cartTotal)}` : paymentState.buttonLabel}
               </button>
 
               <div className="pos-action-row pos-bottom-actions">
                 <button className="ghost-button" disabled={!hasCartItems || submitting || !warehouseContextReady} onClick={handleSuspendSale} type="button">
-                  {isEditingSuspendedSale ? "Guardar suspendida" : "Suspender"}
+                  {saleAction === "suspend" ? "Suspendiendo..." : isEditingSuspendedSale ? "Guardar suspendida" : "Suspender"}
                 </button>
                 <button className="ghost-button" disabled={!hasCartItems} onClick={clearCart} type="button">
                   Cancelar
@@ -4261,7 +4418,7 @@ export default function PosPage() {
 
                   <div className="pos-action-row inventory-form-span-2">
                     <button className="primary-button" disabled={shiftSubmitting || !warehouseContextReady} type="submit">
-                      {shiftSubmitting ? "Abriendo..." : "Abrir turno"}
+                      {cashAction === "open" ? "Abriendo..." : "Abrir turno"}
                     </button>
                   </div>
                 </form>
@@ -4326,13 +4483,7 @@ export default function PosPage() {
                 </button>
                 <button
                   className="primary-button"
-                  onClick={() => {
-                    setCloseShiftForm((current) => ({
-                      ...current,
-                      efectivo_contado: expectedCash ? String(expectedCash.toFixed(2)) : "",
-                    }));
-                    setCloseShiftModalOpen(true);
-                  }}
+                  onClick={openCloseShiftModal}
                   type="button"
                 >
                   Cerrar turno
@@ -5143,7 +5294,7 @@ export default function PosPage() {
               />
             </label>
             <label>
-              Descuento
+              Descuento por unidad
               <input
                 className="pos-input"
                 min="0"
@@ -5168,6 +5319,7 @@ export default function PosPage() {
                 type="number"
                 value={manualLineForm.impuesto_tasa}
               />
+              <span className="table-note">{getTaxRateHelp(manualLineForm.impuesto_tasa)}</span>
             </label>
           </div>
           <p className="table-note">Esta linea no afecta inventario.</p>
@@ -5296,7 +5448,7 @@ export default function PosPage() {
               />
             </label>
             <label>
-              Descuento
+              Descuento por unidad
               <input
                 className="pos-input"
                 min="0"
@@ -5328,6 +5480,7 @@ export default function PosPage() {
                 type="number"
                 value={editableSaleLineForm.impuesto_tasa}
               />
+              <span className="table-note">{getTaxRateHelp(editableSaleLineForm.impuesto_tasa)}</span>
             </label>
             {editableSaleLineForm.tipo_linea !== "material" ? (
               <label>
@@ -6278,7 +6431,7 @@ export default function PosPage() {
             </button>
             <button className="primary-button" disabled={shiftSubmitting} form="pos-shift-movement-form" type="submit">
               {shiftSubmitting
-                ? "Guardando..."
+                ? getCashActionLabel(cashAction)
                 : shiftMovementModalType === "ingreso"
                   ? "Registrar ingreso"
                   : "Registrar retiro"}
@@ -6293,9 +6446,11 @@ export default function PosPage() {
         <form className="pos-cash-form" id="pos-shift-movement-form" onSubmit={handleShiftMovementSubmit}>
           {shiftMovementError ? <p className="form-error" id="pos-shift-movement-error" role="alert">{shiftMovementError}</p> : null}
           <label>
-            Monto
+            Importe
             <input
               className="pos-input"
+              aria-invalid={Boolean(shiftMovementFieldErrors.monto)}
+              aria-describedby={shiftMovementFieldErrors.monto ? "pos-shift-amount-error" : undefined}
               min="0.01"
               onChange={(event) =>
                 setShiftMovementForm((current) => ({
@@ -6308,12 +6463,15 @@ export default function PosPage() {
               type="number"
               value={shiftMovementForm.monto}
             />
+            {shiftMovementFieldErrors.monto ? <span className="form-error" id="pos-shift-amount-error">{shiftMovementFieldErrors.monto}</span> : null}
           </label>
 
           <label>
             Motivo
             <textarea
               className="pos-textarea"
+              aria-invalid={Boolean(shiftMovementFieldErrors.motivo)}
+              aria-describedby={shiftMovementFieldErrors.motivo ? "pos-shift-reason-error" : undefined}
               onChange={(event) =>
                 setShiftMovementForm((current) => ({
                   ...current,
@@ -6324,6 +6482,7 @@ export default function PosPage() {
               rows={3}
               value={shiftMovementForm.motivo}
             />
+            {shiftMovementFieldErrors.motivo ? <span className="form-error" id="pos-shift-reason-error">{shiftMovementFieldErrors.motivo}</span> : null}
           </label>
         </form>
       </PosModal>
@@ -6331,20 +6490,21 @@ export default function PosPage() {
       <PosModal
         footer={
           <div className="inventory-actions">
-            <button className="ghost-button" onClick={() => setCloseShiftModalOpen(false)} type="button">
+            <button className="ghost-button" disabled={cashAction === "close"} onClick={closeCloseShiftModal} type="button">
               Cancelar
             </button>
-            <button className="primary-button" disabled={shiftSubmitting} form="pos-close-shift-form" type="submit">
-              {shiftSubmitting ? "Cerrando..." : "Confirmar cierre"}
+            <button className="primary-button" disabled={shiftSubmitting || countedCash === null || !hasActiveShift} form="pos-close-shift-form" type="submit">
+              {cashAction === "close" ? "Cerrando..." : "Confirmar cierre"}
             </button>
           </div>
         }
-        onClose={() => setCloseShiftModalOpen(false)}
+        onClose={closeCloseShiftModal}
         open={closeShiftModalOpen}
         subtitle="Confirma el efectivo contado y cierra el turno actual."
         title="Cerrar turno"
       >
         <form className="pos-cash-form" id="pos-close-shift-form" onSubmit={handleCloseShiftSubmit}>
+          {closeShiftError ? <p className="form-error" id="pos-close-shift-error" role="alert">{closeShiftError}</p> : null}
           <div className="pos-payment-summary pos-payment-secondary">
             <div>
               <span>Fondo inicial</span>
@@ -6364,15 +6524,15 @@ export default function PosPage() {
             </div>
             <div>
               <span>Efectivo esperado</span>
-              <strong>{formatMoney(expectedCash)}</strong>
+              <strong>{hasActiveShift ? formatMoney(expectedCash) : "Pendiente"}</strong>
             </div>
             <div>
               <span>Efectivo contado</span>
-              <strong>{formatMoney(countedCash)}</strong>
+              <strong>{countedCash === null ? "Pendiente" : formatMoney(countedCash)}</strong>
             </div>
-            <div className={getShiftDifferenceClass(closeShiftDifference)}>
+            <div className={closeShiftDifference === null ? "" : getShiftDifferenceClass(closeShiftDifference)}>
               <span>Diferencia</span>
-              <strong>{formatMoney(closeShiftDifference)}</strong>
+              <strong>{closeShiftDifference === null ? "Pendiente" : formatMoney(closeShiftDifference)}</strong>
             </div>
           </div>
 
@@ -6380,16 +6540,19 @@ export default function PosPage() {
             Efectivo contado
             <input
               className="pos-input"
-              min="0"
-              onChange={(event) =>
+              inputMode="decimal"
+              aria-invalid={Boolean(closeShiftError)}
+              aria-describedby={closeShiftError ? "pos-close-shift-error" : undefined}
+              onChange={(event) => {
+                const value = event.target.value;
                 setCloseShiftForm((current) => ({
                   ...current,
-                  efectivo_contado: normalizeDecimalInput(event.target.value),
-                }))
-              }
+                  efectivo_contado: value,
+                }));
+                setCloseShiftError(value.trim() === "" ? "" : parseCountedCash(value).error || "");
+              }}
               placeholder="0.00"
-              step="0.01"
-              type="number"
+              type="text"
               value={closeShiftForm.efectivo_contado}
             />
           </label>
