@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BarChart3,
@@ -372,6 +372,20 @@ function DocumentCompanyHeader({ company, compact = false, fallbackName = "Empre
 
 function normalizeDecimalInput(value) {
   return String(value ?? "").replace(",", ".").replace(/[^\d.]/g, "");
+}
+
+function parseOpeningFund(value) {
+  const raw = String(value ?? "").trim();
+  if (raw === "") return { value: "0", error: "" };
+  const normalized = raw.replace(",", ".");
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(normalized) || !Number.isFinite(Number(normalized))) {
+    return { error: "Ingresa un fondo inicial valido." };
+  }
+  if (normalized.startsWith("-") && /[1-9]/.test(normalized)) return { error: "El fondo inicial debe ser cero o positivo." };
+  if (/[1-9]/.test((normalized.split(".")[1] || "").slice(2))) {
+    return { error: "El fondo inicial debe expresarse en centavos." };
+  }
+  return { value: normalized, error: "" };
 }
 
 function createCartLineId() {
@@ -970,6 +984,17 @@ export default function PosPage() {
   const [warehouses, setWarehouses] = useState([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState("");
   const [activeShift, setActiveShift] = useState(null);
+  const [warehouseContext, setWarehouseContext] = useState({ status: "loading" });
+  const [pendingWarehouseId, setPendingWarehouseId] = useState("");
+  const [warehouseChangeError, setWarehouseChangeError] = useState("");
+  const [warehouseChangeSubmitting, setWarehouseChangeSubmitting] = useState(false);
+  const warehouseScopeRef = useRef({ warehouseId: "", generation: 0 });
+  const catalogRequestRef = useRef(0);
+  const shiftRequestRef = useRef(0);
+  const warehouseBootstrapRef = useRef(0);
+  const warehouseChangeRequestRef = useRef(false);
+  const openShiftRequestRef = useRef(false);
+  const [openShiftError, setOpenShiftError] = useState("");
 
   const [catalogFilters, setCatalogFilters] = useState(catalogFilterDefaults);
   const [catalogItems, setCatalogItems] = useState([]);
@@ -1091,7 +1116,9 @@ export default function PosPage() {
     return crmContactOptions;
   }, [crmContactOptions, crmLinkForm.contacto_id, selectedSale?.crm_contacto_nombre]);
 
-  const hasActiveShift = Boolean(activeShift?.id);
+  const warehouseContextReady = warehouseContext.status === "ready" && warehouseContext.warehouseId === selectedWarehouseId
+    && warehouseContext.empresaId === empresaId && warehouseContext.token === token;
+  const hasActiveShift = Boolean(warehouseContextReady && activeShift?.id && activeShift.almacen_id === selectedWarehouseId);
   const cartSubtotal = useMemo(
     () => cart.reduce((total, item) => total + getSaleLineGrossSubtotal(item), 0),
     [cart],
@@ -1183,6 +1210,9 @@ export default function PosPage() {
     hasInsufficientMixedPayment;
   const canCharge =
     Boolean(selectedWarehouseId) &&
+    warehouseContextReady &&
+    !pendingWarehouseId &&
+    !warehouseChangeSubmitting &&
     hasActiveShift &&
     hasCartItems &&
     !cartHasInvalidQuantity &&
@@ -1280,20 +1310,96 @@ export default function PosPage() {
     updateView("sell");
   }
 
-  async function loadWarehousesOptions() {
+  function isCurrentWarehouseContext(scope) {
+    return scope === warehouseScopeRef.current && scope.empresaId === empresaId && scope.token === token;
+  }
+
+  function beginWarehouseContext(warehouseId) {
+    const scope = { warehouseId, empresaId, token, generation: warehouseScopeRef.current.generation + 1,
+      catalogReady: false, shiftReady: false };
+    warehouseScopeRef.current = scope;
+    setWarehouseContext({ warehouseId, empresaId, token, status: warehouseId ? "loading" : "empty" });
+    setActiveShift(null);
+    setCatalogItems([]);
+    setCatalogMeta({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
+    return scope;
+  }
+
+  function markWarehouseContextReady(scope, part) {
+    if (!isCurrentWarehouseContext(scope)) return;
+    scope[part] = true;
+    if (scope.catalogReady && scope.shiftReady) {
+      setWarehouseContext({ warehouseId: scope.warehouseId, empresaId, token, status: "ready" });
+    }
+  }
+
+  function selectWarehouse(warehouseId) {
+    const scope = warehouseScopeRef.current;
+    if (scope.warehouseId === warehouseId && scope.empresaId === empresaId && scope.token === token) return;
+    beginWarehouseContext(warehouseId);
+    setSelectedWarehouseId(warehouseId);
+  }
+
+  function applyWarehouseChange(warehouseId) {
+    clearCart();
+    setSelectedSale(null);
+    setSelectedTicket(null);
+    selectWarehouse(warehouseId);
+    setPendingWarehouseId("");
+    setWarehouseChangeError("");
+  }
+
+  function requestWarehouseChange(warehouseId) {
+    if (warehouseId === warehouseScopeRef.current.warehouseId || warehouseChangeRequestRef.current || openShiftRequestRef.current
+        || submitting || shiftSubmitting || editableSaleSubmitting || editableSaleLoading || editableSaleRecalculating) return;
+    clearFeedback();
+    setWarehouseChangeError("");
+    if (hasCartItems) {
+      setPendingWarehouseId(warehouseId);
+    } else {
+      applyWarehouseChange(warehouseId);
+    }
+  }
+
+  function cancelWarehouseChange() {
+    if (warehouseChangeRequestRef.current) return;
+    setPendingWarehouseId("");
+    setWarehouseChangeError("");
+  }
+
+  async function confirmWarehouseChange(action) {
+    if (!pendingWarehouseId || warehouseChangeRequestRef.current) return;
+    const target = pendingWarehouseId;
+    warehouseChangeRequestRef.current = true;
+    setWarehouseChangeSubmitting(true);
+    try {
+      if (action === "suspend") {
+        const saved = await handleSuspendSale({ forWarehouseChange: true });
+        if (!saved) return;
+      } else if (action !== "discard") {
+        return;
+      }
+      applyWarehouseChange(target);
+    } finally {
+      warehouseChangeRequestRef.current = false;
+      setWarehouseChangeSubmitting(false);
+    }
+  }
+
+  async function loadWarehousesOptions(isCurrent = () => true) {
     const response = await getWarehouses({
       token,
       empresaId,
       filters: { activo: true, limit: 200, offset: 0 },
     });
+    if (!isCurrent()) return [];
     setWarehouses(response.items ?? []);
-    if (!selectedWarehouseId && response.items?.length) {
-      setSelectedWarehouseId(response.items[0].id);
-    }
     return response.items ?? [];
   }
 
-  async function loadActiveShift(warehouseId = selectedWarehouseId) {
+  async function loadActiveShift(warehouseId = selectedWarehouseId, scope = warehouseScopeRef.current) {
+    if (!isCurrentWarehouseContext(scope) || scope.warehouseId !== warehouseId) return undefined;
+    const requestId = ++shiftRequestRef.current;
     if (!warehouseId) {
       setActiveShift(null);
       return null;
@@ -1304,30 +1410,39 @@ export default function PosPage() {
         empresaId,
         warehouseId,
       });
+      if (!isCurrentWarehouseContext(scope) || requestId !== shiftRequestRef.current) return undefined;
       setActiveShift(response.active_shift ?? null);
+      markWarehouseContextReady(scope, "shiftReady");
       return response.active_shift ?? null;
     } catch (requestError) {
+      if (!isCurrentWarehouseContext(scope) || requestId !== shiftRequestRef.current) return undefined;
       if (requestError?.status === 404) {
         setActiveShift(null);
+        markWarehouseContextReady(scope, "shiftReady");
         return null;
       }
       throw requestError;
     }
   }
 
-  async function loadCatalog(warehouseId = selectedWarehouseId, nextFilters = catalogFilters) {
+  async function loadCatalog(warehouseId = selectedWarehouseId, nextFilters = catalogFilters, scope = warehouseScopeRef.current) {
+    if (!isCurrentWarehouseContext(scope) || scope.warehouseId !== warehouseId) return undefined;
+    const requestId = ++catalogRequestRef.current;
     if (!warehouseId) {
       setCatalogItems([]);
       setCatalogMeta({ total: 0, limit: DEFAULT_PAGE_SIZE, offset: 0 });
       return null;
     }
 
-    const response = await getPosCatalog({
-      token,
-      empresaId,
-      almacenId: warehouseId,
-      filters: nextFilters,
-    });
+    let response;
+    try {
+      response = await getPosCatalog({ token, empresaId, almacenId: warehouseId, filters: nextFilters });
+    } catch (requestError) {
+      if (!isCurrentWarehouseContext(scope) || requestId !== catalogRequestRef.current) return undefined;
+      if (!scope.catalogReady) setWarehouseContext({ warehouseId, empresaId, token, status: "error" });
+      throw requestError;
+    }
+    if (!isCurrentWarehouseContext(scope) || requestId !== catalogRequestRef.current) return undefined;
 
     setCatalogItems(response.items ?? []);
     setCatalogMeta({
@@ -1335,7 +1450,22 @@ export default function PosPage() {
       limit: response.limit ?? DEFAULT_PAGE_SIZE,
       offset: response.offset ?? 0,
     });
+    markWarehouseContextReady(scope, "catalogReady");
     return response;
+  }
+
+  async function loadWarehouseContext(warehouseId = selectedWarehouseId, nextFilters = catalogFilters) {
+    const current = warehouseScopeRef.current;
+    if (!isCurrentWarehouseContext(current) || current.warehouseId !== warehouseId) return;
+    const scope = beginWarehouseContext(warehouseId);
+    if (!warehouseId) return;
+    try {
+      await Promise.all([loadCatalog(warehouseId, nextFilters, scope), loadActiveShift(warehouseId, scope)]);
+    } catch (requestError) {
+      if (!isCurrentWarehouseContext(scope)) return;
+      setWarehouseContext({ warehouseId, empresaId, token, status: "error" });
+      setError("No se pudo cargar el almacén. Intenta actualizar.");
+    }
   }
 
   async function loadSales(nextFilters = saleFilters) {
@@ -1441,7 +1571,7 @@ export default function PosPage() {
   }
 
   function syncSaleFormFromSale(sale) {
-    setSelectedWarehouseId(sale.almacen_id);
+    selectWarehouse(sale.almacen_id);
     setSaleForm({
       cliente_nombre: sale.cliente_nombre ?? "",
       cliente_email: sale.cliente_email ?? "",
@@ -1487,7 +1617,7 @@ export default function PosPage() {
     setEditableSaleSummary(summary);
     setEditableDiscountGlobalInput(nextDiscountInput);
     setResumedSaleId(summarySale.id);
-    setSelectedWarehouseId(summarySale.almacen_id);
+    selectWarehouse(summarySale.almacen_id);
     setCart((summary.lines ?? []).map((detail) => buildCartLineFromSaleDetail(detail)));
     setSaleForm((current) => ({
       ...current,
@@ -1799,15 +1929,17 @@ export default function PosPage() {
       return;
     }
 
+    const bootstrapId = ++warehouseBootstrapRef.current;
     setLoading(true);
     clearFeedback();
     try {
-      const warehouseItems = await loadWarehousesOptions();
-      const nextWarehouseId = selectedWarehouseId || warehouseItems[0]?.id || "";
+      const warehouseItems = await loadWarehousesOptions(() => bootstrapId === warehouseBootstrapRef.current);
+      if (bootstrapId !== warehouseBootstrapRef.current) return;
+      const nextWarehouseId = warehouseItems.some(item => item.id === selectedWarehouseId) ? selectedWarehouseId : warehouseItems[0]?.id || "";
+      selectWarehouse(nextWarehouseId);
       const requests = [
-        loadCatalog(nextWarehouseId, catalogFilters),
+        loadWarehouseContext(nextWarehouseId, catalogFilters),
         loadSales(saleFilters),
-        loadActiveShift(nextWarehouseId),
         loadShiftHistory(shiftHistoryFilters),
       ];
       if (activeView === "reports") {
@@ -1818,9 +1950,9 @@ export default function PosPage() {
       }
       await Promise.all(requests);
     } catch (requestError) {
-      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+      if (bootstrapId === warehouseBootstrapRef.current) setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
     } finally {
-      setLoading(false);
+      if (bootstrapId === warehouseBootstrapRef.current) setLoading(false);
     }
   }
 
@@ -1835,9 +1967,8 @@ export default function PosPage() {
     }
     try {
       const requests = [
-        loadCatalog(selectedWarehouseId, catalogFilters),
+        loadWarehouseContext(selectedWarehouseId, catalogFilters),
         loadSales(saleFilters),
-        loadActiveShift(selectedWarehouseId),
         loadShiftHistory(shiftHistoryFilters),
       ];
       if (activeView === "reports") {
@@ -1866,11 +1997,7 @@ export default function PosPage() {
       return;
     }
 
-    Promise.all([loadCatalog(selectedWarehouseId, catalogFilters), loadActiveShift(selectedWarehouseId)]).catch(
-      (requestError) => {
-        setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
-      },
-    );
+    loadWarehouseContext(selectedWarehouseId, catalogFilters);
   }, [selectedWarehouseId]);
 
   useEffect(() => {
@@ -2120,32 +2247,34 @@ export default function PosPage() {
     }));
   }
 
-  async function handleSuspendSale() {
+  async function handleSuspendSale(options = {}) {
+    const forWarehouseChange = options.forWarehouseChange === true;
+    const fail = (message) => {
+      setError(message);
+      if (forWarehouseChange) setWarehouseChangeError(message);
+      return null;
+    };
     if (!selectedWarehouse) {
-      setError("Selecciona un almacén para suspender la venta.");
-      return;
+      return fail("Selecciona un almacén para suspender la venta.");
     }
     if (!hasCartItems) {
-      setError("Agrega productos antes de suspender la venta.");
-      return;
+      return fail("Agrega productos antes de suspender la venta.");
     }
     if (cartHasInvalidQuantity) {
-      setError("No hay stock suficiente.");
-      return;
+      return fail("No hay stock suficiente.");
     }
     if (cartHasInvalidDiscount) {
-      setError("El descuento no puede superar el subtotal.");
-      return;
+      return fail("El descuento no puede superar el subtotal.");
     }
     if (cartHasMissingManualDescription) {
-      setError("Ingresa una descripcion para la linea manual.");
-      return;
+      return fail("Ingresa una descripcion para la linea manual.");
     }
 
     if (resumedSaleId) {
       clearFeedback();
       try {
         const savedSaleId = resumedSaleId;
+        if (forWarehouseChange) return { id: savedSaleId };
         clearCart();
         setSelectedSale(null);
         setSelectedTicket(null);
@@ -2154,7 +2283,7 @@ export default function PosPage() {
         setSuccessContext({ type: "suspended", saleId: savedSaleId });
         updateView("history");
       } catch (requestError) {
-        setError(getPosUiError(requestError, "No se pudo completar la acción."));
+        return fail(getPosUiError(requestError, "No se pudo completar la acción."));
       }
       return;
     }
@@ -2196,9 +2325,10 @@ export default function PosPage() {
       await refreshPosData({ keepTicket: false, preserveFeedback: true });
       setSuccess("Venta suspendida correctamente.");
       setSuccessContext({ type: "suspended", saleId: sale.id });
-      updateView("history");
+      if (!forWarehouseChange) updateView("history");
+      return sale;
     } catch (requestError) {
-      setError(getPosUiError(requestError, "No se pudo completar la acción."));
+      return fail(getPosUiError(requestError, "No se pudo completar la acción."));
     } finally {
       setSubmitting(false);
     }
@@ -2233,6 +2363,10 @@ export default function PosPage() {
 
   async function handleCreateSale(event) {
     event.preventDefault();
+    if (!warehouseContextReady || pendingWarehouseId || warehouseChangeSubmitting) {
+      setError("Espera a que termine la carga del almacén antes de cobrar.");
+      return;
+    }
     if (!selectedWarehouseId) {
       setError("Selecciona un almacén para vender.");
       return;
@@ -2327,31 +2461,46 @@ export default function PosPage() {
 
   async function handleOpenShift(event) {
     event.preventDefault();
+    if (openShiftRequestRef.current) return;
+    setOpenShiftError("");
+    clearFeedback();
     if (!selectedWarehouseId) {
-      setError("Selecciona un almacén para abrir caja.");
+      setOpenShiftError("Selecciona un almacén para abrir caja.");
+      return;
+    }
+    if (!warehouseContextReady) {
+      setOpenShiftError("Espera a que termine la carga del almacén.");
+      return;
+    }
+    const fund = parseOpeningFund(openShiftForm.fondo_inicial);
+    if (fund.error) {
+      setOpenShiftError(fund.error);
       return;
     }
 
+    openShiftRequestRef.current = true;
+    const scope = warehouseScopeRef.current;
     setShiftSubmitting(true);
-    clearFeedback();
     try {
       const shift = await openPosShift({
         token,
         empresaId,
         payload: {
           warehouse_id: selectedWarehouseId,
-          fondo_inicial: openShiftForm.fondo_inicial === "" ? "0" : openShiftForm.fondo_inicial,
+          fondo_inicial: fund.value,
           notas: openShiftForm.notas || null,
         },
       });
+      if (!isCurrentWarehouseContext(scope)) return;
       setActiveShift(shift);
       setOpenShiftForm(defaultOpenShiftForm);
       await refreshPosData({ keepTicket: false, preserveFeedback: true });
       setSuccess("Turno abierto correctamente.");
       updateView("sell");
     } catch (requestError) {
-      setError(getPosUiError(requestError, "No se pudo cargar la información. Intenta actualizar."));
+      if (isCurrentWarehouseContext(scope)) setOpenShiftError(getPosUiError(requestError, "No se pudo abrir caja. Intenta nuevamente."));
     } finally {
+      openShiftRequestRef.current = false;
       setShiftSubmitting(false);
     }
   }
@@ -2500,6 +2649,7 @@ export default function PosPage() {
 
     try {
       const response = await loadCatalog(selectedWarehouseId, nextFilters);
+      if (response === undefined) return;
       if (!response || response.items.length === 0) {
         setError("No se encontró ningún producto con ese SKU o código de barras.");
         return;
@@ -3039,12 +3189,9 @@ export default function PosPage() {
             <span>Almacén activo</span>
             <select
               className="pos-input"
-              onChange={(event) => {
-                setSelectedWarehouseId(event.target.value);
-                clearCart();
-                setSelectedSale(null);
-                setSelectedTicket(null);
-              }}
+              disabled={loading || warehouseContext.status === "loading" || submitting || shiftSubmitting
+                || editableSaleSubmitting || editableSaleLoading || editableSaleRecalculating || Boolean(pendingWarehouseId)}
+              onChange={(event) => requestWarehouseChange(event.target.value)}
               value={selectedWarehouseId}
             >
               {warehouses.length === 0 ? <option value="">Sin almacenes</option> : null}
@@ -3061,10 +3208,13 @@ export default function PosPage() {
               <span>Nueva venta</span>
             </button>
           ) : null}
-          <button className="ghost-button" disabled={refreshing} onClick={() => refreshPosData()} type="button">
+          <button className="ghost-button" disabled={refreshing || submitting || shiftSubmitting || warehouseChangeSubmitting
+            || warehouseContext.status === "loading"} onClick={() => refreshPosData()} type="button">
             {refreshing ? "Actualizando..." : "Actualizar"}
           </button>
         </div>
+
+        {warehouseContext.status === "loading" ? <p className="table-note" role="status">Cargando contexto del almacén...</p> : null}
 
         <div className="register-stepper pos-view-nav">
           {viewTabs.map((tab) => (
@@ -3814,7 +3964,7 @@ export default function PosPage() {
               </button>
 
               <div className="pos-action-row pos-bottom-actions">
-                <button className="ghost-button" disabled={!hasCartItems} onClick={handleSuspendSale} type="button">
+                <button className="ghost-button" disabled={!hasCartItems || submitting || !warehouseContextReady} onClick={handleSuspendSale} type="button">
                   {isEditingSuspendedSale ? "Guardar suspendida" : "Suspender"}
                 </button>
                 <button className="ghost-button" disabled={!hasCartItems} onClick={clearCart} type="button">
@@ -4073,20 +4223,22 @@ export default function PosPage() {
                 </div>
 
                 <form className="pos-cash-form pos-form-grid" onSubmit={handleOpenShift}>
+                  {openShiftError ? <p className="form-error inventory-form-span-2" id="pos-open-shift-error" role="alert">{openShiftError}</p> : null}
                   <label>
                     Fondo inicial
                     <input
                       className="pos-input"
-                      min="0"
+                      aria-invalid={Boolean(openShiftError)}
+                      aria-describedby={openShiftError ? "pos-open-shift-error" : undefined}
+                      inputMode="decimal"
                       onChange={(event) =>
                         setOpenShiftForm((current) => ({
                           ...current,
-                          fondo_inicial: normalizeDecimalInput(event.target.value),
+                          fondo_inicial: event.target.value,
                         }))
                       }
                       placeholder="0.00"
-                      step="0.01"
-                      type="number"
+                      type="text"
                       value={openShiftForm.fondo_inicial}
                     />
                   </label>
@@ -4108,7 +4260,7 @@ export default function PosPage() {
                   </label>
 
                   <div className="pos-action-row inventory-form-span-2">
-                    <button className="primary-button" disabled={shiftSubmitting} type="submit">
+                    <button className="primary-button" disabled={shiftSubmitting || !warehouseContextReady} type="submit">
                       {shiftSubmitting ? "Abriendo..." : "Abrir turno"}
                     </button>
                   </div>
@@ -6258,6 +6410,26 @@ export default function PosPage() {
             />
           </label>
         </form>
+      </PosModal>
+
+      <PosModal
+        open={Boolean(pendingWarehouseId)}
+        onClose={cancelWarehouseChange}
+        title="Cambiar almacén"
+        subtitle="El carrito tiene líneas. Elige qué hacer antes de cambiar."
+        footer={
+          <div className="inventory-actions">
+            <button className="ghost-button" disabled={warehouseChangeSubmitting} onClick={cancelWarehouseChange} type="button">Volver</button>
+            <button className="ghost-button" disabled={warehouseChangeSubmitting} onClick={() => confirmWarehouseChange("discard")} type="button">Descartar y cambiar</button>
+            <button className="primary-button" disabled={warehouseChangeSubmitting} onClick={() => confirmWarehouseChange("suspend")} type="button">
+              {warehouseChangeSubmitting ? "Suspendiendo..." : "Suspender y cambiar"}
+            </button>
+          </div>
+        }
+      >
+        <p>Destino: {warehouses.find(item => item.id === pendingWarehouseId)?.nombre || "Almacén seleccionado"}.</p>
+        <p className="table-note">Descartar elimina el carrito local. Suspender guarda la venta para recuperarla desde Historial.</p>
+        {warehouseChangeError ? <p className="form-error" role="alert">{warehouseChangeError}</p> : null}
       </PosModal>
 
       <BarcodeScannerModal

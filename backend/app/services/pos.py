@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 import re
 from uuid import uuid4
 
@@ -2462,6 +2462,16 @@ def open_shift(
     ip_address: str | None,
 ) -> PosShiftResponse:
     validate_pos_access(user, empresa)
+    try:
+        opening_fund = Decimal(fondo_inicial if fondo_inicial is not None else ZERO)
+    except (InvalidOperation, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Ingresa un fondo inicial valido.") from exc
+    if not opening_fund.is_finite():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ingresa un fondo inicial valido.")
+    if opening_fund < ZERO:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="El fondo inicial debe ser cero o positivo.")
     warehouse = get_active_sale_warehouse(db, empresa.id, warehouse_id)
 
     existing_shift = get_active_shift_for_company(db, empresa.id, warehouse.id, for_update=True)
@@ -2480,7 +2490,7 @@ def open_shift(
         folio=folio,
         usuario_apertura_id=user.id,
         estatus="abierta",
-        fondo_inicial=Decimal(fondo_inicial or ZERO),
+        fondo_inicial=opening_fund,
         notas_apertura=normalize_optional_text(notas),
         opened_at=opened_at,
     )
