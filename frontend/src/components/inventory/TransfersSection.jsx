@@ -286,7 +286,7 @@ export default function TransfersSection({ active, token, empresaId, onInventory
     const payload = {
       material_id: detailForm.material_id,
       cantidad: detailForm.cantidad,
-      costo_unitario_snapshot: detailForm.costo_unitario_snapshot || null,
+      costo_unitario_snapshot: detailForm.costo_unitario_snapshot === "" ? null : Number(detailForm.costo_unitario_snapshot),
     };
 
     try {
@@ -592,7 +592,7 @@ export default function TransfersSection({ active, token, empresaId, onInventory
                           costo_unitario_snapshot: normalizeDecimalInput(event.target.value),
                         }))
                       }
-                      placeholder="Vacio: costo de referencia del material"
+                      placeholder="Sin referencia"
                       step="0.0001"
                       type="number"
                       value={detailForm.costo_unitario_snapshot}

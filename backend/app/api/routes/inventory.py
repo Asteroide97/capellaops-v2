@@ -994,6 +994,7 @@ def update_transfer_detail_endpoint(
             material_id=payload.material_id,
             cantidad=payload.cantidad,
             costo_unitario_snapshot=payload.costo_unitario_snapshot,
+            costo_unitario_snapshot_provided="costo_unitario_snapshot" in payload.model_fields_set,
             ip_address=request.client.host if request.client else None,
         ),
     )

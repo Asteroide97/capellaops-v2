@@ -594,7 +594,7 @@ def add_transfer_detail(
         transferencia_id=transfer.id,
         material_id=material.id,
         cantidad=Decimal(cantidad),
-        costo_unitario_snapshot=Decimal(costo_unitario_snapshot) if costo_unitario_snapshot is not None else material.costo_unitario,
+        costo_unitario_snapshot=Decimal(costo_unitario_snapshot) if costo_unitario_snapshot is not None else None,
     )
     db.add(detail)
     db.flush()
@@ -622,6 +622,7 @@ def update_transfer_detail(
     cantidad: Decimal | None,
     costo_unitario_snapshot: Decimal | None,
     ip_address: str | None,
+    costo_unitario_snapshot_provided: bool = False,
 ) -> TransferResponse:
     ensure_quantity_precision(cantidad)
     transfer = get_transfer_for_company(db, empresa.id, transfer_id, for_update=True)
@@ -643,13 +644,12 @@ def update_transfer_detail(
                 detail="El material ya existe en esta transferencia.",
             )
         detail.material_id = material.id
-        if costo_unitario_snapshot is None:
-            detail.costo_unitario_snapshot = material.costo_unitario
 
     if cantidad is not None:
         detail.cantidad = Decimal(cantidad)
-    if costo_unitario_snapshot is not None:
-        detail.costo_unitario_snapshot = Decimal(costo_unitario_snapshot)
+    # Explicit null clears the documentary reference; omission preserves it.
+    if costo_unitario_snapshot_provided or costo_unitario_snapshot is not None:
+        detail.costo_unitario_snapshot = Decimal(costo_unitario_snapshot) if costo_unitario_snapshot is not None else None
 
     create_audit_log(
         db,
