@@ -224,7 +224,7 @@ test('F01 real client selector only edits draft; table header/pagination use app
   const section = source.slice(source.indexOf('{activeView === "contacts" ?'), source.indexOf('{activeView === "opportunities" ?'));
   assert.ok(section.includes('Cliente aplicado:'));
   assert.ok(section.includes('loadContactsPage(contactApplied.clientId, { ...contactApplied.filters'));
-  assert.ok(section.includes('contactPage.status === "error"'));
+  assert.ok(section.includes('<CrmListState kind="contacts" page={contactPage}'));
 });
 
 test('F07 tabs preserve shared applied filters and clear restores unfiltered results', async () => {

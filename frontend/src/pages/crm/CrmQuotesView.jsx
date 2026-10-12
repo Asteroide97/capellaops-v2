@@ -27,6 +27,9 @@ import {
   quoteTaxFactorToPercent,
 } from "./quoteCommercialInput";
 import { CrmFieldError, CrmFormError, useCrmFormFeedback } from "./useCrmFormFeedback";
+import { CrmModalShell as ModalShell } from "./CrmModalShell";
+import { CrmListState } from "./CrmListState";
+import { emptyCrmListPage, readLatestCrmPage } from "./crmListContext";
 import {
   ActionButton,
   DEFAULT_PAGE_SIZE,
@@ -36,7 +39,6 @@ import {
   Field,
   FilterCard,
   FormGrid,
-  ModalShell,
   PaginationControls,
   ResultMeta,
   SearchInput,
@@ -262,9 +264,13 @@ export default function CrmQuotesView({
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  const [quotes, setQuotes] = useState([]);
-  const [quoteMeta, setQuoteMeta] = useState(EMPTY_META);
   const [quoteFilters, setQuoteFilters] = useState(defaultQuoteFilters);
+  const [quotePage, setQuotePage] = useState(() => emptyCrmListPage({ filters: defaultQuoteFilters }));
+  const quotes = quotePage.items;
+  const quoteMeta = quotePage.meta;
+  const quoteRequestRef = useRef(0);
+  const quoteReadScopeRef = useRef({ token, empresaId });
+  quoteReadScopeRef.current = { token, empresaId };
 
   const [quoteFormOpen, setQuoteFormOpen] = useState(false);
   const [quoteForm, setQuoteForm] = useState(defaultQuoteForm);
@@ -322,18 +328,12 @@ export default function CrmQuotesView({
   }, [quoteForm.items]);
 
   async function loadQuotesPage(nextFilters = quoteFilters) {
-    const response = await listCrmQuotes({
-      token,
-      empresaId,
-      filters: nextFilters,
+    const applied = { filters: { ...nextFilters } };
+    return readLatestCrmPage({ requestRef: quoteRequestRef, scopeRef: quoteReadScopeRef, scope: { token, empresaId }, applied,
+      setPage: setQuotePage, errorMessage: "No se pudieron cargar las cotizaciones. Intenta nuevamente.",
+      validateRows: rows => rows.every(item => item.empresa_id === empresaId),
+      load: () => listCrmQuotes({ token, empresaId, filters: applied.filters }),
     });
-    setQuotes(response.items || []);
-    setQuoteMeta({
-      total: response.total || 0,
-      limit: response.limit || nextFilters.limit,
-      offset: response.offset || nextFilters.offset,
-    });
-    return response;
   }
 
   async function loadQuoteDetail(quoteId) {
@@ -343,6 +343,7 @@ export default function CrmQuotesView({
   }
 
   useEffect(() => {
+    let active = true;
     async function bootstrap() {
       if (!token || !empresaId) {
         return;
@@ -352,13 +353,14 @@ export default function CrmQuotesView({
       try {
         await loadQuotesPage(defaultQuoteFilters);
       } catch (requestError) {
-        setError(requestError.message || "No se pudieron cargar las cotizaciones.");
+        if (active) setError(requestError.message || "No se pudieron cargar las cotizaciones.");
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }
 
     bootstrap();
+    return () => { active = false; quoteRequestRef.current++; };
   }, [token, empresaId]);
 
   function resetQuoteForm(nextClientId = "") {
@@ -681,7 +683,7 @@ export default function CrmQuotesView({
       >
         Descargar PDF
       </ActionButton>
-      <ActionButton onClick={closeQuoteDetailModal} size="sm" type="button">
+      <ActionButton data-crm-modal-close onClick={closeQuoteDetailModal} size="sm" type="button">
         Cerrar
       </ActionButton>
       {quoteDetail.estatus === "borrador" ? (
@@ -854,13 +856,12 @@ export default function CrmQuotesView({
       </FilterCard>
 
       <DataCard
-        actions={<ResultMeta label="cotizaciones" loaded={quotes.length} total={quoteMeta.total} />}
+        actions={quotePage.status === "ready" ? <ResultMeta label="cotizaciones" loaded={quotes.length} total={quoteMeta.total} /> : null}
         subtitle="Cotizaciones comerciales ligadas a clientes y oportunidades del CRM."
         title="Cotizaciones"
       >
-        {quotes.length === 0 ? (
-          <EmptyState note="No hay cotizaciones registradas." title="Sin cotizaciones" />
-        ) : (
+        <CrmListState kind="quotes" page={quotePage} onClear={() => applyQuoteFilters(defaultQuoteFilters)} />
+        {quotePage.status === "ready" && quotes.length > 0 ? (
           <>
             <DataTable
               columns={[
@@ -921,13 +922,13 @@ export default function CrmQuotesView({
               onPrevious={() => applyQuoteFilters({ ...quoteFilters, offset: Math.max(0, quoteMeta.offset - quoteMeta.limit) })}
             />
           </>
-        )}
+        ) : null}
       </DataCard>
 
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={closeQuoteFormModal} size="sm" type="button">
+            <ActionButton data-crm-modal-close onClick={closeQuoteFormModal} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton disabled={submitting} form="crm-quote-form" size="sm" tone="primary" type="submit">
@@ -1333,7 +1334,7 @@ export default function CrmQuotesView({
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={closeProjectConversionModal} size="sm" type="button">
+            <ActionButton data-crm-modal-close onClick={closeProjectConversionModal} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton

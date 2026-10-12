@@ -1,4 +1,5 @@
 import { createElement, useEffect, useState } from "react";
+import { activateCrmModal } from "./crmModalFocus.js";
 
 const emptyFeedback = () => ({ message: "", fields: {} });
 const technicalMessage = /SQL|traceback|backend|payload|endpoint|Internal Server Error|Failed to fetch|Not Found|\[object Object\]|^\s*[{[<]/i;
@@ -72,53 +73,13 @@ export function activateCrmEditor(form) {
   const dialog = form.closest('[role="dialog"]');
   const backdrop = form.closest(".inventory-modal-backdrop");
   if (!dialog || !backdrop) return undefined;
-  const previousFocus = form.ownerDocument.activeElement;
-  const previousModal = dialog.getAttribute("aria-modal");
-  dialog.setAttribute("aria-modal", "true");
-  const background = [];
-  // Disable sibling branches, never the ancestors containing this editor. Restore exactly on close.
-  for (let branch = backdrop; branch.parentElement; branch = branch.parentElement) {
-    for (const sibling of branch.parentElement.children) {
-      if (sibling === branch) continue;
-      background.push([sibling, sibling.getAttribute("inert"), sibling.getAttribute("aria-hidden")]);
-      sibling.setAttribute("inert", "");
-      sibling.setAttribute("aria-hidden", "true");
-    }
-    if (branch.parentElement === form.ownerDocument.body) break;
-  }
-  const focusable = () => Array.from(dialog.querySelectorAll(
-    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex="0"]',
-  )).filter(element => element.getClientRects().length && !element.closest("[inert]"));
-  const keepTabInside = (event) => {
-    if (event.key !== "Tab") return;
-    const elements = focusable();
-    const target = event.shiftKey ? elements.at(-1) : elements[0];
-    const boundary = event.shiftKey ? elements[0] : elements.at(-1);
-    if (target && (form.ownerDocument.activeElement === boundary || !dialog.contains(form.ownerDocument.activeElement))) {
-      event.preventDefault();
-      target.focus();
-    }
-  };
-  dialog.addEventListener("keydown", keepTabInside);
-  form.querySelector("input:not([disabled]), select:not([disabled]), textarea:not([disabled])")?.focus();
-  return () => {
-    dialog.removeEventListener("keydown", keepTabInside);
-    if (previousModal === null) dialog.removeAttribute("aria-modal");
-    else dialog.setAttribute("aria-modal", previousModal);
-    for (const [element, inert, hidden] of background) {
-      if (inert === null) element.removeAttribute("inert"); else element.setAttribute("inert", inert);
-      if (hidden === null) element.removeAttribute("aria-hidden"); else element.setAttribute("aria-hidden", hidden);
-    }
-    if (previousFocus?.isConnected && !previousFocus.closest("[inert]")) previousFocus.focus();
-  };
+  return activateCrmModal(dialog, { document: form.ownerDocument, backdrop,
+    initialFocus: () => form.querySelector("input:not([disabled]), select:not([disabled]), textarea:not([disabled])") });
 }
 
 export function useCrmFormFeedback(open, formRef, kind) {
   const [feedback, setFeedback] = useState(emptyFeedback);
   const formId = kind === "quote" ? "crm-quote-form" : "crm-opportunity-form";
-  useEffect(() => {
-    if (open && formRef.current) return activateCrmEditor(formRef.current);
-  }, [open, formRef]);
   useEffect(() => {
     if (open && feedback.message) focusCrmFormError(formRef.current);
   }, [open, feedback, formRef]);

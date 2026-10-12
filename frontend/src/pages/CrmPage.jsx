@@ -58,7 +58,6 @@ import {
   FilterCard,
   FormGrid,
   MetricCard,
-  ModalShell,
   PageHeader,
   PaginationControls,
   ResultMeta,
@@ -74,6 +73,9 @@ import {
   safeDisplayText,
 } from "./inventory/shared";
 import CrmQuotesView from "./crm/CrmQuotesView";
+import { CrmModalShell as ModalShell } from "./crm/CrmModalShell";
+import { CrmListState } from "./crm/CrmListState";
+import { clearCrmFilters } from "./crm/crmEmptyState";
 import { CrmFieldError, CrmFormError, useCrmFormFeedback } from "./crm/useCrmFormFeedback";
 import {
   describeContactFilters, describeOpportunityFilters, emptyCrmListPage,
@@ -667,9 +669,11 @@ export default function CrmPage() {
   const [success, setSuccess] = useState("");
 
   const [summary, setSummary] = useState(defaultSummary);
-  const [clients, setClients] = useState([]);
-  const [clientMeta, setClientMeta] = useState(EMPTY_META);
   const [clientFilters, setClientFilters] = useState(defaultClientFilters);
+  const [clientPage, setClientPage] = useState(() => emptyCrmListPage({ filters: defaultClientFilters }));
+  const clients = clientPage.items;
+  const clientMeta = clientPage.meta;
+  const clientRequestRef = useRef(0);
   const [clientOptions, setClientOptions] = useState([]);
 
   const [contactClientId, setContactClientId] = useState("");
@@ -695,9 +699,11 @@ export default function CrmPage() {
   crmReadScopeRef.current = { token, empresaId };
   const [opportunityOptions, setOpportunityOptions] = useState([]);
 
-  const [activities, setActivities] = useState([]);
-  const [activityMeta, setActivityMeta] = useState(EMPTY_META);
   const [activityFilters, setActivityFilters] = useState(defaultActivityFilters);
+  const [activityPage, setActivityPage] = useState(() => emptyCrmListPage({ filters: defaultActivityFilters }));
+  const activities = activityPage.items;
+  const activityMeta = activityPage.meta;
+  const activityRequestRef = useRef(0);
 
   const [clientFormOpen, setClientFormOpen] = useState(false);
   const [clientForm, setClientForm] = useState(defaultClientForm);
@@ -925,18 +931,12 @@ export default function CrmPage() {
   }
 
   async function loadClientsPage(nextFilters = clientFilters) {
-    const response = await listCrmClients({
-      token,
-      empresaId,
-      filters: nextFilters,
+    const applied = { filters: { ...nextFilters } };
+    return readLatestCrmPage({ requestRef: clientRequestRef, scopeRef: crmReadScopeRef, scope: { token, empresaId }, applied,
+      setPage: setClientPage, errorMessage: "No se pudieron cargar los clientes. Intenta nuevamente.",
+      validateRows: rows => rows.every(item => item.empresa_id === empresaId),
+      load: () => listCrmClients({ token, empresaId, filters: applied.filters }),
     });
-    setClients(response.items || []);
-    setClientMeta({
-      total: response.total || 0,
-      limit: response.limit || nextFilters.limit,
-      offset: response.offset || nextFilters.offset,
-    });
-    return response;
   }
 
   async function loadContactsPage(selectedClientId = contactAppliedRef.current.clientId, nextFilters = contactAppliedRef.current.filters) {
@@ -965,23 +965,14 @@ export default function CrmPage() {
   }
 
   async function loadActivitiesPage(nextFilters = activityFilters) {
-    const response = await listCrmActivities({
-      token,
-      empresaId,
-      filters: {
-        ...nextFilters,
-        completada: parseBooleanFilter(nextFilters.completada),
-        activo: parseBooleanFilter(nextFilters.activo),
-        vencidas: nextFilters.vencidas === "true",
-      },
+    const applied = { filters: { ...nextFilters } };
+    return readLatestCrmPage({ requestRef: activityRequestRef, scopeRef: crmReadScopeRef, scope: { token, empresaId }, applied,
+      setPage: setActivityPage, errorMessage: "No se pudieron cargar las actividades. Intenta nuevamente.",
+      validateRows: rows => rows.every(item => item.empresa_id === empresaId),
+      load: () => listCrmActivities({ token, empresaId, filters: { ...applied.filters,
+        completada: parseBooleanFilter(applied.filters.completada), activo: parseBooleanFilter(applied.filters.activo),
+        vencidas: applied.filters.vencidas === "true" } }),
     });
-    setActivities(response.items || []);
-    setActivityMeta({
-      total: response.total || 0,
-      limit: response.limit || nextFilters.limit,
-      offset: response.offset || nextFilters.offset,
-    });
-    return response;
   }
 
   async function loadClientDetailBundle(clientId) {
@@ -1039,40 +1030,19 @@ export default function CrmPage() {
       setContactPage(emptyCrmListPage({ clientId: "", filters: defaultContactFilters }));
       setOpportunityFilters(defaultOpportunityFilters);
       try {
-        const [summaryResponse, optionClients, optionOpportunities, clientResponse, , activityResponse] = await Promise.all([
+        const [summaryResponse, optionClients, optionOpportunities] = await Promise.all([
           getCrmSummary({ token, empresaId }),
           listCrmClients({ token, empresaId, filters: { limit: 100, offset: 0 } }),
           listCrmOpportunities({ token, empresaId, filters: { limit: 100, offset: 0 } }),
-          listCrmClients({ token, empresaId, filters: defaultClientFilters }),
+          loadClientsPage(defaultClientFilters),
           loadOpportunitiesPage(defaultOpportunityFilters),
-          listCrmActivities({
-            token,
-            empresaId,
-            filters: {
-              ...defaultActivityFilters,
-              completada: false,
-              activo: true,
-              vencidas: false,
-            },
-          }),
+          loadActivitiesPage(defaultActivityFilters),
         ]);
 
         if (!active) return;
         setSummary(normalizeCrmSummary(summaryResponse));
         setClientOptions(optionClients.items || []);
         setOpportunityOptions(optionOpportunities.items || []);
-        setClients(clientResponse.items || []);
-        setClientMeta({
-          total: clientResponse.total || 0,
-          limit: clientResponse.limit || defaultClientFilters.limit,
-          offset: clientResponse.offset || defaultClientFilters.offset,
-        });
-        setActivities(activityResponse.items || []);
-        setActivityMeta({
-          total: activityResponse.total || 0,
-          limit: activityResponse.limit || defaultActivityFilters.limit,
-          offset: activityResponse.offset || defaultActivityFilters.offset,
-        });
 
         const initialClientId = optionClients.items?.[0]?.id || "";
         setContactClientId(initialClientId);
@@ -1094,6 +1064,8 @@ export default function CrmPage() {
       active = false;
       contactRequestRef.current++;
       opportunityRequestRef.current++;
+      clientRequestRef.current++;
+      activityRequestRef.current++;
     };
   }, [token, empresaId]);
 
@@ -1644,6 +1616,10 @@ export default function CrmPage() {
     }
   }
 
+  function clearClientFilters() {
+    return applyClientFilters(clearCrmFilters("clients", defaultClientFilters));
+  }
+
   async function applyContactFilters(nextFilters, nextClientId = contactClientId) {
     setContactClientId(nextClientId);
     setContactFilters(nextFilters);
@@ -1681,6 +1657,10 @@ export default function CrmPage() {
     } catch (requestError) {
       setError(requestError.message || "No se pudieron aplicar los filtros de actividades.");
     }
+  }
+
+  function clearActivityFilters() {
+    return applyActivityFilters(clearCrmFilters("activities", defaultActivityFilters));
   }
 
   async function handleRefreshAll() {
@@ -1998,7 +1978,7 @@ export default function CrmPage() {
                 <ActionButton icon={<Filter size={16} />} onClick={() => applyClientFilters({ ...clientFilters, offset: 0 })} size="sm" tone="primary" type="button">
                   Aplicar
                 </ActionButton>
-                <ActionButton onClick={() => applyClientFilters(defaultClientFilters)} size="sm" type="button">
+                <ActionButton onClick={clearClientFilters} size="sm" type="button">
                   Limpiar
                 </ActionButton>
               </div>
@@ -2046,13 +2026,12 @@ export default function CrmPage() {
           </FilterCard>
 
           <DataCard
-            actions={<ResultMeta label="clientes" loaded={clients.length} total={clientMeta.total} />}
+            actions={clientPage.status === "ready" ? <ResultMeta label="clientes" loaded={clients.length} total={clientMeta.total} /> : null}
             subtitle="Base multiempresa para prospectos y clientes activos."
             title="Directorio de clientes"
           >
-            {clients.length === 0 ? (
-              <EmptyState note="Crea el primer cliente para empezar a trabajar el pipeline." title="No hay clientes registrados" />
-            ) : (
+            <CrmListState kind="clients" page={clientPage} onClear={clearClientFilters} />
+            {clientPage.status === "ready" && clients.length > 0 ? (
               <>
                 <DataTable
                   columns={[
@@ -2118,7 +2097,7 @@ export default function CrmPage() {
                   onPrevious={() => applyClientFilters({ ...clientFilters, offset: Math.max(0, clientMeta.offset - clientMeta.limit) })}
                 />
               </>
-            )}
+            ) : null}
           </DataCard>
         </div>
       ) : null}
@@ -2191,15 +2170,8 @@ export default function CrmPage() {
             subtitle={selectedContactClient ? `Cliente aplicado: ${clientDisplayName(selectedContactClient)} · ${describeContactFilters(contactApplied.filters)}` : "Selecciona un cliente y pulsa Aplicar para ver sus contactos."}
             title="Agenda comercial"
           >
-            {!contactApplied.clientId ? (
-              <EmptyState note="Selecciona un cliente y luego carga o crea contactos." title="Sin cliente seleccionado" />
-            ) : contactPage.status === "loading" ? (
-              <p role="status">Cargando contactos...</p>
-            ) : contactPage.status === "error" ? (
-              <p className="form-error" role="alert">{contactPage.error}</p>
-            ) : contacts.length === 0 ? (
-              <EmptyState note="Agrega el primer contacto para este cliente." title="No hay contactos registrados" />
-            ) : (
+            <CrmListState kind="contacts" page={contactPage} onClear={clearContactFilters} />
+            {contactPage.status === "ready" && contacts.length > 0 ? (
               <>
                 <DataTable
                   columns={[
@@ -2248,7 +2220,7 @@ export default function CrmPage() {
                   onPrevious={() => loadContactsPage(contactApplied.clientId, { ...contactApplied.filters, offset: Math.max(0, contactMeta.offset - contactMeta.limit) })}
                 />
               </>
-            )}
+            ) : null}
           </DataCard>
         </div>
       ) : null}
@@ -2313,13 +2285,8 @@ export default function CrmPage() {
             subtitle={`Filtro aplicado: ${describeOpportunityFilters(opportunityAppliedFilters)}. Los cambios del formulario se aplican al pulsar Aplicar.`}
             title="Oportunidades"
           >
-            {opportunityPage.status === "loading" ? (
-              <p role="status">Cargando oportunidades...</p>
-            ) : opportunityPage.status === "error" ? (
-              <p className="form-error" role="alert">{opportunityPage.error}</p>
-            ) : opportunities.length === 0 ? (
-              <EmptyState note="Crea la primera oportunidad y conecta cliente, monto y etapa." title="No hay oportunidades registradas" />
-            ) : (
+            <CrmListState kind="opportunities" page={opportunityPage} onClear={() => applyOpportunityFilters(defaultOpportunityFilters)} />
+            {opportunityPage.status === "ready" && opportunities.length > 0 ? (
               <>
                 <DataTable
                   columns={[
@@ -2381,7 +2348,7 @@ export default function CrmPage() {
                   onPrevious={() => loadOpportunitiesPage({ ...opportunityAppliedFilters, offset: Math.max(0, opportunityMeta.offset - opportunityMeta.limit) })}
                 />
               </>
-            )}
+            ) : null}
           </DataCard>
         </div>
       ) : null}
@@ -2397,7 +2364,7 @@ export default function CrmPage() {
                 <ActionButton onClick={() => applyActivityFilters({ ...activityFilters, offset: 0 })} size="sm" tone="primary" type="button">
                   Aplicar
                 </ActionButton>
-                <ActionButton onClick={() => applyActivityFilters(defaultActivityFilters)} size="sm" type="button">
+                <ActionButton onClick={clearActivityFilters} size="sm" type="button">
                   Limpiar
                 </ActionButton>
               </div>
@@ -2455,13 +2422,12 @@ export default function CrmPage() {
           </FilterCard>
 
           <DataCard
-            actions={<ResultMeta label="actividades" loaded={activities.length} total={activityMeta.total} />}
+            actions={activityPage.status === "ready" ? <ResultMeta label="actividades" loaded={activities.length} total={activityMeta.total} /> : null}
             subtitle="Seguimiento comercial por cliente, oportunidad y fecha de vencimiento."
             title="Actividades"
           >
-            {activities.length === 0 ? (
-              <EmptyState note="Programa la primera actividad para empezar el seguimiento." title="No hay actividades registradas" />
-            ) : (
+            <CrmListState kind="activities" page={activityPage} onClear={clearActivityFilters} />
+            {activityPage.status === "ready" && activities.length > 0 ? (
               <>
                 <DataTable
                   columns={[
@@ -2523,7 +2489,7 @@ export default function CrmPage() {
                   onPrevious={() => applyActivityFilters({ ...activityFilters, offset: Math.max(0, activityMeta.offset - activityMeta.limit) })}
                 />
               </>
-            )}
+            ) : null}
           </DataCard>
         </div>
       ) : null}
@@ -2625,7 +2591,7 @@ export default function CrmPage() {
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={() => setClientFormOpen(false)} size="sm" type="button">
+            <ActionButton data-crm-modal-close onClick={() => setClientFormOpen(false)} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton disabled={submitting} size="sm" tone="primary" type="submit" form="crm-client-form">
@@ -2912,7 +2878,7 @@ export default function CrmPage() {
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={() => setContactFormOpen(false)} size="sm" type="button">
+            <ActionButton data-crm-modal-close onClick={() => setContactFormOpen(false)} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton disabled={submitting} form="crm-contact-form" size="sm" tone="primary" type="submit">
@@ -2981,7 +2947,7 @@ export default function CrmPage() {
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={closeOpportunityFormModal} size="sm" type="button">
+            <ActionButton data-crm-modal-close onClick={closeOpportunityFormModal} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton disabled={submitting} form="crm-opportunity-form" size="sm" tone="primary" type="submit">
@@ -3078,7 +3044,7 @@ export default function CrmPage() {
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={() => setOpportunityCloseOpen(false)} size="sm" type="button">
+            <ActionButton data-crm-modal-close onClick={() => setOpportunityCloseOpen(false)} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton disabled={submitting} form="crm-opportunity-close-form" size="sm" tone={opportunityCloseForm.mode === "won" ? "primary" : "ghost"} type="submit">
@@ -3117,7 +3083,7 @@ export default function CrmPage() {
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={() => setActivityFormOpen(false)} size="sm" type="button">
+            <ActionButton data-crm-modal-close onClick={() => setActivityFormOpen(false)} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton disabled={submitting} form="crm-activity-form" size="sm" tone="primary" type="submit">
