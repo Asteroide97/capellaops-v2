@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
@@ -74,6 +74,7 @@ import {
   safeDisplayText,
 } from "./inventory/shared";
 import CrmQuotesView from "./crm/CrmQuotesView";
+import { CrmFieldError, CrmFormError, useCrmFormFeedback } from "./crm/useCrmFormFeedback";
 
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -695,6 +696,8 @@ export default function CrmPage() {
 
   const [opportunityFormOpen, setOpportunityFormOpen] = useState(false);
   const [opportunityForm, setOpportunityForm] = useState(defaultOpportunityForm);
+  const opportunityFormRef = useRef(null);
+  const opportunityFeedback = useCrmFormFeedback(opportunityFormOpen, opportunityFormRef, "opportunity");
   const [opportunityCloseOpen, setOpportunityCloseOpen] = useState(false);
   const [opportunityCloseForm, setOpportunityCloseForm] = useState(defaultOpportunityCloseForm);
 
@@ -1211,6 +1214,7 @@ export default function CrmPage() {
   }
 
   async function openOpportunityCreateModal(nextClientId = "") {
+    opportunityFeedback.clear();
     if (nextClientId) {
       await loadClientContactOptions(nextClientId);
     }
@@ -1223,6 +1227,8 @@ export default function CrmPage() {
   async function openOpportunityEditModal(opportunityId) {
     setSubmitting(true);
     setError("");
+    setSuccess("");
+    opportunityFeedback.clear();
     try {
       const response = await getCrmOpportunity({ opportunityId, token, empresaId });
       if (response.cliente_id) {
@@ -1261,6 +1267,12 @@ export default function CrmPage() {
     setOpportunityCloseOpen(true);
     setError("");
     setSuccess("");
+  }
+
+  function closeOpportunityFormModal() {
+    setOpportunityFormOpen(false);
+    opportunityFeedback.clear();
+    resetOpportunityForm();
   }
 
   async function openActivityCreateModal(nextClientId = "", nextOpportunityId = "") {
@@ -1439,15 +1451,19 @@ export default function CrmPage() {
 
   async function handleOpportunitySubmit(event) {
     event.preventDefault();
+    setError("");
+    setSuccess("");
+    opportunityFeedback.clear();
     const validationMessage = validateOpportunityForm(opportunityForm);
     if (validationMessage) {
-      setError(validationMessage);
+      opportunityFeedback.show(validationMessage, opportunityForm);
       return;
     }
 
     setSubmitting(true);
     setError("");
     setSuccess("");
+    let saved = false;
     try {
       const payload = buildOpportunityPayload(opportunityForm);
       if (opportunityForm.id) {
@@ -1461,9 +1477,9 @@ export default function CrmPage() {
         await createCrmOpportunity({ token, empresaId, payload });
       }
 
+      saved = true;
       const relatedClientId = opportunityForm.cliente_id;
-      setOpportunityFormOpen(false);
-      resetOpportunityForm();
+      closeOpportunityFormModal();
       await Promise.all([
         loadSummaryData(),
         loadOpportunitiesPage(opportunityFilters),
@@ -1474,7 +1490,8 @@ export default function CrmPage() {
       }
       setSuccess(opportunityForm.id ? "Oportunidad actualizada correctamente." : "Oportunidad creada correctamente.");
     } catch (requestError) {
-      setError(requestError.message || "No se pudo guardar la oportunidad.");
+      if (saved) setError("La oportunidad se guardo, pero no se pudo actualizar la vista. Actualiza para verla.");
+      else opportunityFeedback.show(requestError, opportunityForm);
     } finally {
       setSubmitting(false);
     }
@@ -2922,7 +2939,7 @@ export default function CrmPage() {
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={() => setOpportunityFormOpen(false)} size="sm" type="button">
+            <ActionButton onClick={closeOpportunityFormModal} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton disabled={submitting} form="crm-opportunity-form" size="sm" tone="primary" type="submit">
@@ -2930,18 +2947,20 @@ export default function CrmPage() {
             </ActionButton>
           </div>
         )}
-        onClose={() => setOpportunityFormOpen(false)}
+        onClose={closeOpportunityFormModal}
         open={opportunityFormOpen}
         size="xl"
         subtitle="Registra monto estimado, etapa y probabilidad para alimentar el pipeline."
         title={opportunityForm.id ? "Editar oportunidad" : "Nueva oportunidad"}
       >
-        <form className="inventory-modal-form" id="crm-opportunity-form" onSubmit={handleOpportunitySubmit}>
+        <form className="inventory-modal-form" id="crm-opportunity-form" ref={opportunityFormRef} onChangeCapture={opportunityFeedback.clear} onSubmit={handleOpportunitySubmit}>
+          <CrmFormError feedback={opportunityFeedback} />
           <section className="inventory-form-section">
             <SectionTitle title="Oportunidad" />
             <FormGrid>
               <Field label="Cliente">
                 <select
+                  {...opportunityFeedback.fieldProps("cliente_id")}
                   onChange={async (event) => {
                     const nextClientId = event.target.value;
                     setOpportunityForm((current) => ({
@@ -2960,6 +2979,7 @@ export default function CrmPage() {
                     </option>
                   ))}
                 </select>
+                <CrmFieldError feedback={opportunityFeedback} name="cliente_id" />
               </Field>
               <Field label="Contacto">
                 <select onChange={(event) => setOpportunityForm((current) => ({ ...current, contacto_id: event.target.value }))} value={opportunityForm.contacto_id}>
@@ -2972,7 +2992,8 @@ export default function CrmPage() {
                 </select>
               </Field>
               <Field label="Titulo" span={2}>
-                <input onChange={(event) => setOpportunityForm((current) => ({ ...current, titulo: event.target.value }))} required type="text" value={opportunityForm.titulo} />
+                <input {...opportunityFeedback.fieldProps("titulo")} onChange={(event) => setOpportunityForm((current) => ({ ...current, titulo: event.target.value }))} required type="text" value={opportunityForm.titulo} />
+                <CrmFieldError feedback={opportunityFeedback} name="titulo" />
               </Field>
               <Field label="Descripcion" span={2}>
                 <textarea onChange={(event) => setOpportunityForm((current) => ({ ...current, descripcion: event.target.value }))} rows={3} value={opportunityForm.descripcion} />
@@ -2993,7 +3014,8 @@ export default function CrmPage() {
                 <input onChange={(event) => setOpportunityForm((current) => ({ ...current, monto_estimado: normalizeDecimalInput(event.target.value) }))} type="text" value={opportunityForm.monto_estimado} />
               </Field>
               <Field label="Probabilidad">
-                <input onChange={(event) => setOpportunityForm((current) => ({ ...current, probabilidad: normalizeIntegerInput(event.target.value).slice(0, 3) }))} type="text" value={opportunityForm.probabilidad} />
+                <input {...opportunityFeedback.fieldProps("probabilidad")} onChange={(event) => setOpportunityForm((current) => ({ ...current, probabilidad: normalizeIntegerInput(event.target.value).slice(0, 3) }))} type="text" value={opportunityForm.probabilidad} />
+                <CrmFieldError feedback={opportunityFeedback} name="probabilidad" />
               </Field>
               <Field label="Fecha estimada de cierre">
                 <input onChange={(event) => setOpportunityForm((current) => ({ ...current, fecha_estimada_cierre: event.target.value }))} type="date" value={opportunityForm.fecha_estimada_cierre} />

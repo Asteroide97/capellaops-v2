@@ -93,6 +93,7 @@ test('F05 invalid percentages block submit before either create or update API an
       const submit = runInNewContext(`(${source.slice(node.start, node.end)})`, {
         ...context, quoteForm, token: 'fixture', empresaId: 'fixture', quoteFilters: {}, quoteDetailOpen: false,
         setError: value => { error = value; }, setSubmitting() {},
+        quoteFeedback: { clear() {}, show: value => { error = typeof value === 'string' ? value : value.message; } },
         setSuccess: value => { success = value; }, setQuoteFormOpen: () => { cleared = true; },
         resetQuoteForm: () => { cleared = true; }, translateQuoteEditError: message => message,
         createCrmQuote: async () => { calls++; return {}; }, updateCrmQuote: async () => { calls++; return {}; },

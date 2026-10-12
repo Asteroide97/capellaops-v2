@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   CheckCircle2,
   Eye,
@@ -26,6 +26,7 @@ import {
   parseQuoteTaxPercent,
   quoteTaxFactorToPercent,
 } from "./quoteCommercialInput";
+import { CrmFieldError, CrmFormError, useCrmFormFeedback } from "./useCrmFormFeedback";
 import {
   ActionButton,
   DEFAULT_PAGE_SIZE,
@@ -267,6 +268,8 @@ export default function CrmQuotesView({
 
   const [quoteFormOpen, setQuoteFormOpen] = useState(false);
   const [quoteForm, setQuoteForm] = useState(defaultQuoteForm);
+  const quoteFormRef = useRef(null);
+  const quoteFeedback = useCrmFormFeedback(quoteFormOpen, quoteFormRef, "quote");
 
   const [quoteDetailOpen, setQuoteDetailOpen] = useState(false);
   const [quoteDetail, setQuoteDetail] = useState(null);
@@ -392,6 +395,7 @@ export default function CrmQuotesView({
       return;
     }
     resetQuoteForm();
+    quoteFeedback.clear();
     setQuoteFormOpen(true);
     setError("");
     setSuccess("");
@@ -400,12 +404,15 @@ export default function CrmQuotesView({
   async function openQuoteEditModal(quoteId) {
     setSubmitting(true);
     setError("");
+    setSuccess("");
+    quoteFeedback.clear();
     try {
       const response = await getCrmQuote({ quoteId, token, empresaId });
       if (response.cliente_id) {
         await loadClientContactOptions(response.cliente_id, { force: true });
       }
       setQuoteForm(mapQuoteResponseToForm(response));
+      closeQuoteDetailModal();
       setQuoteFormOpen(true);
     } catch (requestError) {
       setError(requestError.message || "No se pudo cargar la cotizacion.");
@@ -415,6 +422,7 @@ export default function CrmQuotesView({
   }
 
   async function openQuoteDetailModal(quoteId) {
+    closeQuoteFormModal();
     setQuoteDetailOpen(true);
     setQuoteDetail(null);
     setDetailLoading(true);
@@ -431,6 +439,12 @@ export default function CrmQuotesView({
   function closeQuoteDetailModal() {
     setQuoteDetailOpen(false);
     setQuoteDetail(null);
+  }
+
+  function closeQuoteFormModal() {
+    setQuoteFormOpen(false);
+    quoteFeedback.clear();
+    resetQuoteForm();
   }
 
   function openProjectConversionModal(quote) {
@@ -464,6 +478,7 @@ export default function CrmQuotesView({
   }
 
   function addQuoteItem() {
+    quoteFeedback.clear();
     setQuoteForm((current) => ({
       ...current,
       items: [...current.items, createLocalQuoteItem()],
@@ -471,6 +486,7 @@ export default function CrmQuotesView({
   }
 
   function removeQuoteItem(localId) {
+    quoteFeedback.clear();
     setQuoteForm((current) => {
       if (current.items.length <= 1) {
         return current;
@@ -484,15 +500,19 @@ export default function CrmQuotesView({
 
   async function handleQuoteSubmit(event) {
     event.preventDefault();
+    setError("");
+    setSuccess("");
+    quoteFeedback.clear();
     const validationMessage = validateQuoteForm(quoteForm);
     if (validationMessage) {
-      setError(validationMessage);
+      quoteFeedback.show(validationMessage, quoteForm);
       return;
     }
 
     setSubmitting(true);
     setError("");
     setSuccess("");
+    let saved = false;
     try {
       const payload = buildQuotePayload(quoteForm);
       const targetQuoteId = quoteForm.id;
@@ -501,8 +521,8 @@ export default function CrmQuotesView({
         ? await updateCrmQuote({ quoteId: quoteForm.id, token, empresaId, payload })
         : await createCrmQuote({ token, empresaId, payload });
 
-      setQuoteFormOpen(false);
-      resetQuoteForm();
+      saved = true;
+      closeQuoteFormModal();
       await loadQuotesPage(quoteFilters);
       if (targetQuoteId && quoteDetailOpen && quoteDetail?.id === targetQuoteId) {
         await loadQuoteDetail(targetQuoteId);
@@ -512,7 +532,8 @@ export default function CrmQuotesView({
       }
       setSuccess(quoteForm.id ? "Cotizacion actualizada correctamente." : "Cotizacion creada correctamente.");
     } catch (requestError) {
-      setError(translateQuoteEditError(requestError.message, Boolean(quoteForm.id)));
+      if (saved) setError("La cotizacion se guardo, pero no se pudo actualizar la vista. Actualiza para verla.");
+      else quoteFeedback.show(requestError, quoteForm, translateQuoteEditError(requestError.message, Boolean(quoteForm.id)));
     } finally {
       setSubmitting(false);
     }
@@ -906,7 +927,7 @@ export default function CrmQuotesView({
       <ModalShell
         footer={(
           <div className="inventory-actions">
-            <ActionButton onClick={() => setQuoteFormOpen(false)} size="sm" type="button">
+            <ActionButton onClick={closeQuoteFormModal} size="sm" type="button">
               Cancelar
             </ActionButton>
             <ActionButton disabled={submitting} form="crm-quote-form" size="sm" tone="primary" type="submit">
@@ -914,18 +935,20 @@ export default function CrmQuotesView({
             </ActionButton>
           </div>
         )}
-        onClose={() => setQuoteFormOpen(false)}
+        onClose={closeQuoteFormModal}
         open={quoteFormOpen}
         size="xl"
         subtitle="Arma las partidas y captura condiciones comerciales. El backend recalcula los totales finales."
         title={quoteForm.id ? "Editar cotizacion" : "Nueva cotizacion"}
       >
-        <form className="inventory-modal-form" id="crm-quote-form" onSubmit={handleQuoteSubmit}>
+        <form className="inventory-modal-form" id="crm-quote-form" ref={quoteFormRef} onChangeCapture={quoteFeedback.clear} onSubmit={handleQuoteSubmit}>
+          <CrmFormError feedback={quoteFeedback} />
           <section className="inventory-form-section">
             <SectionTitle title="Datos generales" />
             <FormGrid>
               <Field label="Cliente CRM">
                 <select
+                  {...quoteFeedback.fieldProps("cliente_id")}
                   onChange={async (event) => {
                     const nextClientId = event.target.value;
                     setQuoteForm((current) => ({
@@ -947,6 +970,7 @@ export default function CrmQuotesView({
                     </option>
                   ))}
                 </select>
+                <CrmFieldError feedback={quoteFeedback} name="cliente_id" />
               </Field>
               <Field label="Contacto">
                 <select onChange={(event) => setQuoteForm((current) => ({ ...current, contacto_id: event.target.value }))} value={quoteForm.contacto_id}>
@@ -981,11 +1005,13 @@ export default function CrmQuotesView({
               </Field>
               <Field label="Titulo" span={2}>
                 <input
+                  {...quoteFeedback.fieldProps("titulo")}
                   onChange={(event) => setQuoteForm((current) => ({ ...current, titulo: event.target.value }))}
                   required
                   type="text"
                   value={quoteForm.titulo}
                 />
+                <CrmFieldError feedback={quoteFeedback} name="titulo" />
               </Field>
               <Field label="Descripcion" span={2}>
                 <textarea
@@ -1045,31 +1071,39 @@ export default function CrmQuotesView({
                   <FormGrid>
                     <Field label="Descripcion" span={2}>
                       <input
+                        {...quoteFeedback.fieldProps(`items.${index}.descripcion`)}
                         onChange={(event) => updateQuoteItem(item.local_id, "descripcion", event.target.value)}
                         type="text"
                         value={item.descripcion}
                       />
+                      <CrmFieldError feedback={quoteFeedback} name={`items.${index}.descripcion`} />
                     </Field>
                     <Field label="Cantidad">
                       <input
+                        {...quoteFeedback.fieldProps(`items.${index}.cantidad`)}
                         onChange={(event) => updateQuoteItem(item.local_id, "cantidad", normalizeDecimalInput(event.target.value))}
                         type="text"
                         value={item.cantidad}
                       />
+                      <CrmFieldError feedback={quoteFeedback} name={`items.${index}.cantidad`} />
                     </Field>
                     <Field label="Precio unitario">
                       <input
+                        {...quoteFeedback.fieldProps(`items.${index}.precio_unitario`)}
                         onChange={(event) => updateQuoteItem(item.local_id, "precio_unitario", normalizeDecimalInput(event.target.value))}
                         type="text"
                         value={item.precio_unitario}
                       />
+                      <CrmFieldError feedback={quoteFeedback} name={`items.${index}.precio_unitario`} />
                     </Field>
                     <Field label="Descuento">
                       <input
+                        {...quoteFeedback.fieldProps(`items.${index}.descuento`)}
                         onChange={(event) => updateQuoteItem(item.local_id, "descuento", normalizeDecimalInput(event.target.value))}
                         type="text"
                         value={item.descuento}
                       />
+                      <CrmFieldError feedback={quoteFeedback} name={`items.${index}.descuento`} />
                     </Field>
                     <Field label="IVA (%)" hint="Escribe 16 para 16%. 0.16 significa 0.16%, no 16%.">
                       <input
