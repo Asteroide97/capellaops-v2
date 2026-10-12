@@ -1,16 +1,37 @@
+from datetime import datetime, timezone
+
 from app.core.catalog import ACTIVE_COMPANY_STATUSES, MODULE_DEFINITIONS, PLAN_CATALOG
 from app.models import Empresa, Usuario
+from app.models.mixins import utcnow
 from app.schemas.module import ModuleItem
 
 
-def can_access_module(user: Usuario, empresa: Empresa, module_name: str) -> bool:
+def can_access_company(empresa: Empresa, *, now: datetime | None = None) -> bool:
+    if empresa.access_status not in ACTIVE_COMPANY_STATUSES:
+        return False
+    if empresa.access_status != "trial":
+        return True
+
+    end = empresa.trial_ends_at
+    if end is None:
+        return False
+    # SQLite drops tzinfo; trial instants are stored/interpreted as UTC.
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
+    current = now if now is not None else utcnow()
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    return end > current
+
+
+def can_access_module(user: Usuario, empresa: Empresa, module_name: str, *, now: datetime | None = None) -> bool:
     if not user.is_active:
         return False
 
     if module_name == "superadmin":
         return user.is_superadmin
 
-    if empresa.access_status not in ACTIVE_COMPANY_STATUSES:
+    if not can_access_company(empresa, now=now):
         return False
 
     plan_modules = set(PLAN_CATALOG.get(empresa.plan_code, []))
@@ -31,10 +52,11 @@ def can_access_module(user: Usuario, empresa: Empresa, module_name: str) -> bool
 def build_module_payload(user: Usuario, empresa: Empresa) -> list[ModuleItem]:
     modules: list[ModuleItem] = []
     plan_modules = PLAN_CATALOG.get(empresa.plan_code, [])
+    now = utcnow()
 
     for module_name in plan_modules:
         definition = MODULE_DEFINITIONS[module_name]
-        has_access = can_access_module(user, empresa, module_name)
+        has_access = can_access_module(user, empresa, module_name, now=now)
         is_pending = module_name == "billing_pending"
         modules.append(
             ModuleItem(

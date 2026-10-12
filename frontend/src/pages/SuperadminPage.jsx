@@ -13,6 +13,7 @@ import {
 } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import FeaturePlaceholder from "../components/FeaturePlaceholder";
+import { createCompanyAccessForm, serializeTrialInput } from "./superadmin/trialAccessTime";
 
 
 const superadminTabs = [
@@ -110,6 +111,7 @@ export default function SuperadminPage() {
     plan_code: "basico",
     access_status: "trial",
     trial_ends_at: "",
+    trial_ends_at_original: "",
   });
 
   const trialCompanies = useMemo(
@@ -190,11 +192,7 @@ export default function SuperadminPage() {
       const response = await getSuperadminCompanyDetail({ empresaId, token });
       setSelectedCompanyDetail(response);
       setSelectedUserDetail(null);
-      setAccessForm({
-        plan_code: response.plan_code,
-        access_status: response.access_status,
-        trial_ends_at: response.trial_ends_at ? response.trial_ends_at.slice(0, 16) : "",
-      });
+      setAccessForm(createCompanyAccessForm(response));
       setActiveTab("empresas");
     } catch (requestError) {
       setError(requestError.message || "No se pudo cargar el detalle de la empresa.");
@@ -306,13 +304,12 @@ export default function SuperadminPage() {
         payload: {
           plan_code: accessForm.plan_code,
           access_status: accessForm.access_status,
-          trial_ends_at: accessForm.trial_ends_at
-            ? new Date(accessForm.trial_ends_at).toISOString()
-            : null,
+          trial_ends_at: serializeTrialInput(accessForm.trial_ends_at, accessForm.trial_ends_at_original),
           reason: actionReason,
         },
       });
       setSelectedCompanyDetail(response);
+      setAccessForm(createCompanyAccessForm(response));
       setSuccess("Estado comercial actualizado.");
       await loadPortalData();
     } catch (requestError) {
@@ -707,6 +704,7 @@ export default function SuperadminPage() {
                         setAccessForm((current) => ({ ...current, trial_ends_at: event.target.value }))
                       }
                       type="datetime-local"
+                      step="0.001"
                       value={accessForm.trial_ends_at}
                     />
                   </label>
