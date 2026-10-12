@@ -75,6 +75,10 @@ import {
 } from "./inventory/shared";
 import CrmQuotesView from "./crm/CrmQuotesView";
 import { CrmFieldError, CrmFormError, useCrmFormFeedback } from "./crm/useCrmFormFeedback";
+import {
+  describeContactFilters, describeOpportunityFilters, emptyCrmListPage,
+  hasOpportunityFilters, parseOpportunityAmount, readLatestCrmPage,
+} from "./crm/crmListContext";
 
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -564,13 +568,15 @@ function validateContactForm(form) {
 
 
 function buildOpportunityPayload(form) {
+  const amount = parseOpportunityAmount(form.monto_estimado);
+  if (amount.error) throw new Error(amount.error);
   return {
     cliente_id: form.cliente_id,
     contacto_id: form.contacto_id || null,
     titulo: String(form.titulo ?? "").trim(),
     descripcion: normalizeOptionalText(form.descripcion),
     etapa: form.etapa || "nueva",
-    monto_estimado: Number(form.monto_estimado || 0),
+    monto_estimado: amount.value,
     probabilidad: Number(form.probabilidad || 0),
     fecha_estimada_cierre: form.fecha_estimada_cierre || null,
     origen: normalizeOptionalText(form.origen),
@@ -587,9 +593,9 @@ function validateOpportunityForm(form) {
   if (!String(form.titulo ?? "").trim()) {
     return "Captura el titulo de la oportunidad.";
   }
-  const amount = Number(form.monto_estimado || 0);
-  if (Number.isNaN(amount) || amount < 0) {
-    return "El monto estimado debe ser mayor o igual a cero.";
+  const amount = parseOpportunityAmount(form.monto_estimado);
+  if (amount.error) {
+    return amount.error;
   }
   const probability = Number(form.probabilidad || 0);
   if (!Number.isFinite(probability) || probability < 0 || probability > 100) {
@@ -667,14 +673,26 @@ export default function CrmPage() {
   const [clientOptions, setClientOptions] = useState([]);
 
   const [contactClientId, setContactClientId] = useState("");
-  const [contacts, setContacts] = useState([]);
-  const [contactMeta, setContactMeta] = useState(EMPTY_META);
   const [contactFilters, setContactFilters] = useState(defaultContactFilters);
+  const [contactPage, setContactPage] = useState(() => emptyCrmListPage({ clientId: "", filters: defaultContactFilters }));
+  const contactApplied = contactPage.applied;
+  const contactAppliedRef = useRef(contactApplied);
+  contactAppliedRef.current = contactApplied;
+  const contacts = contactPage.items;
+  const contactMeta = contactPage.meta;
+  const contactRequestRef = useRef(0);
   const [contactOptionsByClient, setContactOptionsByClient] = useState({});
 
-  const [opportunities, setOpportunities] = useState([]);
-  const [opportunityMeta, setOpportunityMeta] = useState(EMPTY_META);
   const [opportunityFilters, setOpportunityFilters] = useState(defaultOpportunityFilters);
+  const [opportunityPage, setOpportunityPage] = useState(() => emptyCrmListPage({ filters: defaultOpportunityFilters }));
+  const opportunities = opportunityPage.items;
+  const opportunityMeta = opportunityPage.meta;
+  const opportunityAppliedFilters = opportunityPage.applied.filters;
+  const opportunityAppliedFiltersRef = useRef(opportunityAppliedFilters);
+  opportunityAppliedFiltersRef.current = opportunityAppliedFilters;
+  const opportunityRequestRef = useRef(0);
+  const crmReadScopeRef = useRef({ token, empresaId });
+  crmReadScopeRef.current = { token, empresaId };
   const [opportunityOptions, setOpportunityOptions] = useState([]);
 
   const [activities, setActivities] = useState([]);
@@ -705,8 +723,11 @@ export default function CrmPage() {
   const [activityForm, setActivityForm] = useState(defaultActivityForm);
 
   const selectedContactClient = useMemo(
-    () => clientOptions.find((item) => item.id === contactClientId) || null,
-    [clientOptions, contactClientId],
+    () => clientOptions.find((item) => item.id === contactApplied.clientId)
+      || clients.find((item) => item.id === contactApplied.clientId)
+      || (contactApplied.clientId ? { id: contactApplied.clientId,
+        nombre_comercial: contacts[0]?.cliente_nombre_comercial || contactApplied.clientId } : null),
+    [clientOptions, clients, contacts, contactApplied.clientId],
   );
 
   const currentOpportunityContacts = useMemo(
@@ -918,46 +939,29 @@ export default function CrmPage() {
     return response;
   }
 
-  async function loadContactsPage(selectedClientId = contactClientId, nextFilters = contactFilters) {
-    if (!selectedClientId) {
-      setContacts([]);
-      setContactMeta(EMPTY_META);
-      return { items: [], total: 0, limit: nextFilters.limit, offset: nextFilters.offset };
-    }
-    const response = await listCrmClientContacts({
-      clientId: selectedClientId,
-      token,
-      empresaId,
-      filters: {
-        ...nextFilters,
-        activo: parseBooleanFilter(nextFilters.activo),
-      },
+  async function loadContactsPage(selectedClientId = contactAppliedRef.current.clientId, nextFilters = contactAppliedRef.current.filters) {
+    const applied = { clientId: selectedClientId, filters: { ...nextFilters } };
+    return readLatestCrmPage({
+      requestRef: contactRequestRef, scopeRef: crmReadScopeRef, scope: { token, empresaId }, applied,
+      setPage: page => { contactAppliedRef.current = page.applied; setContactPage(page); },
+      errorMessage: "No se pudieron cargar los contactos. Intenta nuevamente.",
+      validateRows: rows => rows.every(item => item.cliente_id === selectedClientId && item.empresa_id === empresaId),
+      load: () => selectedClientId ? listCrmClientContacts({ clientId: selectedClientId, token, empresaId,
+        filters: { ...applied.filters, activo: parseBooleanFilter(applied.filters.activo) } })
+        : Promise.resolve({ items: [], total: 0, limit: nextFilters.limit, offset: nextFilters.offset }),
     });
-    setContacts(response.items || []);
-    setContactMeta({
-      total: response.total || 0,
-      limit: response.limit || nextFilters.limit,
-      offset: response.offset || nextFilters.offset,
-    });
-    return response;
   }
 
-  async function loadOpportunitiesPage(nextFilters = opportunityFilters) {
-    const response = await listCrmOpportunities({
-      token,
-      empresaId,
-      filters: {
-        ...nextFilters,
-        activa: parseBooleanFilter(nextFilters.activa),
-      },
+  async function loadOpportunitiesPage(nextFilters = opportunityAppliedFiltersRef.current) {
+    const applied = { filters: { ...nextFilters } };
+    return readLatestCrmPage({
+      requestRef: opportunityRequestRef, scopeRef: crmReadScopeRef, scope: { token, empresaId }, applied,
+      setPage: page => { opportunityAppliedFiltersRef.current = page.applied.filters; setOpportunityPage(page); },
+      errorMessage: "No se pudieron cargar las oportunidades. Intenta nuevamente.",
+      validateRows: rows => rows.every(item => item.empresa_id === empresaId),
+      load: () => listCrmOpportunities({ token, empresaId,
+        filters: { ...applied.filters, activa: parseBooleanFilter(applied.filters.activa) } }),
     });
-    setOpportunities(response.items || []);
-    setOpportunityMeta({
-      total: response.total || 0,
-      limit: response.limit || nextFilters.limit,
-      offset: response.offset || nextFilters.offset,
-    });
-    return response;
   }
 
   async function loadActivitiesPage(nextFilters = activityFilters) {
@@ -1022,6 +1026,7 @@ export default function CrmPage() {
   }
 
   useEffect(() => {
+    let active = true;
     async function bootstrap() {
       if (!token || !empresaId) {
         return;
@@ -1029,13 +1034,17 @@ export default function CrmPage() {
 
       setLoading(true);
       setError("");
+      setContactClientId("");
+      setContactFilters(defaultContactFilters);
+      setContactPage(emptyCrmListPage({ clientId: "", filters: defaultContactFilters }));
+      setOpportunityFilters(defaultOpportunityFilters);
       try {
-        const [summaryResponse, optionClients, optionOpportunities, clientResponse, opportunityResponse, activityResponse] = await Promise.all([
+        const [summaryResponse, optionClients, optionOpportunities, clientResponse, , activityResponse] = await Promise.all([
           getCrmSummary({ token, empresaId }),
           listCrmClients({ token, empresaId, filters: { limit: 100, offset: 0 } }),
           listCrmOpportunities({ token, empresaId, filters: { limit: 100, offset: 0 } }),
           listCrmClients({ token, empresaId, filters: defaultClientFilters }),
-          listCrmOpportunities({ token, empresaId, filters: defaultOpportunityFilters }),
+          loadOpportunitiesPage(defaultOpportunityFilters),
           listCrmActivities({
             token,
             empresaId,
@@ -1048,6 +1057,7 @@ export default function CrmPage() {
           }),
         ]);
 
+        if (!active) return;
         setSummary(normalizeCrmSummary(summaryResponse));
         setClientOptions(optionClients.items || []);
         setOpportunityOptions(optionOpportunities.items || []);
@@ -1056,12 +1066,6 @@ export default function CrmPage() {
           total: clientResponse.total || 0,
           limit: clientResponse.limit || defaultClientFilters.limit,
           offset: clientResponse.offset || defaultClientFilters.offset,
-        });
-        setOpportunities(opportunityResponse.items || []);
-        setOpportunityMeta({
-          total: opportunityResponse.total || 0,
-          limit: opportunityResponse.limit || defaultOpportunityFilters.limit,
-          offset: opportunityResponse.offset || defaultOpportunityFilters.offset,
         });
         setActivities(activityResponse.items || []);
         setActivityMeta({
@@ -1076,17 +1080,21 @@ export default function CrmPage() {
           await loadContactsPage(initialClientId, defaultContactFilters);
           await loadClientContactOptions(initialClientId, { force: true });
         } else {
-          setContacts([]);
-          setContactMeta(EMPTY_META);
+          await loadContactsPage("", defaultContactFilters);
         }
       } catch (requestError) {
-        setError(requestError.message || "No se pudo cargar el CRM.");
+        if (active) setError(requestError.message || "No se pudo cargar el CRM.");
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     }
 
     bootstrap();
+    return () => {
+      active = false;
+      contactRequestRef.current++;
+      opportunityRequestRef.current++;
+    };
   }, [token, empresaId]);
 
   function setCrmView(nextView) {
@@ -1332,7 +1340,7 @@ export default function CrmPage() {
         loadClientOptions(),
       ]);
 
-      if (!contactClientId) {
+      if (!contactAppliedRef.current.clientId) {
         setContactClientId(response.id);
         await loadContactsPage(response.id, defaultContactFilters);
       }
@@ -1405,7 +1413,7 @@ export default function CrmPage() {
       setContactFormOpen(false);
       resetContactForm(contactForm.client_id);
       await Promise.all([
-        loadContactsPage(contactForm.client_id, contactFilters),
+        loadContactsPage(),
         loadClientContactOptions(contactForm.client_id, { force: true }),
       ]);
       if (clientDetailOpen && clientDetail?.id === contactForm.client_id) {
@@ -1435,7 +1443,7 @@ export default function CrmPage() {
         });
       }
       await Promise.all([
-        loadContactsPage(contact.cliente_id, contactFilters),
+        loadContactsPage(),
         loadClientContactOptions(contact.cliente_id, { force: true }),
       ]);
       if (clientDetailOpen && clientDetail?.id === contact.cliente_id) {
@@ -1482,7 +1490,7 @@ export default function CrmPage() {
       closeOpportunityFormModal();
       await Promise.all([
         loadSummaryData(),
-        loadOpportunitiesPage(opportunityFilters),
+        loadOpportunitiesPage(),
         loadOpportunityOptions(),
       ]);
       if (clientDetailOpen && clientDetail?.id === relatedClientId) {
@@ -1531,7 +1539,7 @@ export default function CrmPage() {
       setOpportunityCloseForm(defaultOpportunityCloseForm);
       await Promise.all([
         loadSummaryData(),
-        loadOpportunitiesPage(opportunityFilters),
+        loadOpportunitiesPage(),
         loadOpportunityOptions(),
       ]);
       setSuccess(opportunityCloseForm.mode === "won" ? "Oportunidad cerrada como ganada." : "Oportunidad cerrada como perdida.");
@@ -1637,6 +1645,7 @@ export default function CrmPage() {
   }
 
   async function applyContactFilters(nextFilters, nextClientId = contactClientId) {
+    setContactClientId(nextClientId);
     setContactFilters(nextFilters);
     setError("");
     try {
@@ -1644,6 +1653,14 @@ export default function CrmPage() {
     } catch (requestError) {
       setError(requestError.message || "No se pudieron aplicar los filtros de contactos.");
     }
+  }
+
+  async function clearContactFilters() {
+    const cleared = { ...defaultContactFilters, activo: "" };
+    const appliedClientId = contactAppliedRef.current.clientId;
+    setContactClientId(appliedClientId);
+    setContactFilters(cleared);
+    await loadContactsPage(appliedClientId, cleared);
   }
 
   async function applyOpportunityFilters(nextFilters) {
@@ -1674,12 +1691,10 @@ export default function CrmPage() {
         loadClientOptions(),
         loadClientsPage(clientFilters),
         loadOpportunityOptions(),
-        loadOpportunitiesPage(opportunityFilters),
+        loadOpportunitiesPage(),
         loadActivitiesPage(activityFilters),
       ]);
-      if (contactClientId) {
-        await loadContactsPage(contactClientId, contactFilters);
-      }
+      await loadContactsPage();
       setSuccess("CRM actualizado.");
     } catch (requestError) {
       setError(requestError.message || "No se pudo actualizar el CRM.");
@@ -2119,24 +2134,26 @@ export default function CrmPage() {
                 <ActionButton onClick={() => applyContactFilters({ ...contactFilters, offset: 0 }, contactClientId)} size="sm" tone="primary" type="button">
                   Aplicar
                 </ActionButton>
+                <ActionButton onClick={clearContactFilters} size="sm" type="button">Limpiar</ActionButton>
               </div>
             )}
-            subtitle="Gestiona contactos por cliente sin perder el contexto comercial."
+            subtitle="Edita el filtro y pulsa Aplicar. La agenda conserva el cliente aplicado hasta entonces."
             title="Contactos"
           >
             <div className="inventory-filter-toolbar inventory-filter-toolbar-stack">
               <FormGrid>
-                <Field label="Cliente">
+                <Field label="Cliente (por aplicar)">
                   <select
-                    onChange={async (event) => {
-                      const nextClientId = event.target.value;
-                      setContactClientId(nextClientId);
-                      await loadClientContactOptions(nextClientId);
-                      await applyContactFilters({ ...defaultContactFilters, offset: 0 }, nextClientId);
-                    }}
+                    onChange={(event) => setContactClientId(event.target.value)}
                     value={contactClientId}
                   >
                     <option value="">Selecciona un cliente</option>
+                    {contactClientId && !clientOptions.some(client => client.id === contactClientId) ? (
+                      <option value={contactClientId}>
+                        {clientDisplayName(clients.find(client => client.id === contactClientId)
+                          || (selectedContactClient?.id === contactClientId ? selectedContactClient : { nombre_comercial: contactClientId }))}
+                      </option>
+                    ) : null}
                     {clientOptions.map((client) => (
                       <option key={client.id} value={client.id}>
                         {clientDisplayName(client)}
@@ -2170,12 +2187,16 @@ export default function CrmPage() {
           </FilterCard>
 
           <DataCard
-            actions={<ResultMeta label="contactos" loaded={contacts.length} total={contactMeta.total} />}
-            subtitle={selectedContactClient ? `Cliente seleccionado: ${clientDisplayName(selectedContactClient)}` : "Selecciona un cliente para ver sus contactos."}
+            actions={contactPage.status === "ready" ? <ResultMeta label="contactos" loaded={contacts.length} total={contactMeta.total} /> : null}
+            subtitle={selectedContactClient ? `Cliente aplicado: ${clientDisplayName(selectedContactClient)} · ${describeContactFilters(contactApplied.filters)}` : "Selecciona un cliente y pulsa Aplicar para ver sus contactos."}
             title="Agenda comercial"
           >
-            {!contactClientId ? (
+            {!contactApplied.clientId ? (
               <EmptyState note="Selecciona un cliente y luego carga o crea contactos." title="Sin cliente seleccionado" />
+            ) : contactPage.status === "loading" ? (
+              <p role="status">Cargando contactos...</p>
+            ) : contactPage.status === "error" ? (
+              <p className="form-error" role="alert">{contactPage.error}</p>
             ) : contacts.length === 0 ? (
               <EmptyState note="Agrega el primer contacto para este cliente." title="No hay contactos registrados" />
             ) : (
@@ -2223,8 +2244,8 @@ export default function CrmPage() {
 
                 <PaginationControls
                   meta={contactMeta}
-                  onNext={() => applyContactFilters({ ...contactFilters, offset: contactMeta.offset + contactMeta.limit }, contactClientId)}
-                  onPrevious={() => applyContactFilters({ ...contactFilters, offset: Math.max(0, contactMeta.offset - contactMeta.limit) }, contactClientId)}
+                  onNext={() => loadContactsPage(contactApplied.clientId, { ...contactApplied.filters, offset: contactMeta.offset + contactMeta.limit })}
+                  onPrevious={() => loadContactsPage(contactApplied.clientId, { ...contactApplied.filters, offset: Math.max(0, contactMeta.offset - contactMeta.limit) })}
                 />
               </>
             )}
@@ -2288,11 +2309,15 @@ export default function CrmPage() {
           </FilterCard>
 
           <DataCard
-            actions={<ResultMeta label="oportunidades" loaded={opportunities.length} total={opportunityMeta.total} />}
-            subtitle="Embudo comercial con monto estimado y probabilidad de cierre."
+            actions={opportunityPage.status === "ready" ? <ResultMeta label="oportunidades" loaded={opportunities.length} total={opportunityMeta.total} /> : null}
+            subtitle={`Filtro aplicado: ${describeOpportunityFilters(opportunityAppliedFilters)}. Los cambios del formulario se aplican al pulsar Aplicar.`}
             title="Oportunidades"
           >
-            {opportunities.length === 0 ? (
+            {opportunityPage.status === "loading" ? (
+              <p role="status">Cargando oportunidades...</p>
+            ) : opportunityPage.status === "error" ? (
+              <p className="form-error" role="alert">{opportunityPage.error}</p>
+            ) : opportunities.length === 0 ? (
               <EmptyState note="Crea la primera oportunidad y conecta cliente, monto y etapa." title="No hay oportunidades registradas" />
             ) : (
               <>
@@ -2352,8 +2377,8 @@ export default function CrmPage() {
 
                 <PaginationControls
                   meta={opportunityMeta}
-                  onNext={() => applyOpportunityFilters({ ...opportunityFilters, offset: opportunityMeta.offset + opportunityMeta.limit })}
-                  onPrevious={() => applyOpportunityFilters({ ...opportunityFilters, offset: Math.max(0, opportunityMeta.offset - opportunityMeta.limit) })}
+                  onNext={() => loadOpportunitiesPage({ ...opportunityAppliedFilters, offset: opportunityMeta.offset + opportunityMeta.limit })}
+                  onPrevious={() => loadOpportunitiesPage({ ...opportunityAppliedFilters, offset: Math.max(0, opportunityMeta.offset - opportunityMeta.limit) })}
                 />
               </>
             )}
@@ -2505,13 +2530,25 @@ export default function CrmPage() {
 
       {activeView === "pipeline" ? (
         <div className="crm-view-stack">
+          <FilterCard title="Filtros aplicados de oportunidades" actions={(
+            <ActionButton onClick={() => applyOpportunityFilters(defaultOpportunityFilters)} size="sm" type="button">Limpiar</ActionButton>
+          )}>
+            <p className="table-note">{describeOpportunityFilters(opportunityAppliedFilters)}</p>
+            <p className="table-note">Compartidos con Oportunidades. Los totales por etapa son globales de la empresa.</p>
+          </FilterCard>
           <DataCard
             actions={<ActionButton icon={<Plus size={16} />} onClick={() => openOpportunityCreateModal()} size="sm" tone="primary" type="button">Nueva oportunidad</ActionButton>}
-            subtitle="Vista compacta del pipeline con base en la lista actual de oportunidades."
+            subtitle="Tarjetas de la pagina actual segun el filtro aplicado. Totales por etapa: globales de la empresa."
             title="Pipeline comercial"
           >
-            {opportunities.length === 0 ? (
-              <EmptyState note="Crea oportunidades para empezar a poblar el pipeline." title="Sin oportunidades para mostrar" />
+            {opportunityPage.status === "loading" ? (
+              <p role="status">Cargando oportunidades...</p>
+            ) : opportunityPage.status === "error" ? (
+              <p className="form-error" role="alert">{opportunityPage.error}</p>
+            ) : opportunities.length === 0 ? (
+              hasOpportunityFilters(opportunityAppliedFilters) || opportunityMeta.offset > 0
+                ? <EmptyState note="No hay coincidencias con el filtro aplicado. Pulsa Limpiar para volver al listado completo." title="Sin resultados" />
+                : <EmptyState note="Crea oportunidades para empezar a poblar el pipeline." title="Sin oportunidades para mostrar" />
             ) : (
               <div className="crm-pipeline-grid">
                 {pipelineColumns.map((column) => (
@@ -2519,9 +2556,9 @@ export default function CrmPage() {
                     <header className="crm-pipeline-column-header">
                       <div>
                         <strong>{column.label}</strong>
-                        <span>{formatNumber(column.summary.oportunidades_count)} oportunidades</span>
+                        <span>{formatNumber(column.summary.oportunidades_count)} oportunidades (global)</span>
                       </div>
-                      <b>{formatMoney(column.summary.monto_total)}</b>
+                      <b title="Monto global de la etapa">{formatMoney(column.summary.monto_total)}</b>
                     </header>
 
                     <div className="crm-pipeline-cards">
@@ -2564,6 +2601,11 @@ export default function CrmPage() {
                 ))}
               </div>
             )}
+            {opportunityPage.status === "ready" && opportunityMeta.total > 0 ? (
+              <PaginationControls meta={opportunityMeta}
+                onNext={() => loadOpportunitiesPage({ ...opportunityAppliedFilters, offset: opportunityMeta.offset + opportunityMeta.limit })}
+                onPrevious={() => loadOpportunitiesPage({ ...opportunityAppliedFilters, offset: Math.max(0, opportunityMeta.offset - opportunityMeta.limit) })} />
+            ) : null}
           </DataCard>
         </div>
       ) : null}
@@ -3011,7 +3053,8 @@ export default function CrmPage() {
                 <input onChange={(event) => setOpportunityForm((current) => ({ ...current, origen: event.target.value }))} type="text" value={opportunityForm.origen} />
               </Field>
               <Field label="Monto estimado">
-                <input onChange={(event) => setOpportunityForm((current) => ({ ...current, monto_estimado: normalizeDecimalInput(event.target.value) }))} type="text" value={opportunityForm.monto_estimado} />
+                <input {...opportunityFeedback.fieldProps("monto_estimado")} inputMode="decimal" onChange={(event) => setOpportunityForm((current) => ({ ...current, monto_estimado: event.target.value }))} type="text" value={opportunityForm.monto_estimado} />
+                <CrmFieldError feedback={opportunityFeedback} name="monto_estimado" />
               </Field>
               <Field label="Probabilidad">
                 <input {...opportunityFeedback.fieldProps("probabilidad")} onChange={(event) => setOpportunityForm((current) => ({ ...current, probabilidad: normalizeIntegerInput(event.target.value).slice(0, 3) }))} type="text" value={opportunityForm.probabilidad} />

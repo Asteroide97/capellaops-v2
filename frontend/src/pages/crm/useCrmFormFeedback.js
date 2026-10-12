@@ -13,6 +13,7 @@ export function mapCrmFormFeedback(error, kind, form, override) {
   if (error?.status >= 500) return { message: fallback, fields };
   const fieldMessage = (name) => ({
     probabilidad: "La probabilidad debe estar entre 0 y 100.",
+    monto_estimado: "Revisa el monto estimado; debe ser mayor o igual a cero.",
     cliente_id: "Revisa el cliente seleccionado.",
     titulo: "Revisa el titulo.",
     cantidad: "La cantidad debe ser mayor a cero.",
@@ -24,7 +25,7 @@ export function mapCrmFormFeedback(error, kind, form, override) {
   if (Array.isArray(detail)) {
     for (const item of detail) {
       const path = Array.isArray(item?.loc) ? item.loc.filter(part => part !== "body") : [];
-      if (path.length === 1 && ["cliente_id", "titulo", ...(kind === "opportunity" ? ["probabilidad"] : [])].includes(path[0])) {
+      if (path.length === 1 && ["cliente_id", "titulo", ...(kind === "opportunity" ? ["probabilidad", "monto_estimado"] : [])].includes(path[0])) {
         fields[path[0]] = fieldMessage(path[0]);
       } else if (kind === "quote" && path.length === 3 && path[0] === "items" &&
           Number.isInteger(path[1]) && form.items?.[path[1]] &&
@@ -37,6 +38,9 @@ export function mapCrmFormFeedback(error, kind, form, override) {
 
   if (kind === "opportunity" && message === "La probabilidad debe estar entre 0 y 100.") {
     fields.probabilidad = message;
+  }
+  if (kind === "opportunity" && ["El monto estimado debe ser mayor o igual a cero.", "Captura un monto estimado valido."].includes(message)) {
+    fields.monto_estimado = message;
   }
   if (/^Selecciona un cliente para (la cotizacion|la oportunidad)\.$/.test(message)) fields.cliente_id = message;
   if (/^Captura el titulo de (la cotizacion|la oportunidad)\.$/.test(message)) fields.titulo = message;
