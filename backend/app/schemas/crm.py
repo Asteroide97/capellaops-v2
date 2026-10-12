@@ -110,7 +110,10 @@ class CRMCotizacionItemCreate(BaseModel):
     cantidad: Decimal = Field(gt=0)
     precio_unitario: Decimal = Field(ge=0)
     descuento: Decimal = Field(default=Decimal("0"), ge=0)
-    impuesto_tasa: Decimal = Field(default=Decimal("0"), ge=0)
+    impuesto_tasa: Decimal = Field(
+        default=Decimal("0"), ge=0, le=1,
+        description="Factor decimal entre 0 y 1. Ejemplo: 0.16 equivale a 16%.",
+    )
     orden: int | None = Field(default=None, ge=0)
 
 

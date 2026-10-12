@@ -22,6 +22,11 @@ import {
   updateCrmQuote,
 } from "../../api/client";
 import {
+  formatQuoteCommercialDate,
+  parseQuoteTaxPercent,
+  quoteTaxFactorToPercent,
+} from "./quoteCommercialInput";
+import {
   ActionButton,
   DEFAULT_PAGE_SIZE,
   DataCard,
@@ -62,7 +67,7 @@ function createLocalQuoteItem() {
     cantidad: "1",
     precio_unitario: "0",
     descuento: "0",
-    impuesto_tasa: "0",
+    impuesto_porcentaje: "0",
   };
 }
 
@@ -111,7 +116,7 @@ function buildQuotePayload(form) {
       cantidad: normalizeDecimalInput(String(item.cantidad ?? "")) || "0",
       precio_unitario: normalizeDecimalInput(String(item.precio_unitario ?? "")) || "0",
       descuento: normalizeDecimalInput(String(item.descuento ?? "")) || "0",
-      impuesto_tasa: normalizeDecimalInput(String(item.impuesto_tasa ?? "")) || "0",
+      impuesto_tasa: parseQuoteTaxPercent(item.impuesto_porcentaje).factor,
       orden: index,
     })),
   };
@@ -140,8 +145,9 @@ function validateQuoteForm(form) {
     if (parseQuoteNumber(item.descuento) < 0) {
       return "El descuento no puede ser negativo.";
     }
-    if (parseQuoteNumber(item.impuesto_tasa) < 0) {
-      return "La tasa de impuesto no puede ser negativa.";
+    const tax = parseQuoteTaxPercent(item.impuesto_porcentaje);
+    if (tax.error) {
+      return tax.error;
     }
   }
   return "";
@@ -199,7 +205,7 @@ function mapQuoteResponseToForm(quote) {
           cantidad: String(item.cantidad ?? "0"),
           precio_unitario: String(item.precio_unitario ?? "0"),
           descuento: String(item.descuento ?? "0"),
-          impuesto_tasa: String(item.impuesto_tasa ?? "0"),
+          impuesto_porcentaje: quoteTaxFactorToPercent(item.impuesto_tasa),
         }))
       : [createLocalQuoteItem()],
   };
@@ -292,7 +298,7 @@ export default function CrmQuotesView({
         const cantidad = parseQuoteNumber(item.cantidad);
         const precioUnitario = parseQuoteNumber(item.precio_unitario);
         const descuento = parseQuoteNumber(item.descuento);
-        const impuestoTasa = parseQuoteNumber(item.impuesto_tasa);
+        const impuestoTasa = parseQuoteTaxPercent(item.impuesto_porcentaje).factor ?? 0;
         const bruto = cantidad * precioUnitario;
         const subtotal = Math.max(bruto - descuento, 0);
         const impuesto = subtotal * impuestoTasa;
@@ -869,8 +875,8 @@ export default function CrmQuotesView({
                       </StatusBadge>
                     </td>
                     <td>
-                      <div className="inventory-cell-main">{safeDisplayText(quote.fecha_emision ? formatDate(quote.fecha_emision) : "Sin emision")}</div>
-                      <div className="inventory-cell-sub">{safeDisplayText(quote.fecha_vencimiento ? formatDate(quote.fecha_vencimiento) : "Sin vencimiento")}</div>
+                      <div className="inventory-cell-main">{safeDisplayText(quote.fecha_emision ? formatQuoteCommercialDate(quote.fecha_emision) : "Sin emision")}</div>
+                      <div className="inventory-cell-sub">{safeDisplayText(quote.fecha_vencimiento ? formatQuoteCommercialDate(quote.fecha_vencimiento) : "Sin vencimiento")}</div>
                     </td>
                     <td>{formatMoney(quote.total)}</td>
                     <td className="inventory-row-actions">
@@ -1065,13 +1071,20 @@ export default function CrmQuotesView({
                         value={item.descuento}
                       />
                     </Field>
-                    <Field label="Impuesto tasa">
+                    <Field label="IVA (%)" hint="Escribe 16 para 16%. 0.16 significa 0.16%, no 16%.">
                       <input
-                        onChange={(event) => updateQuoteItem(item.local_id, "impuesto_tasa", normalizeDecimalInput(event.target.value))}
-                        placeholder="0.16"
+                        aria-describedby={`quote-tax-help-${item.local_id}`}
+                        aria-invalid={Boolean(parseQuoteTaxPercent(item.impuesto_porcentaje).error)}
+                        inputMode="decimal"
+                        onChange={(event) => updateQuoteItem(item.local_id, "impuesto_porcentaje", event.target.value)}
+                        placeholder="16"
                         type="text"
-                        value={item.impuesto_tasa}
+                        value={item.impuesto_porcentaje}
                       />
+                      <span id={`quote-tax-help-${item.local_id}`} role={parseQuoteTaxPercent(item.impuesto_porcentaje).error ? "alert" : undefined}>
+                        {parseQuoteTaxPercent(item.impuesto_porcentaje).error ||
+                          `IVA aplicado: ${formatNumber(parseQuoteTaxPercent(item.impuesto_porcentaje).percent)}%.`}
+                      </span>
                     </Field>
                   </FormGrid>
                 </article>
@@ -1134,8 +1147,8 @@ export default function CrmQuotesView({
                 <p><strong>Cliente:</strong> {safeDisplayText(quoteDetail.cliente_nombre_comercial, "Sin cliente")}</p>
                 <p><strong>Contacto:</strong> {safeDisplayText(quoteDetail.contacto_nombre, "Sin contacto")}</p>
                 <p><strong>Oportunidad:</strong> {safeDisplayText(quoteDetail.oportunidad_titulo, "Sin oportunidad")}</p>
-                <p><strong>Fecha emision:</strong> {safeDisplayText(quoteDetail.fecha_emision ? formatDate(quoteDetail.fecha_emision) : "Sin emision")}</p>
-                <p><strong>Fecha vencimiento:</strong> {safeDisplayText(quoteDetail.fecha_vencimiento ? formatDate(quoteDetail.fecha_vencimiento) : "Sin vencimiento")}</p>
+                <p><strong>Fecha emision:</strong> {safeDisplayText(quoteDetail.fecha_emision ? formatQuoteCommercialDate(quoteDetail.fecha_emision) : "Sin emision")}</p>
+                <p><strong>Fecha vencimiento:</strong> {safeDisplayText(quoteDetail.fecha_vencimiento ? formatQuoteCommercialDate(quoteDetail.fecha_vencimiento) : "Sin vencimiento")}</p>
                 <p><strong>Moneda:</strong> {safeDisplayText(quoteDetail.moneda, "MXN")}</p>
                 <p><strong>Titulo:</strong> {safeDisplayText(quoteDetail.titulo, "Sin titulo")}</p>
                 <p className="inventory-form-span-2"><strong>Descripcion:</strong> {safeDisplayText(quoteDetail.descripcion, "Sin descripcion")}</p>

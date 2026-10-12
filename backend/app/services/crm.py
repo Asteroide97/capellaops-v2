@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, time, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 
 from fastapi import HTTPException, status
@@ -629,15 +629,24 @@ def build_quote_item_amounts(item_payload: CRMCotizacionItemCreate | dict, *, or
     cantidad = quantize_decimal(quote_item_value(item_payload, "cantidad"))
     precio_unitario = quantize_decimal(quote_item_value(item_payload, "precio_unitario"))
     descuento = quantize_decimal(quote_item_value(item_payload, "descuento"))
-    impuesto_tasa = quantize_decimal(quote_item_value(item_payload, "impuesto_tasa"))
+    # Validate the factor before rounding so out-of-domain values cannot round into range.
+    raw_tax_factor = quote_item_value(item_payload, "impuesto_tasa")
+    try:
+        tax_factor = Decimal(str(raw_tax_factor if raw_tax_factor is not None else 0))
+        if not tax_factor.is_finite() or not ZERO <= tax_factor <= Decimal("1"):
+            raise ValueError("Invalid tax factor")
+    except (InvalidOperation, TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La tasa de impuesto debe ser un factor entre 0 y 1 (0.16 equivale a 16%).",
+        ) from None
+    impuesto_tasa = quantize_decimal(tax_factor)
     if cantidad <= ZERO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La cantidad debe ser mayor a cero.")
     if precio_unitario < ZERO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El precio unitario no puede ser negativo.")
     if descuento < ZERO:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El descuento no puede ser negativo.")
-    if impuesto_tasa < ZERO:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La tasa de impuesto no puede ser negativa.")
     bruto = quantize_decimal(cantidad * precio_unitario)
     if descuento > bruto:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El descuento no puede superar el subtotal de la partida.")
